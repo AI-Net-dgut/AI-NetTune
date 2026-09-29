@@ -1,6 +1,5 @@
 # AI‑NetTune 项目数据字典
-CSV时序监测数据表
-
+> 文件说明：本文件为团队开发契约文档，定义CSV仿真网络数据集字段规范，后端、仿真脚本、前端开发以此文档为准。
 
 | 列名 | 含义 | 单位 | 数据类型 | 取值/枚举 | 说明 |
 | ---- | ---- | ---- | ---- | ---- | ---- |
@@ -13,5 +12,5 @@ CSV时序监测数据表
 | latency | 时延 | ms | float | 1 ~ 500 | 端到端网络延迟 |
 | packet_loss | 丢包率 | % | float | 0 ~ 100 | 数据包丢失百分比 |
 | prb_usage | PRB利用率 | % | float | 0 ~ 100 | 无线资源块占用率 |
-| scenario | 场景标签 | - | str | 校园、商场、体育馆 | 物理部署地点场景 |
-| network_status | 网络状态 | - | str | normal、congestion、weak_coverage | 网络运行健康状态 |
+| scenario | 场景标签 | 校园 / 商场 / 体育馆等 | str | 校园、商场、体育馆 | 物理部署地点场景 |
+| network_status | 网络状态 | - | str | normal、congestion、weak_coverage | 网络运行健康状态，正常/拥塞/弱覆盖 |
