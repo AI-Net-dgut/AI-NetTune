@@ -1,17 +1,20 @@
-# AI‑NetTune 项目数据字典
-> 文件说明：本文件为团队开发契约文档，定义CSV仿真网络数据集字段规范，后端、仿真脚本、前端开发以此文档为准。
+# 数据字典 - 网络仿真时序数据集
+> 说明：仿真逻辑参考Cell-Free无蜂窝MIMO仿真思路，采用固定AP点位+随机移动UE，对数距离路径损耗模型生成信号，保留原有全部字段，新增坐标字段，输出CSV时序数据。
 
-
-| 列名 | 含义 | 单位 | 数据类型 | 取值/枚举 | 说明 |
-| ---- | ---- | ---- | ---- | ---- | ---- |
-| timestamp | 采样时间 | yyyy‑MM‑dd HH:mm:ss | datetime | 2026‑01‑01 00:00:00 ~ 2026‑01‑02 00:00:00 | 指标采样时间戳 |
-| ap_id | 接入点编号 | - | str | AP‑01,AP‑02,AP‑03 | 无线接入点ID |
-| user_id | 用户编号 | - | str | UE‑001 ~ UE‑010 | 终端用户ID |
-| rsrp | 参考信号接收功率 | dBm | float | -140 ~ -60 | 无线信号强度，数值越大信号越好 |
-| sinr | 信干噪比 | dB | float | -10 ~ 30 | 信号质量，越高越好 |
-| throughput | 吞吐量 | Mbps | float | 0 ~ 1000 | 用户下行速率 |
-| latency | 时延 | ms | float | 1 ~ 500 | 端到端网络延迟 |
-| packet_loss | 丢包率 | % | float | 0 ~ 100 | 数据包丢失百分比 |
-| prb_usage | PRB利用率 | % | float | 0 ~ 100 | 无线资源块占用率 |
-| scenario | 场景标签 | 校园 / 商场 / 体育馆等 | str | 校园、商场、体育馆 | 物理部署地点场景 |
-| network_status | 网络状态 | - | str | normal、congestion、weak_coverage | 网络运行健康状态，正常/拥塞/弱覆盖 |
+|字段名|数据类型|单位|说明|
+| ---- | ---- | ---- | ---- |
+|timestamp|string|-|时间戳，连续3天时序，用于时序可视化、历史态势预测|
+|ap_id|string|-|接入点AP编号，如AP-01，固定AP设备|
+|ap_x|float|米|AP设备平面X坐标，同一个AP固定不变|
+|ap_y|float|米|AP设备平面Y坐标，同一个AP固定不变|
+|user_id|string|-|用户终端UE编号|
+|ue_x|float|米|用户终端平面X坐标，随时间变化模拟用户移动|
+|ue_y|float|米|用户终端平面Y坐标，随时间变化模拟用户移动|
+|rsrp|float|dBm|接收信号功率，基于距离路径损耗模型计算，距离越远信号越弱|
+|sinr|float|dB|信干噪比，考虑多AP之间干扰计算得到|
+|throughput|float|Mbps|吞吐量，基于香农容量公式，由SINR计算|
+|latency|float|ms|网络时延，随PRB资源负载动态变化|
+|packet_loss|float|%|丢包率，高负载场景下数值上升|
+|prb_usage|float|%|无线PRB资源占用率，0~100|
+|scenario|string|-|场景类型：校园 / 商场 / 体育馆|
+|network_status|string|-|网络状态标签：normal(正常)、weak_coverage(弱覆盖，rsrp<-110)、congestion(拥塞，prb_usage>85且packet_loss>5)|
