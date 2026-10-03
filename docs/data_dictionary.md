@@ -1,5 +1,6 @@
-# 数据字典 - 网络仿真时序数据集
-> 说明：仿真逻辑参考Cell-Free无蜂窝MIMO仿真思路，采用固定AP点位+随机移动UE，对数距离路径损耗模型生成信号，保留原有全部字段，新增坐标字段，输出CSV时序数据。
+# 数据字典 - 网络仿真实时序数据集
+
+> 说明：仿真逻辑参考Cell-Free无蜂窝MIMO仿真思路，采用固定AP点位+随机移动UE，对数距离路径损耗模型生成信号，保留原有全部字段，新增坐标字段与扩展辅助字段，输出CSV时序数据集。
 
 |字段名|数据类型|单位|说明|
 | ---- | ---- | ---- | ---- |
@@ -18,3 +19,6 @@
 |prb_usage|float|%|无线PRB资源占用率，0~100|
 |scenario|string|-|场景类型：校园 / 商场 / 体育馆|
 |network_status|string|-|网络状态标签：normal(正常)、weak_coverage(弱覆盖，rsrp<-110)、congestion(拥塞，prb_usage>85且packet_loss>5)|
+|retransmission_count|int|次|单位时间内数据重传次数，与丢包率正相关，用于故障原因辅助判断|
+|traffic_demand|float|Mbps|用户侧业务需求吞吐量，始终≥实际吞吐量，用于区分低需求与网络受限|
+|active_users|int|个|当前AP下的活跃用户总数，反映基站接入负载压力|
