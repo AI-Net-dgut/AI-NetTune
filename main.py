@@ -19,7 +19,7 @@ from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi.staticfiles import StaticFiles
 
 # ======================
@@ -462,6 +462,16 @@ VALID_SCENARIOS = ("校园", "商场", "体育馆")
 TOOL_WINDOW_START = "2026-01-01 00:00:00"
 TOOL_WINDOW_END = "2026-01-03 23:59:59"
 
+def _default_window(scenario: str):
+    """AI 工具默认窗口（方案B）：跟随场景数据最新时刻往前推 24 小时。
+    回放/普通场景漏传时间时，默认值永远贴近当前，避免拿到写死的 01-01~01-03 与页面口径不一致。"""
+    rows = filter_rows(scenario, "2026-01-01 00:00:00", "2026-12-31 23:59:59")
+    if not rows:
+        return TOOL_WINDOW_START, TOOL_WINDOW_END
+    end = max(r["timestamp"] for r in rows)
+    start = (datetime.fromisoformat(end) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    return start, end
+
 def resolve_scenario(params_scenario, default_scenario):
     """场景白名单校验：LLM 可能把"A区"之类当成场景，无效则回退请求默认场景"""
     return params_scenario if params_scenario in VALID_SCENARIOS else default_scenario
@@ -660,8 +670,10 @@ def agent_chat(req: ChatRequest):
     if intent not in TOOLS:
         intent = "query_kpi"
 
-    # 4. 执行工具：窗口跟随前端（未传则默认三天），输出格式和正常链路完全一致
+    # 4. 执行工具：窗口跟随前端（未传则用动态最近 24h，贴近当前，回放漏传不穿帮）
     scenario = resolve_scenario(params.get("scenario"), req.scenario)
+    if not req.window_start or not req.window_end:
+        req.window_start, req.window_end = _default_window(scenario)
     handler = TOOLS.get(intent, TOOLS["query_kpi"])
     data = handler(scenario, req.window_start, req.window_end)
     return {"code": 0, "message": "success", "data": data}
@@ -1053,6 +1065,10 @@ def get_enhanced_topology(
     if scenario not in VALID_SCENARIOS:
         return error_response(ERROR_CODE["PARAM_INVALID"],
                               "scenario仅支持" + "/".join(VALID_SCENARIOS))
+    # 回放口径：time 必填，禁止静默取数据集最新端点（max=2026-12-31 会未卜先知露馅）
+    if not time:
+        return error_response(ERROR_CODE["PARAM_MISSING"],
+                              "参数缺失：time 必填（禁止静默取数据集端点，回放模式会露馅）")
     if time:
         try:
             datetime.strptime(time, "%Y-%m-%d %H:%M:%S")
@@ -1070,9 +1086,7 @@ def get_enhanced_topology(
                       "avg_rsrp": 0.0, "avg_sinr": 0.0},
         })
 
-    # 3. 定位时刻：不传 time 取数据集最新时刻
-    if not time:
-        time = max(r["timestamp"] for r in rows)
+    # 3. 定位时刻：time 已由参数校验强制必填，直接按指定时刻过滤
     rows = [r for r in rows if r["timestamp"] == time]
 
     # 4. 边界：该时刻无数据 → 返回空图，接口不崩
