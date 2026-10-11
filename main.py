@@ -467,17 +467,18 @@ def resolve_scenario(params_scenario, default_scenario):
     return params_scenario if params_scenario in VALID_SCENARIOS else default_scenario
 
 # ---- 工具1：KPI 概况查询（真实 CSV 均值；窗口跟随前端，未传用默认三天） ----
+# 回放模式：回复注明分析截至时刻 win_end，保证"对话口径=页面口径"（win_end 未传时回落默认三天）
 def tool_query_kpi(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:
     win_start, win_end = win_start or TOOL_WINDOW_START, win_end or TOOL_WINDOW_END
     rows = filter_rows(scenario, win_start, win_end)
     if rows:
-        reply = (f"当前时段网络整体运行平稳：RSRP均值{avg(rows,'rsrp'):.1f}dBm，"
+        reply = (f"截至{win_end}，当前时段网络整体运行平稳：RSRP均值{avg(rows,'rsrp'):.1f}dBm，"
                  f"SINR均值{avg(rows,'sinr'):.1f}dB，平均吞吐量{avg(rows,'throughput'):.1f}Mbps，"
                  f"PRB利用率{avg(rows,'prb_usage'):.1f}%，共{len(rows)}条采样。")
     else:
-        reply = f"未找到场景「{scenario}」在所选时段的数据。"
+        reply = f"截至{win_end}，未找到场景「{scenario}」在所选时段的数据。"
     return {"reply": reply, "intent": "query_kpi", "chart": None,
-            "query_ref": {"scenario": scenario}}
+            "query_ref": {"scenario": scenario, "start_time": win_start, "end_time": win_end}}
 
 # ---- 工具2：故障研判（意图 → 确定性规则引擎=接口2，LLM 不参与计算，规避幻觉） ----
 def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> str:
@@ -591,7 +592,8 @@ def tool_heatmap(scenario: str, win_start: str | None = None, win_end: str | Non
             "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.5)"}},
         }],
     }
-    return {"reply": f"已生成「{scenario}」信号热力图：{len(data)}个采样网格，覆盖 X {x_min}~{x_max}m、Y {y_min}~{y_max}m。",
+    # 回放模式：回复注明分析截至时刻，与页面模拟时钟保持一致
+    return {"reply": f"截至{win_end}，已生成「{scenario}」信号热力图：{len(data)}个采样网格，覆盖 X {x_min}~{x_max}m、Y {y_min}~{y_max}m。",
             "intent": "get_heatmap", "chart": {"type": "heatmap", "option": option},
             "detail": {"grid_count": len(data), "grid_size": grid,
                        "x_range": [x_min, x_max], "y_range": [y_min, y_max],
@@ -615,11 +617,12 @@ def tool_topology(scenario: str, win_start: str | None = None, win_end: str | No
             links.append({"source": r["ap_id"], "target": r["user_id"]})
     nodes = [{"id": ap, "category": "AP"} for ap in ap_set] + \
             [{"id": ue, "category": "UE"} for ue in ue_set]
-    return {"reply": f"已生成「{scenario}」的网络拓扑：{len(ap_set)}个AP、{len(ue_set)}个UE、{len(links)}条连接。",
+    # 回放模式：回复注明分析截至时刻，与页面模拟时钟保持一致
+    return {"reply": f"截至{win_end}，已生成「{scenario}」的网络拓扑：{len(ap_set)}个AP、{len(ue_set)}个UE、{len(links)}条连接。",
             "intent": "get_topology",
             "chart": {"type": "graph", "option": {"nodes": nodes, "links": links}},
             "detail": {"node_count": len(nodes), "link_count": len(links), "scenario": scenario},
-            "query_ref": {"scenario": scenario}}
+            "query_ref": {"scenario": scenario, "start_time": win_start, "end_time": win_end}}
 
 # ---- Function Calling 工具注册表：意图名 → 工具函数（新增工具在这里登记即可） ----
 TOOLS = {
@@ -1001,6 +1004,12 @@ def predict_result(
         except (ValueError, TypeError):
             return error_response(ERROR_CODE["PARAM_INVALID"], "时间格式应为yyyy-MM-dd HH:mm:ss")
 
+    # 2.1 时间先后校验（第三轮评审 6.2）：起始时间不得晚于结束时间，非法返回 40003
+    #     格式已统一为 "YYYY-MM-DD HH:MM:SS"，字符串字典序即时间序，可直接比较
+    if start_time > end_time:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"],
+                              "起始时间不能晚于结束时间")
+
     # 3. 占位返回：字段与契约 v1 完全一致
     return success_response({
         "target_type": target_type,
@@ -1095,7 +1104,10 @@ def get_enhanced_topology(
         })
 
     # 6. 链路：一条 AP-UE 链路；include_metrics=false 时不生成 metrics 键
+    # 6.3 加固：按 (source,target) 对去重（与接口6 同口径），同一 AP-UE 对只保留首条，
+    #      避免生成器或历史数据出现重复行时链路数与 link_count 统计膨胀
     links = []
+    link_seen = set()
     ue_seen = set()
     for r in rows:
         if r["user_id"] not in ue_seen:
@@ -1111,6 +1123,10 @@ def get_enhanced_topology(
                     "throughput": float(r["throughput"]),
                 },
             })
+        link_key = (r["ap_id"], r["user_id"])
+        if link_key in link_seen:
+            continue
+        link_seen.add(link_key)
         link = {"source": r["ap_id"], "target": r["user_id"]}
         if include_metrics:
             link["metrics"] = {
