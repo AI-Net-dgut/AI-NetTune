@@ -959,3 +959,181 @@ def analyze_forecast(req: ForecastRequest):
     })
 
 
+# ============================================================================
+# 接口8：时序预测结果查询（GET /api/predict/result，契约 v1）
+#   契约：docs/api.md 接口8。组织 main 已将该接口定位为“查询壳”：不新建预测模型，
+#         后续转调 /api/analyze/forecast（接口10）的数据做字段映射。
+#   本次实现：契约 v1 占位阶段，固定返回 predict_list=[]、total=0、model=placeholder，
+#         字段结构保持 v1 不变，前端可先行对接。
+#   错误码：必填参数缺失由全局异常处理器统一返回 40001；白名单取值非法与时间格式非法 40002。
+# ============================================================================
+@app.get("/api/predict/result", summary="接口8：时序预测结果查询（契约 v1 · 占位实现）")
+def predict_result(
+    scenario: str = Query(..., description="场景，如：校园"),
+    start_time: str = Query(..., description="起始时间 yyyy-MM-dd HH:mm:ss"),
+    end_time: str = Query(..., description="结束时间 yyyy-MM-dd HH:mm:ss"),
+    target_type: str = Query(..., description="ap / ue"),
+    target_id: str | None = Query(None, description="对象ID，不传查全部"),
+    metric: str = Query(..., description="rsrp / sinr / throughput"),
+    interval: str = Query("15min", description="5min/15min/30min/60min"),
+):
+    """契约 v1 占位实现：只做参数校验，不新建模型、不返回真实预测数据、不读取数据文件。
+
+    参数刻意声明为 str 而非 Literal/Enum：否则 FastAPI 的类型校验会先抛
+    RequestValidationError，被全局处理器统一映射成 40001，无法满足契约要求的
+    “取值非法返回 40002”。
+    """
+    # 1. 取值白名单校验（必填缺失由全局异常处理器统一返回 40001）
+    if scenario not in VALID_SCENARIOS:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "scenario仅支持" + "/".join(VALID_SCENARIOS))
+    if target_type not in ("ap", "ue"):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "target_type仅支持ap/ue")
+    if metric not in ("rsrp", "sinr", "throughput"):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "metric仅支持rsrp/sinr/throughput")
+    if interval not in ("5min", "15min", "30min", "60min"):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "interval仅支持5min/15min/30min/60min")
+
+    # 2. 时间格式校验
+    for value in (start_time, end_time):
+        try:
+            datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return error_response(ERROR_CODE["PARAM_INVALID"], "时间格式应为yyyy-MM-dd HH:mm:ss")
+
+    # 3. 占位返回：字段与契约 v1 完全一致
+    return success_response({
+        "target_type": target_type,
+        "target_id": target_id,
+        "metric": metric,
+        "model": "placeholder",
+        "predict_list": [],
+        "total": 0,
+    })
+
+
+# ============================================================================
+# 接口9：拓扑增强数据（GET /api/network/topology/enhanced，契约 v1 · 真实实现）
+#   契约：docs/api.md 接口9。指定时刻的 AP/UE 节点 + 链路五指标 + 整体统计。
+#   过滤逻辑与接口6（/api/network/topology/basic）同口径，复用 filter_rows。
+# ============================================================================
+def _topology_active_users(ap_rows):
+    """AP 活跃用户数：取数据源 active_users 列（契约示例值 11 与该列口径一致）；
+    该列缺失或非法时退化为按 user_id 去重计数。"""
+    values = []
+    for r in ap_rows:
+        raw = r.get("active_users")
+        if raw in (None, ""):
+            continue
+        try:
+            values.append(int(float(raw)))
+        except (TypeError, ValueError):
+            continue
+    if values:
+        return max(values)
+    return len({r["user_id"] for r in ap_rows})
+
+
+@app.get("/api/network/topology/enhanced", summary="接口9：拓扑增强数据（契约 v1）")
+def get_enhanced_topology(
+    scenario: str = Query(..., description="场景名"),
+    time: str | None = Query(None, description="指定时刻，默认取数据集最新时刻"),
+    include_metrics: bool = Query(True, description="是否附加链路指标"),
+):
+    # 1. 参数校验：场景白名单（与 VALID_SCENARIOS 一致）+ 时间格式
+    if scenario not in VALID_SCENARIOS:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "scenario仅支持" + "/".join(VALID_SCENARIOS))
+    if time:
+        try:
+            datetime.strptime(time, "%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return error_response(ERROR_CODE["PARAM_INVALID"], "时间格式应为yyyy-MM-dd HH:mm:ss")
+
+    # 2. 复用公共过滤函数取该场景全量数据（与接口6同口径）
+    rows = filter_rows(scenario, "2026-01-01 00:00:00", "2026-12-31 23:59:59")
+    if not rows:
+        # 场景整体无数据：与“指定时刻无数据”分支保持同一 stats 结构（五项全 0），
+        # 避免前端面对 {} 与五项两种结构（第三轮评审 6.1）
+        return success_response({
+            "timestamp": None, "nodes": [], "links": [],
+            "stats": {"ap_count": 0, "ue_count": 0, "link_count": 0,
+                      "avg_rsrp": 0.0, "avg_sinr": 0.0},
+        })
+
+    # 3. 定位时刻：不传 time 取数据集最新时刻
+    if not time:
+        time = max(r["timestamp"] for r in rows)
+    rows = [r for r in rows if r["timestamp"] == time]
+
+    # 4. 边界：该时刻无数据 → 返回空图，接口不崩
+    if not rows:
+        return success_response({
+            "timestamp": time, "nodes": [], "links": [],
+            "stats": {"ap_count": 0, "ue_count": 0, "link_count": 0,
+                      "avg_rsrp": 0.0, "avg_sinr": 0.0},
+        })
+
+    # 5. 节点：AP 聚合属性 + UE 当前时刻指标
+    ap_rows_map = {}
+    for r in rows:
+        ap_rows_map.setdefault(r["ap_id"], []).append(r)
+
+    nodes = []
+    for ap_id in sorted(ap_rows_map):
+        ap_rows = ap_rows_map[ap_id]
+        nodes.append({
+            "id": ap_id,
+            "type": "ap",
+            "x": float(ap_rows[0]["ap_x"]),
+            "y": float(ap_rows[0]["ap_y"]),
+            "properties": {
+                "rsrp_avg": round(avg(ap_rows, "rsrp"), 2),
+                "prb_usage": round(avg(ap_rows, "prb_usage"), 2),
+                "active_users": _topology_active_users(ap_rows),
+            },
+        })
+
+    # 6. 链路：一条 AP-UE 链路；include_metrics=false 时不生成 metrics 键
+    links = []
+    ue_seen = set()
+    for r in rows:
+        if r["user_id"] not in ue_seen:
+            ue_seen.add(r["user_id"])
+            nodes.append({
+                "id": r["user_id"],
+                "type": "ue",
+                "x": float(r["ue_x"]),
+                "y": float(r["ue_y"]),
+                "properties": {
+                    "rsrp": float(r["rsrp"]),
+                    "sinr": float(r["sinr"]),
+                    "throughput": float(r["throughput"]),
+                },
+            })
+        link = {"source": r["ap_id"], "target": r["user_id"]}
+        if include_metrics:
+            link["metrics"] = {
+                "rsrp": float(r["rsrp"]),
+                "sinr": float(r["sinr"]),
+                "throughput": float(r["throughput"]),
+                "latency": float(r["latency"]),
+                "packet_loss": float(r["packet_loss"]),
+            }
+        links.append(link)
+
+    # 7. 整体统计
+    return success_response({
+        "timestamp": time,
+        "nodes": nodes,
+        "links": links,
+        "stats": {
+            "ap_count": len(ap_rows_map),
+            "ue_count": len(ue_seen),
+            "link_count": len(links),
+            "avg_rsrp": round(avg(rows, "rsrp"), 2),
+            "avg_sinr": round(avg(rows, "sinr"), 2),
+        },
+    })
+
+
