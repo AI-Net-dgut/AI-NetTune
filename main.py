@@ -1053,7 +1053,13 @@ def get_enhanced_topology(
     # 2. 复用公共过滤函数取该场景全量数据（与接口6同口径）
     rows = filter_rows(scenario, "2026-01-01 00:00:00", "2026-12-31 23:59:59")
     if not rows:
-        return success_response({"timestamp": None, "nodes": [], "links": [], "stats": {}})
+        # 场景整体无数据：与“指定时刻无数据”分支保持同一 stats 结构（五项全 0），
+        # 避免前端面对 {} 与五项两种结构（第三轮评审 6.1）
+        return success_response({
+            "timestamp": None, "nodes": [], "links": [],
+            "stats": {"ap_count": 0, "ue_count": 0, "link_count": 0,
+                      "avg_rsrp": 0.0, "avg_sinr": 0.0},
+        })
 
     # 3. 定位时刻：不传 time 取数据集最新时刻
     if not time:
