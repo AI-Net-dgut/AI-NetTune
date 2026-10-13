@@ -22,7 +22,7 @@ function PendingPage({
         className="ain-button ain-primary"
         to="/workbench"
       >
-        进入现存问题工作台
+        进入网络工作台
       </Link>
     </main>
   );
@@ -88,12 +88,7 @@ export default function App() {
 
         <Route
           path="/prediction"
-          element={
-            <PendingPage
-              title="预测分析"
-              description="这里将组织时间预测、空间风险与预测效果评估。当前批次先完成入口；已有预测对比仍保留在现存问题工作台。"
-            />
-          }
+          element={<Navigate to="/workbench" replace />}
         />
 
         <Route
@@ -101,7 +96,7 @@ export default function App() {
           element={
             <PendingPage
               title="分析记录"
-              description="这里将汇总问题、研判证据、调整方案和验证结果。当前批次先完成入口，尚未接入分析保存与记录列表。"
+              description="独立分析记录页尚未接入保存与列表功能。当前可在网络工作台的‘本次查询记录’中查看最近6次问题和回答摘要；离开工作台或刷新页面后，这些临时记录不保留。"
             />
           }
         />
@@ -119,7 +114,7 @@ export default function App() {
 
       <footer className="ain-footer">
         <span>
-          AI-NetTune · 观察网络，追溯原因，调整验证
+          AI-NetTune · 观察网络，研判原因，比较预计效果
         </span>
         <span>
           数据来源与分析范围以工作台标识为准

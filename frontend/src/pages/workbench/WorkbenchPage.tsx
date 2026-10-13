@@ -1,266 +1,195 @@
-import type { DiagnosisHandle } from "../../components/analysis/DiagnosisModule";
-import { useEffect, useRef, useState } from "react";
-import { analyzeNetwork, CASE_WINDOWS, DEFAULT_SCOPE, fetchForecast, loadDashboard, scopeLabel } from "../../services/backend";
-import type { DashboardData, Diagnosis, ForecastResult, QueryScope } from "../../types/backend";
-import { displayMetric, getLatestFrame } from "../../services/metrics";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { loadDashboard, scopeLabel, toEpoch } from "../../services/backend";
+import type { MetricRecord, NetworkNode } from "../../types/backend";
+import { resolveHistoryQuestion } from "../../replay/historyQuestion";
 import useNetworkQuery from "../../hooks/useNetworkQuery";
+import { initialQueryState } from "../../chat/queryState";
 import QueryPanel from "../../chat/QueryPanel";
-import DiagnosisModule from "../../components/analysis/DiagnosisModule";
-import type { ManagementHandle } from "../../components/management/preparePlan";
-import ManagementModule from "../../components/management/ManagementModule";
-import ToolResultPanel from "../../components/analysis/ToolResultPanel";
-import KpiSummary from "../../components/charts/KpiSummary";
-import RadioMapChart from "../../components/charts/RadioMapChart";
-import TopologyChart from "../../components/charts/TopologyChart";
-import MetricCharts from "../../components/charts/MetricCharts";
-import TrendChart from "../../components/charts/TrendChart";
-import ForecastCompareChart from "../../components/charts/ForecastCompareChart";
+import DataObservation from "../../components/observation/DataObservation";
+import { REPLAY_CONFIG } from "../../replay/config";
+import { formatReplayTime, viewScope, replayContextKey, viewTime } from "../../replay/replayState";
+import type { ReplayAction } from "../../replay/replayState";
+import { buildReplayDashboard, loadReplayRecords } from "../../replay/replayData";
+import { captureAnalysis, needsFutureForecast } from "../../replay/analysisSnapshot";
+import type { AnalysisSnapshot } from "../../replay/analysisSnapshot";
+import useReplay from "../../replay/useReplay";
+import useScopedSpatial from "../../replay/useScopedSpatial";
+import ReplayControls from "../../replay/ReplayControls";
+import HistoryControls from "../../replay/HistoryControls";
+import ReferenceWindowControls from "../../replay/ReferenceWindowControls";
+import type { ReplayConfig } from "../../replay/config";
 import "./WorkbenchPage.css";
 import "./BackendIntegration.css";
 
-export default function WorkbenchPage() {
-  const [scope, setScope] = useState<QueryScope>({ ...DEFAULT_SCOPE });
-  const [draft, setDraft] = useState<QueryScope>({ ...DEFAULT_SCOPE });
-  const [caseIndex, setCaseIndex] = useState("0");
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [selectedUeId, setSelectedUeId] = useState("");
-  const [focusedApId, setFocusedApId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState("");
-  const [forecast, setForecast] = useState<ForecastResult | null>(null);
-  const [forecastLoading, setForecastLoading] = useState(false);
-  const [forecastError, setForecastError] = useState("");
-  const analysisController = useRef<AbortController | null>(null);
+interface ReplaySource {
+  status: "loading" | "ready" | "error" | "empty";
+  records: MetricRecord[]; aps: NetworkNode[]; error: string; notice: string;
+}
+
+export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: ReplayConfig } = {}) {
+  const replay = useReplay(config);
+  const { state: clock, act: dispatchClock, latest, readClock } = replay;
+  const contextKey = replayContextKey(clock);
+  const [source, setSource] = useReducer((_previous: ReplaySource, next: ReplaySource) => next,
+    { status: "loading", records: [], aps: [], error: "", notice: "" });
+  const [reloadCount, reload] = useState(0);
+  const [analysisNotice, setAnalysisNotice] = useState<{ key: string; text: string }>({ key: "", text: "" });
+  const [focus, setFocus] = useState<{ contextKey: string; id: string | null }>({ contextKey, id: null });
+  const focusedApId = focus.contextKey === contextKey ? focus.id : null;
+  const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(null);
+  const snapshotRef = useRef<AnalysisSnapshot | null>(null);
   const query = useNetworkQuery();
-  const diagnosisRef = useRef<DiagnosisHandle>(null);
-  const managementRef = useRef<ManagementHandle>(null);
+  const resetQuery = query.reset;
+  const clearedContext = useRef(contextKey);
+  const requestSerial = useRef(0);
+  const clearContext = useCallback((key: string) => {
+    clearedContext.current = key; requestSerial.current++;
+    snapshotRef.current = null; setSnapshot(null); resetQuery();
+  }, [resetQuery]);
+  const act = useCallback((action: ReplayAction) => {
+    const before = replayContextKey(readClock());
+    dispatchClock(action);
+    const after = replayContextKey(readClock());
+    if (after !== before) clearContext(after);
+  }, [dispatchClock, readClock, clearContext]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    query.reset(); analysisController.current?.abort(); analysisController.current = null;
-    setDiagnosis(null); setAnalyzing(false); setAnalysisError("");
-    setData(null); setLoading(true); setError(""); setFocusedApId(null);
-    loadDashboard(scope, controller.signal).then(result => {
+    const controller = new AbortController(); let active = true;
+    loadReplayRecords(config, controller.signal).then(records => {
       if (!active) return;
-      setData(result);
-      setSelectedUeId(previous => result?.nodes.some(n => n.type === "ue" && n.id === previous)
-        ? previous : result?.nodes.find(n => n.type === "ue")?.id || "");
+      if (!records.length) {
+        setSource({ status: "empty", records: [], aps: [], error: "", notice: "" }); return;
+      }
+      const loaded: ReplaySource = { status: "ready", records, aps: [], error: "", notice: "" };
+      setSource(loaded); act({ type: "ready" });
+      // 静态部署只从首个已有采样时刻读取；不使用预加载末尾的 UE 坐标/连接。
+      const first = records[0].backendTime;
+      void loadDashboard({ scenario: config.scenario, start: first, end: first }, controller.signal).then(result => {
+        if (active) setSource({ ...loaded, aps: result?.nodes.filter(node => node.type === "ap") ?? [] });
+      }).catch(() => {
+        if (active) setSource({ ...loaded, notice: "静态部署暂未返回；主图使用已到达采样中的位置与连接。" });
+      });
     }).catch(reason => {
-      if (active) setError(reason instanceof Error ? reason.message : "数据读取失败");
-    }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; controller.abort(); analysisController.current?.abort(); };
-  }, [scope, query.reset]);
+      if (active && !controller.signal.aborted) setSource({ status: "error", records: [], aps: [],
+        error: reason instanceof Error ? reason.message : "历史数据读取失败", notice: "" });
+    });
+    return () => { active = false; controller.abort(); };
+  }, [reloadCount, act, config]);
 
-  async function analyze() {
-    if (!data || loading || analysisController.current) return;
-    const controller = new AbortController(); analysisController.current = controller;
-    setAnalyzing(true); setAnalysisError(""); setDiagnosis(null);
+  // timer直接跨轮的情况也要清上下文；手动操作已同步清理，避免取消随后发起的新请求。
+  useEffect(() => {
+    if (clearedContext.current !== contextKey) clearContext(contextKey);
+  }, [contextKey, clearContext]);
+
+  const selectedTime = viewTime(clock);
+  const scope = viewScope(config, clock);
+  const scopeStart = scope.start, scopeEnd = scope.end, scopeScenario = scope.scenario;
+  const viewData = useMemo(() => source.status === "ready"
+    ? buildReplayDashboard(source.records, { scenario: scopeScenario, start: scopeStart, end: scopeEnd }, source.aps)
+    : null, [source, scopeStart, scopeEnd, scopeScenario]);
+  const activeSnapshot = snapshot?.epoch === clock.epoch && snapshot.viewRevision === clock.viewRevision ? snapshot : null;
+  const data = activeSnapshot?.data ?? viewData;
+  const visibleSpatial = useScopedSpatial(clock.viewMode !== "live" && data?.metrics.length ? scope : null);
+  // 循环或跳转后的首次渲染就隐藏较晚时刻的回答，不等 effect 清理。
+  const visibleQuery = activeSnapshot ? query : { ...query, ...initialQueryState };
+  const currentTime = formatReplayTime(clock.currentMs);
+  const displayedTime = formatReplayTime(selectedTime);
+  const loading = source.status === "loading";
+
+  async function submitAnalysis(message: string, preserveDiagnosis = false, retry = false) {
+    let current = latest.current;
+    if (current.locked || !message.trim() || source.status !== "ready" || needsFutureForecast(message)) return;
+    const sentMasterTime = formatReplayTime(current.currentMs);
+    if (!preserveDiagnosis && !retry) {
+      const resolved = resolveHistoryQuestion(message, { scenario: config.scenario, masterTime: sentMasterTime, dataStart: config.start, dataEnd: config.end });
+      if (resolved.kind === "error") {
+        setAnalysisNotice({ key: replayContextKey(current), text: `${resolved.message} 本次问题未发送，查看范围未改变。` }); return;
+      }
+      if (resolved.kind === "range") {
+        act({ type: "select-range", startMs: toEpoch(resolved.scope.start), endMs: toEpoch(resolved.scope.end) });
+        current = latest.current;
+        setAnalysisNotice({ key: replayContextKey(current), text: `已按问题切换到 ${resolved.scope.start} — ${resolved.scope.end}（北京时间）。${resolved.notice}` });
+      } else if (current.viewMode === "live") return;
+      else setAnalysisNotice({ key: replayContextKey(current), text: "" });
+    } else if (current.viewMode === "live") return;
+    if (current.viewMode === "live") return;
+    const key = replayContextKey(current);
+    // 可能恰好经历timer跨轮且尚未执行effect；先取消旧上下文，再开启本次请求。
+    if (clearedContext.current !== key) clearContext(key);
+    const previous = snapshotRef.current?.epoch === current.epoch && snapshotRef.current.viewRevision === current.viewRevision ? snapshotRef.current : null;
+    const captured = (preserveDiagnosis || retry) && previous ? previous
+      : captureAnalysis(source.records, config, current, source.aps, focus.contextKey === key ? focus.id : null);
+    if (!captured.data.metrics.length) { setAnalysisNotice({ key, text: "指定范围暂无监测采样，未发送分析；可以调整范围或返回当前。" }); return; }
+    snapshotRef.current = captured; setSnapshot(captured);
+    act({ type: "lock", value: true });
+    const serial = ++requestSerial.current;
     try {
-      const result = await analyzeNetwork(data.scope, controller.signal);
-      if (analysisController.current === controller) setDiagnosis(result);
-    } catch (reason) {
-      if (analysisController.current === controller && !controller.signal.aborted)
-        setAnalysisError(reason instanceof Error ? reason.message : "分析失败");
+      await query.submit(message, config.scenario, captured.data.scope, {
+        preserveDiagnosis, analysisMode: current.viewMode, currentTime: sentMasterTime,
+        validateResult: response => {
+          const requested = captured.data.scope;
+          if (response.scope.scenario !== requested.scenario || response.scope.start !== requested.start || response.scope.end !== requested.end
+            || toEpoch(response.scope.end) > toEpoch(sentMasterTime))
+            throw new Error("后端返回范围与本次请求不一致，已停止展示该回答、图表和方案；请核对后端采用的时间窗口。");
+        },
+      });
     } finally {
-      if (analysisController.current === controller) { analysisController.current = null; setAnalyzing(false); }
+      if (requestSerial.current === serial && replayContextKey(latest.current) === key) act({ type: "lock", value: false });
     }
   }
+  function reloadSource() {
+    if (replay.latest.current.locked || loading) return;
+    act({ type: "restart" }); act({ type: "unready" });
+    setSource({ status: "loading", records: [], aps: [], error: "", notice: "" });
+    reload(value => value + 1);
+  }
 
-  useEffect(() => {
-    if (!data) { setForecast(null); return; }
-    const controller = new AbortController(); let active = true;
-    setForecastLoading(true); setForecastError(""); setForecast(null);
-    fetchForecast(data.scope, controller.signal).then(result => {
-      if (active) setForecast(result);
-    }).catch(reason => {
-      if (active) setForecastError(reason instanceof Error ? reason.message : "预测对比生成失败");
-    }).finally(() => { if (active) setForecastLoading(false); });
-    return () => { active = false; controller.abort(); };
-  }, [data]);
-  const ues = data?.nodes.filter(n => n.type === "ue") || [];
-  const latest = getLatestFrame(data?.metrics || []).metrics.find(r => r.ueId === selectedUeId);
-  const serving = data?.links.filter(l => l.target === selectedUeId) || [];
-  const focused = data?.nodes.find(n => n.type === "ap" && n.id === focusedApId);
-  function selectUE(id: string) {
-    if (ues.some(n => n.id === id)) { setSelectedUeId(id); setFocusedApId(null); }
-  }
-  function focusAP(id: string) {
-    if (data?.nodes.some(n => n.type === "ap" && n.id === id)) setFocusedApId(id);
-  }
-  function timeInput(value: string) {
-    return value.replace("T", " ") + (value.length === 16 ? ":00" : "");
-  }
-  return (
-    <main className="ain-workbench">
-      <div className="ain-workbench-title">
-        <div>
-          <h1>现存问题 · 网络分析与管理</h1>
-          <p>观察指标与连接，围绕具体异常核查原因。</p>
+  return <main className="ain-workbench">
+    <div className="ain-workbench-title"><div><h1>网络分析与管理</h1>
+      <p>主时钟持续运行，固定查看时刻研判原因与处理方案。</p></div>
+      <span className="ain-source-badge">历史数据回放</span></div>
+
+    <ReplayControls state={clock} act={act} loading={loading} onReload={reloadSource} config={config} />
+
+    <QueryPanel analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
+      disabled={!data?.metrics.length || loading || Boolean(source.error)} data={data}
+      spatial={visibleSpatial.data} spatialPending={visibleSpatial.loading} spatialError={visibleSpatial.error}
+      onSpatialRetry={visibleSpatial.retry} focusedApId={activeSnapshot ? activeSnapshot.focusedApId : focusedApId}
+      dataLoading={loading} dataError={source.error} onSubmitAnalysis={submitAnalysis}
+      replay={{ playing: clock.playing, currentTime, analysisTime: activeSnapshot?.data.scope.end ?? null,
+        viewTime: displayedTime, mode: clock.viewMode, canAnalyzeQuestionTime: source.status === "ready", hasCurrentData: Boolean(data?.metrics.length),
+        onFreeze: () => act({ type: "freeze" }), onExit: () => act({ type: "live" }) }} />
+
+    <section className="ain-data-module ain-feature-module" id="ain-data-module" aria-labelledby="ain-data-title">
+      <header className="ain-feature-heading ain-data-heading"><div className="ain-module-title">
+        <h2 className="ain-feature-title" id="ain-data-title">数据展示</h2>
+        <p>{clock.viewMode === "live" ? "跟随主时钟更新" : "与AI查看时刻同步固定"} · 选择对象观察指标、地图与连接</p></div>
+        <span className="ain-feature-context">{clock.viewMode === "history" ? "历史回顾 · 预测不可用" : clock.viewMode === "analysis" ? "分析视图已固定" : "仅展示已到达数据"}</span></header>
+      <HistoryControls state={clock} act={act} loading={loading} config={config} />
+      {clock.viewMode === "history" && <ReferenceWindowControls key={`history-${contextKey}`} idPrefix="ain-history-reference"
+        state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />}
+      <section className="ain-filter-panel ain-replay-data-info" aria-label="回放数据来源与统计口径">
+        <div className="ain-data-bar"><span className="ain-source-badge">CSV 仿真历史数据</span>
+          <span>场景：{config.scenario}</span><span>查看截止时刻：{displayedTime}</span>
+          {clock.viewMode !== "live" && <span>主时钟：{currentTime} · {clock.playing ? "持续运行" : "已到末尾"}</span>}
+          {data && <><span>窗口内 {data.metrics.length} 条记录</span>
+            <span>{data.nodes.filter(node => node.type === "ap").length} AP / {data.nodes.filter(node => node.type === "ue").length} UE</span>
+            <span>最近有效采样：{data.metrics.at(-1)?.backendTime ?? "暂无"}</span></>}
+          <p className="ain-loaded-scope">趋势／窗口统计：{scopeLabel(scope)}；主图采样信号与最新帧连接使用最近有效采样。</p>
         </div>
-        <span className="ain-source-badge">后端接口数据</span>
-      </div>
-
-      <nav className="ain-workflow-nav" aria-label="工作台功能流程">
-        <a className="ain-workflow-ai" href="#ain-ai-module"><span>01</span><strong>AI 对话交互</strong><small>描述问题</small></a>
-        <a href="#ain-data-module"><span>02</span><strong>数据展示</strong><small>观察指标与图表</small></a>
-        <a href={data ? "#ain-diagnosis-module" : undefined} aria-disabled={!data}><span>03</span><strong>故障研判与证据</strong><small>核查原因与依据</small></a>
-        <a href={data ? "#ain-management-panel" : undefined} aria-disabled={!data}><span>04</span><strong>操作建议与效果验证</strong><small>准备方案与验证</small></a>
-      </nav>
-
-      <QueryPanel
-        query={query}
-         scenario={data?.scope.scenario || scope.scenario}
-         window={data?.scope || scope}
-         disabled={!data || loading}
-         onViewDiagnosis={() => diagnosisRef.current?.showChat()}
-       />
-
-      <section className="ain-data-module ain-feature-module" id="ain-data-module" aria-labelledby="ain-data-title">
-        <header className="ain-feature-heading ain-data-heading">
-          <span className="ain-module-number" aria-hidden="true">02</span>
-          <div className="ain-module-title">
-            <h2 className="ain-feature-title" id="ain-data-title">数据展示</h2>
-            <p>加载范围 → 选择对象 → 观察指标、地图与趋势</p>
-          </div>
-          <span className="ain-feature-context">为研判提供观测依据</span>
-        </header>
-      <section className="ain-filter-panel" aria-label="数据范围与来源">
-        <form
-          className="ain-scope-form"
-          onSubmit={event => {
-            event.preventDefault();
-            setScope({ ...draft });
-          }}
-        >
-          <label>场景
-            <select value={draft.scenario} onChange={event => setDraft(value => ({ ...value, scenario: event.target.value }))}>
-              {["校园", "商场", "体育馆"].map(item => <option key={item}>{item}</option>)}
-            </select>
-          </label>
-          <label>演示时段
-            <select value={caseIndex} onChange={event => {
-              const value = event.target.value;
-              setCaseIndex(value);
-              const item = CASE_WINDOWS[Number(value)];
-              if (item) setDraft(previous => ({ ...previous, start: item.start, end: item.end }));
-            }}>
-              {CASE_WINDOWS.map((item, index) => <option key={item.label} value={String(index)}>{item.label}</option>)}
-              <option value="custom">自定义范围</option>
-            </select>
-          </label>
-          <label>开始时间
-            <input type="datetime-local" step="1" required value={draft.start.replace(" ", "T")} onChange={event => {
-              setCaseIndex("custom");
-              setDraft(value => ({ ...value, start: timeInput(event.target.value) }));
-            }} />
-          </label>
-          <label>结束时间
-            <input type="datetime-local" step="1" required value={draft.end.replace(" ", "T")} onChange={event => {
-              setCaseIndex("custom");
-              setDraft(value => ({ ...value, end: timeInput(event.target.value) }));
-            }} />
-          </label>
-          <button className="ain-button ain-primary" disabled={loading}>加载所选范围</button>
-          <button type="button" className="ain-button ain-reload" disabled={loading} onClick={() => setScope({ ...scope })}>重新载入</button>
-        </form>
-        <p className="ain-filter-note">
-           数据范围：2026-01-01 至 2026-01-30（北京时间）；
-          当前仅支持校园场景，单次最多查询3天。
-        </p>
-        {data && <div className="ain-data-bar">
-          <span className="ain-source-badge">CSV 仿真历史数据</span>
-          <span>{data.metrics.length} 条记录</span>
-          <span>{data.nodes.filter(node => node.type === "ap").length} AP / {ues.length} UE</span>
-          <span>最新采样：{data.metrics.at(-1)?.backendTime}</span>
-          <p className="ain-loaded-scope">已加载：{scopeLabel(data.scope)}</p>
-        </div>}
+        {source.notice && <p className="ain-filter-note">{source.notice}</p>}
       </section>
-
-      {loading && <p className="ain-load-state" role="status">正在读取所选范围的记录与拓扑…</p>}
-      {error && <div className="ain-error" role="alert">
-        <p>{error}</p>
-        <button className="ain-button" onClick={() => setScope({ ...scope })}>重试</button>
-      </div>}
-      {!loading && !error && !data && <div className="ain-load-state">
-        <h2>所选场景与时间段暂无数据</h2>
-        <p>{scopeLabel(scope)}</p>
-        <p>请切回校园已有时间段。当前文件没有商场和体育馆的数据。</p>
-      </div>}
-
+      {loading && <p className="ain-load-state" role="status">正在读取历史数据，完成后自动开始回放…</p>}
+      {source.error && <div className="ain-error" role="alert"><p>{source.error}</p>
+        <button type="button" className="ain-button" disabled={clock.locked} onClick={reloadSource}>重试读取历史数据</button></div>}
+      {source.status === "empty" && <div className="ain-load-state" role="status"><h2>配置的回放时段暂无数据</h2>
+        <p>请确认后端已有 {config.start} — {config.end} 的校园记录。</p></div>}
       {data && <>
-        <section className="ain-object-bar" aria-label="当前指标对象">
-          <label htmlFor="ain-panel-ue">指标对象
-            <select id="ain-panel-ue" value={selectedUeId} onChange={event => selectUE(event.target.value)}>
-              {ues.map(node => <option key={node.id}>{node.id}</option>)}
-            </select>
-          </label>
-          <span>服务 AP <strong>{serving.map(link => link.source).join("、") || "无"}</strong></span>
-          <span>对象采样：{latest?.backendTime || "暂无数据"}</span>
-          <p>选择 UE 联动指标与图表；故障研判仍按已加载场景内各 AP 分析。</p>
-        </section>
-
-        {focused && <section className="ain-ap-focus-bar" aria-label="当前关注 AP">
-          <span>关注 <strong>{focused.id}</strong> · 坐标 ({focused.x}, {focused.y}) m</span>
-          <div className="ain-ap-ue-buttons">
-            {data.links.filter(link => link.source === focused.id).map(link => (
-              <button key={link.id} className="ain-button" onClick={() => selectUE(link.target)}>
-                {link.target} / {displayMetric(link.throughput)} Mbps
-              </button>
-            ))}
-          </div>
-          <button className="ain-button" onClick={() => setFocusedApId(null)}>取消关注</button>
-        </section>}
-
-        <KpiSummary data={data} ueId={selectedUeId} />
-
-        <div className="ain-main-grid">
-          <div className="ain-large-charts">
-            <RadioMapChart data={data} ueId={selectedUeId} focusedApId={focusedApId} onSelectUE={selectUE} onFocusAP={focusAP} />
-            <TopologyChart data={data} ueId={selectedUeId} focusedApId={focusedApId} onSelectUE={selectUE} onFocusAP={focusAP} />
-          </div>
-          <MetricCharts data={data} ueId={selectedUeId} onSelect={selectUE} />
-        </div>
-
-        <div className="ain-trend-slot">
-          <TrendChart data={data} ueId={selectedUeId} />
-        </div>
-
-        <ForecastCompareChart forecast={forecast} pending={forecastLoading} error={forecastError} />
-
-        {query.result?.chart && <ToolResultPanel result={query.result} />}
-
+        {!data.metrics.length && <p className="ain-load-state" role="status">当前查看窗口尚无采样，可返回当前或查看已经到达的历史时段。</p>}
+        <DataObservation key={contextKey} data={data} spatial={visibleSpatial.data} pending={visibleSpatial.loading}
+          error={visibleSpatial.error} onRetry={visibleSpatial.retry} onFocusedAP={id => setFocus({ contextKey, id })}
+          spatialNotice={clock.viewMode === "live" ? "实时跟随展示最新采样；固定查看时刻后加载对应窗口的空间估计。" : ""} />
       </>}
-      </section>
-
-      {data && <>
-        <DiagnosisModule
-          ref={diagnosisRef}
-          result={diagnosis}
-          pending={analyzing}
-          error={analysisError}
-          chatDiagnosis={query.result?.diagnosis || null}
-          scope={data.scope}
-          onAnalyze={() => void analyze()}
-          onPrepare={(input) => managementRef.current?.prepare(input)}
-        />
-
-        <div className="ain-module-handoff" aria-label="研判与操作区的衔接">
-          <div><strong>研判依据</strong><span aria-hidden="true">→</span><strong>方案草稿</strong><span aria-hidden="true">→</span><strong>基线与效果验证</strong></div>
-          <p>点击上方“根据此研判准备方案”，带入研判依据与可识别的目标 AP；核对参数后生成草稿并锁定基线。</p>
-        </div>
-
-        <ManagementModule
-          ref={managementRef}
-          data={data}
-          diagnosis={diagnosis}
-          chatDiagnosis={query.result?.diagnosis || null}
-          focusedApId={focusedApId}
-        />
-      </>}
-    </main>
-  );
+    </section>
+  </main>;
 }

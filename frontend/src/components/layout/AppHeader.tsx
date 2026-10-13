@@ -3,8 +3,7 @@ import "./AppHeader.css";
 
 const navigation = [
   { to: "/", label: "首页" },
-  { to: "/workbench", label: "现存问题" },
-  { to: "/prediction", label: "预测分析" },
+  { to: "/workbench", label: "网络工作台" },
   { to: "/history", label: "分析记录" },
 ];
 

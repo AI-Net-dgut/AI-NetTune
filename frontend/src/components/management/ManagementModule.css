@@ -1,83 +1,47 @@
-.ain-management-module {
-  margin-top: 22px; border: 1px solid #dce7f3; border-radius: 18px;
-  background: #fff; box-shadow: 0 8px 28px #223f6810; overflow: hidden;
-}
-.ain-management-summary {
-  display: flex; align-items: center; gap: 16px; padding: 22px 24px;
-  cursor: pointer; list-style: none; background: linear-gradient(105deg, #eff6ff, #f1fbf9);
-}
-.ain-management-summary::-webkit-details-marker { display: none; }
-.ain-management-summary:focus-visible { outline: 3px solid #387cec; outline-offset: -3px; }
-.ain-management-module .ain-close-label { display: none; }
-.ain-management-module[open] > summary .ain-open-label { display: none; }
-.ain-management-module[open] > summary .ain-close-label { display: inline; }
-.ain-management-module[open] > summary .ain-module-toggle b { transform: rotate(180deg); }
-.ain-management-content { padding: 22px 24px 24px; }
-.ain-management-scope { margin: 0 0 18px; color: #5b6e86; font-size: 13px; }
-.ain-management-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
-.ain-management-column { min-width: 0; border: 1px solid #e2eaf3; border-radius: 14px; padding: 20px; }
-.ain-management-column-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
-.ain-management-column-title h3 { margin: 0; color: #18365a; font-size: 17px; }
-.ain-management-column-title > span { color: #3473bf; background: #edf5ff; border-radius: 8px; padding: 5px 9px; font-size: 12px; white-space: nowrap; }
-.ain-suggestion-card { padding: 14px; border: 1px solid #dcebf2; border-left: 3px solid #15a8a0; border-radius: 10px; background: #f8fcff; margin-bottom: 12px; }
-.ain-suggestion-card h4, .ain-effect-slot h4 { margin: 0 0 8px; color: #234667; font-size: 14px; }
-.ain-suggestion-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; font-size: 14px; }
-.ain-suggestion-card button[aria-pressed="true"] { color: #087e79; border-color: #79d4ca; background: #eafaf6; }
-.ain-management-muted { color: #667b93; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.ain-plan-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 20px; }
-.ain-plan-form label { display: grid; gap: 7px; color: #405773; font-size: 13px; min-width: 0; }
-.ain-plan-form input, .ain-plan-form select, .ain-plan-form textarea { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid #d7e2ef; border-radius: 8px; padding: 10px 11px; background: #fbfdff; color: #193858; font: inherit; }
-.ain-plan-form textarea { resize: vertical; }
-.ain-plan-form input:focus, .ain-plan-form select:focus, .ain-plan-form textarea:focus { outline: 2px solid #9cc5ff; border-color: #4488e7; }
-.ain-form-full { grid-column: 1 / -1; }
-.ain-current-config { display: grid; gap: 7px; align-content: start; color: #405773; font-size: 13px; }
-.ain-current-config strong { padding: 10px 0; color: #78869a; font-weight: 500; }
-.ain-plan-actions { display: flex; flex-wrap: wrap; gap: 9px; }
-.ain-management-warning { border-radius: 8px; padding: 11px 13px; background: #fff5e7; color: #98651a; font-size: 13px; line-height: 1.7; }
-.ain-management-notice { border-radius: 8px; padding: 11px 13px; background: #eaf8f4; color: #197e69; font-size: 13px; }
-.ain-management-empty { padding: 16px; border-radius: 10px; background: #f5f8fc; color: #61768f; font-size: 13px; line-height: 1.8; }
-.ain-plan-overview { padding: 12px; color: #365879; background: #f0f8ff; border-radius: 9px; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
-.ain-baseline-info { color: #536a83; font-size: 12px; line-height: 1.7; margin-bottom: 16px; }
-.ain-baseline-info > strong { color: #264563; font-size: 14px; }
-.ain-baseline-info p { margin: 6px 0; }
-.ain-comparison-table-wrap { overflow-x: auto; }
-.ain-comparison-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.ain-comparison-table caption { text-align: left; color: #708199; padding-bottom: 10px; line-height: 1.7; }
-.ain-comparison-table th, .ain-comparison-table td { padding: 11px 8px; text-align: left; border-bottom: 1px solid #e8eef5; color: #526983; }
-.ain-comparison-table thead th { background: #f4f8fd; color: #3d5778; font-weight: 600; }
-.ain-comparison-table tbody th { font-weight: 500; color: #264667; }
-.ain-comparison-table small { display: block; margin-top: 4px; color: #8393a7; }
-.ain-effect-slots { display: grid; gap: 11px; margin-top: 20px; }
-.ain-effect-slot { padding: 15px; border: 1px dashed #cbdceb; border-radius: 10px; background: #fafcff; }
-.ain-effect-slot p { margin: 0; color: #7b8da3; font-size: 12px; line-height: 1.7; }
-.ain-execution-state { margin-top: 20px; padding: 15px; border-radius: 10px; background: #f1f6fc; }
-.ain-execution-state > strong { font-size: 14px; color: #355776; }
-.ain-execution-state > p { font-size: 12px; color: #657b94; line-height: 1.8; }
-@media (max-width: 1050px) {
-  .ain-management-grid { grid-template-columns: minmax(0, 1fr); }
-  .ain-management-summary { flex-wrap: wrap; }
-}
-@media (max-width: 600px) {
-  .ain-management-content, .ain-management-summary { padding: 16px; }
-  .ain-management-column { padding: 14px; }
-  .ain-plan-form { grid-template-columns: minmax(0, 1fr); }
-}
-
-/* Step 5: show capabilities early and keep empty states compact */
-.ain-management-module { scroll-margin-top: 100px; }
-.ain-management-summary:focus { outline: 2px solid #387cec; outline-offset: -3px; }
-.ain-execution-top { margin: 0 0 16px; }
-.ain-execution-top p { margin: 7px 0 0; }
-.ain-management-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; list-style: none; margin: 0 0 18px; padding: 0; }
-.ain-management-steps li { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #f5f8fc; color: #657994; border: 1px solid #e2eaf3; border-radius: 9px; font-size: 12px; line-height: 1.6; }
-.ain-management-steps li > span { display: grid; place-items: center; min-width: 23px; height: 23px; border-radius: 50%; background: #e6edf7; }
-.ain-management-steps li[data-active="true"] { color: #2456a1; border-color: #b6d1f7; background: #edf4ff; }
-.ain-management-steps li[aria-disabled="true"] { border-style: dashed; }
-.ain-effect-pending { margin-top: 18px; padding: 15px 18px; border: 1px dashed #cadbeb; border-radius: 10px; background: #f8fbff; }
-.ain-effect-pending h4 { margin: 0 0 8px; color: #29496c; font-size: 14px; }
-.ain-effect-pending p, .ain-effect-pending li { color: #667b93; font-size: 12px; line-height: 1.8; }
-.ain-effect-pending p { margin: 0; }
-.ain-effect-pending ul { margin: 8px 0 0; padding-left: 18px; }
-.ain-execution-controls { margin-top: 15px; }
-@media (max-width: 1100px) { .ain-management-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 600px) { .ain-management-steps { grid-template-columns: minmax(0, 1fr); } }
+/* AI 右栏：紧凑纵向内容；不受旧管理面板三列规则影响。 */
+.ain-app.ain-shell .ain-workbench .ain-ai-v3 .ain-management-integrated { min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.ain-management-integrated .ain-plan-list { display: grid; gap: 6px; }
+.ain-management-integrated .ain-suggestion-card { display: block; width: 100%; text-align: left; padding: 9px 10px; border: 1px solid #dce7f2; border-radius: 7px; background: #fafcff; }
+.ain-management-integrated .ain-suggestion-card:hover:not(:disabled) { border-color: #8bbab9; }
+.ain-management-integrated .ain-suggestion-card.is-selected { border-color: #81bdb5; background: #f0f8f6; }
+.ain-management-integrated .ain-suggestion-card:disabled { opacity: .65; }
+.ain-management-integrated .ain-suggestion-card-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.ain-management-integrated .ain-suggestion-card-heading strong { color: #286d67; font-size: 12px; }
+.ain-management-integrated .ain-suggestion-card-heading > span, .ain-management-integrated .ain-plan-object { color: #708b98; font-size: 11px; }
+.ain-management-integrated .ain-plan-object { display: block; margin-top: 4px; }
+.ain-management-integrated .ain-suggestion-text { display: block; color: #496779; font-size: 12px; line-height: 1.65; margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ain-management-integrated .ain-config-summary, .ain-management-integrated .ain-effect-summary { border-top: 1px solid #e2eaf3; margin-top: 10px; padding-top: 10px; }
+.ain-management-integrated .ain-management-empty { margin: 0; padding: 8px 10px; background: #f6f9fc; border-radius: 6px; color: #6c839c; font-size: 12px; line-height: 1.65; }
+.ain-management-integrated .ain-management-muted { color: #74889d; font-size: 11px; line-height: 1.6; margin: 5px 0; overflow-wrap: anywhere; }
+.ain-management-integrated .ain-parameter-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ain-management-integrated .ain-parameter-table th, .ain-management-integrated .ain-parameter-table td { text-align: left; padding: 7px 6px; border-bottom: 1px solid #e4edf5; color: #496782; }
+.ain-management-integrated .ain-parameter-table thead th { background: #f5f8fc; color: #72879e; font-weight: 500; }
+.ain-management-integrated .ain-parameter-table tbody th { font-weight: 500; }
+.ain-management-integrated .ain-parameter-table th span { display: block; margin-top: 2px; font-size: 11px; color: #6e859d; }
+.ain-management-integrated .ain-plan-form { padding: 9px; margin-top: 6px; border: 1px solid #dce7f2; border-radius: 6px; background: #fafcff; }
+.ain-management-integrated .ain-plan-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ain-management-integrated .ain-parameter-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(70px, 115px); gap: 4px 8px; align-items: center; margin-bottom: 8px; color: #526f8b; font-size: 12px; }
+.ain-management-integrated .ain-parameter-field small { grid-column: 1 / -1; font-size: 11px; color: #7d8fa3; line-height: 1.5; }
+.ain-management-integrated .ain-parameter-field .ain-field-error { color: #a65646; }
+.ain-management-integrated input, .ain-management-integrated select { min-width: 0; max-width: 100%; border: 1px solid #cfdfee; border-radius: 5px; padding: 5px 6px; color: #365c80; background: #fff; font-size: 12px; }
+.ain-management-integrated .ain-plan-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 7px; }
+.ain-management-integrated .ain-management-warning, .ain-management-integrated .ain-management-notice { padding: 7px 9px; margin-top: 7px; border-radius: 6px; font-size: 12px; line-height: 1.6; background: #fff5e9; color: #966829; }
+.ain-management-integrated .ain-management-notice { background: #edf8f4; color: #387c6b; }
+.ain-management-integrated .ain-effect-pending { padding: 9px 10px; border: 1px dashed #cfdeed; border-radius: 6px; background: #fafcff; }
+.ain-management-integrated .ain-effect-pending strong { font-size: 12px; font-weight: 500; color: #5b7996; }
+.ain-management-integrated .ain-effect-pending p { margin-top: 3px; color: #7a8fa4; font-size: 11px; line-height: 1.6; }
+.ain-management-integrated .ain-manual-tasks { margin-top: 7px; padding: 8px 10px; border-left: 2px solid #d2aa66; background: #fffcf5; color: #7b6747; font-size: 12px; line-height: 1.6; }
+.ain-management-integrated .ain-manual-tasks ul { margin: 4px 0 0; padding-left: 18px; }
+.ain-management-integrated .ain-effect-conclusion { margin-bottom: 6px; color: #397f78; font-size: 12px; line-height: 1.65; }
+.ain-management-integrated .ain-effect-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-bottom: 7px; }
+.ain-management-integrated .ain-effect-values > div { min-width: 0; padding: 7px; border-radius: 6px; background: #f2f7fc; }
+.ain-management-integrated .ain-effect-values span, .ain-management-integrated .ain-effect-values small { display: block; color: #74899f; font-size: 10px; line-height: 1.6; }
+.ain-management-integrated .ain-effect-values strong { display: block; color: #3b6e92; font-size: 14px; margin: 2px 0; overflow-wrap: anywhere; }
+.ain-management-integrated .ain-effect-values strong small { display: inline; }
+.ain-management-integrated .ain-effect-tabs { margin-bottom: 7px; }
+.ain-management-integrated .ain-effect-metric { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: #71859c; font-size: 11px; }
+.ain-management-integrated .ain-effect-map-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.ain-app.ain-shell .ain-workbench .ain-ai-v3 .ain-effect-map-pair .ain-spatial-svg { height: 155px; }
+.ain-management-integrated .ain-history-baseline { display: flex; flex-wrap: wrap; gap: 5px 12px; color: #6b8198; font-size: 11px; }
+@media (max-width: 500px) { .ain-management-integrated .ain-effect-values { grid-template-columns: minmax(0, 1fr); } .ain-management-integrated .ain-effect-map-pair { grid-template-columns: minmax(0, 1fr); } }
+.ain-management-integrated .ain-parameter-note { display: block; color: #7e90a3; margin-top: 3px; font-size: 10px; line-height: 1.5; }

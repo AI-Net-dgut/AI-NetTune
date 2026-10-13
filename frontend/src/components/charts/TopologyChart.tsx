@@ -1,4 +1,9 @@
-import type { DashboardData, NetworkNode } from "../../types/backend";
+import { useState } from "react";
+import type { DashboardData, NetworkLink, NetworkNode } from "../../types/backend";
+import { displayMetric } from "../../services/metrics";
+import { LINK_METRICS, linkMetricColor, linkMetricRange } from "../../services/topology";
+import type { LinkMetric } from "../../services/topology";
+import "./TopologyInteraction.css";
 import SpatialChart, {
   createProjection,
   SCENE_VIEWBOX,
@@ -10,16 +15,22 @@ interface Props {
   data: DashboardData;
   ueId: string;
   focusedApId: string | null;
+  selectedLinkId: string | null;
   onSelectUE: (id: string) => void;
   onFocusAP: (id: string) => void;
+  onSelectLink: (link: NetworkLink) => void;
 }
 export default function TopologyChart({
   data,
   ueId,
   focusedApId,
+  selectedLinkId,
   onSelectUE,
   onFocusAP,
+  onSelectLink,
 }: Props) {
+  const [metric, setMetric] = useState<LinkMetric>("rsrp");
+  const meta = LINK_METRICS[metric];
   const projection = createProjection(data.area);
   const nodes = data.nodes.filter((node) => projection?.contains(node));
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -31,10 +42,11 @@ export default function TopologyChart({
   const highlighted = new Set(
     links
       .filter((link) =>
-        focusedApId ? link.source === focusedApId : link.target === ueId,
+        selectedLinkId ? link.id === selectedLinkId : focusedApId ? link.source === focusedApId : link.target === ueId,
       )
       .flatMap((link) => [link.source, link.target]),
   );
+  const range = linkMetricRange(links, metric);
   const selectNode = (node: NetworkNode) => {
     if (node.type === "ue") onSelectUE(node.id);
     else onFocusAP(node.id);
@@ -60,12 +72,15 @@ export default function TopologyChart({
               当前选择
             </span>
           </div>
+          {range && (range.min === range.max ? <p>当前有效链路 {meta.label} 均为 {displayMetric(range.min)} {meta.unit}。</p>
+            : <div className="ain-topology-range"><span>{displayMetric(range.min)} {meta.unit}</span><i aria-hidden="true" /><span>{displayMetric(range.max)} {meta.unit}</span></div>)}
+          <p>连线颜色表示当前窗口内的 {meta.label} 相对大小；金色外圈表示关注连接，不作为故障判定。</p>
           <p>
-            {focusedApId
+            {selectedLinkId ? "已选择一条链路，详情显示在地图下方。" : focusedApId
               ? `关注 ${focusedApId}：高亮其服务连接。`
               : `分析 ${ueId || "未选择对象"}：高亮其服务连接。`}
           </p>
-          <p>点击 AP 查看连接；点击 UE 查看指标。连线为窗口内该 UE 主服务 AP（连接占比最高）。采样时刻：{data.metrics.at(-1)?.backendTime}（北京时间）。</p>
+          <p>点击 AP、UE 或连线查看详情。节点位置取最新采样；连线指标为窗口内连接均值。最新采样：{data.metrics.at(-1)?.backendTime}（北京时间）。</p>
           {links.length < data.links.length && (
             <p>
               {data.links.length - links.length}{" "}
@@ -76,6 +91,11 @@ export default function TopologyChart({
         </>
       }
     >
+      <div className="ain-topology-controls">
+        <label>链路着色指标<select value={metric} onChange={event => setMetric(event.target.value as LinkMetric)}>
+          {(Object.keys(LINK_METRICS) as LinkMetric[]).map(key => <option key={key} value={key}>{LINK_METRICS[key].label} / {LINK_METRICS[key].unit}</option>)}
+        </select></label>
+      </div>
       {projection ? (
         <svg
           className="ain-spatial-svg"
@@ -87,29 +107,38 @@ export default function TopologyChart({
           {links.map((link) => {
             const source = byId.get(link.source)!;
             const target = byId.get(link.target)!;
-            const active = focusedApId
+            const active = selectedLinkId ? link.id === selectedLinkId : focusedApId
               ? link.source === focusedApId
               : link.target === ueId;
             const midX = (projection.x(source.x) + projection.x(target.x)) / 2;
             const midY = (projection.y(source.y) + projection.y(target.y)) / 2;
             return (
-              <g key={link.id}>
+              <g key={link.id} className={`ain-topology-link-button${active ? " is-active" : ""}`}
+                role="button" tabIndex={0} aria-label={`查看链路 ${source.id} → ${target.id}`}
+                aria-pressed={link.id === selectedLinkId}
+                onClick={() => onSelectLink(link)} onKeyDown={event => {
+                  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectLink(link); }
+                }}>
+                <title>{`${source.id} → ${target.id}：RSRP ${displayMetric(link.rsrp)} dBm / SINR ${displayMetric(link.sinr)} dB / 吞吐量 ${displayMetric(link.throughput)} Mbps（窗口连接均值）`}</title>
+                {active && <line className="ain-topology-link-halo" x1={projection.x(source.x)} y1={projection.y(source.y)} x2={projection.x(target.x)} y2={projection.y(target.y)} />}
                 <line
                   className={`ain-topology-link${active ? " is-active" : ""}`}
+                  style={{ stroke: linkMetricColor(link[metric], range) }}
                   x1={projection.x(source.x)}
                   y1={projection.y(source.y)}
                   x2={projection.x(target.x)}
                   y2={projection.y(target.y)}
                 >
-                  <title>{`${source.id} → ${target.id}：RSRP ${link.rsrp} dBm / SINR ${link.sinr} dB / 吞吐量 ${link.throughput} Mbps（窗口内主服务连接）`}</title>
+                  <title>{`${meta.label} ${displayMetric(link[metric])} ${meta.unit}`}</title>
                 </line>
+                <line className="ain-topology-link-hit" x1={projection.x(source.x)} y1={projection.y(source.y)} x2={projection.x(target.x)} y2={projection.y(target.y)} />
                 <text
                   className="ain-topology-weight"
                   x={midX}
                   y={midY - 3}
                   textAnchor="middle"
                 >
-                  {link.rsrp.toFixed(1)}
+                  {displayMetric(link[metric])}
                 </text>
               </g>
             );

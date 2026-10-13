@@ -1,0 +1,147 @@
+/* 右侧两块分别与主图、趋势对齐；框内内容变化不参与行高计算。 */
+#ain-data-module > .ain-data-heading .ain-module-number { display: none; }
+.ain-workbench .ain-observation { color: #254767; font-size: 12px; line-height: 1.6; }
+.ain-workbench .ain-observation button, .ain-workbench .ain-observation select { font: inherit; }
+.ain-workbench .ain-observation button { cursor: pointer; }
+.ain-workbench .ain-observation button:disabled { cursor: default; opacity: .5; }
+.ain-workbench .ain-observation button:focus-visible, .ain-workbench .ain-observation select:focus-visible { outline: 2px solid #1685ff; outline-offset: 2px; }
+.ain-workbench .ain-observation-object-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid #d6e8f5; border-radius: 8px; background: #f4faff; }
+.ain-workbench .ain-observation-object-controls p { margin: 0 0 0 auto; color: #627c99; font-size: 11px; }
+.ain-workbench .ain-observation-tabs { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; background: #eaf2fb; border-radius: 7px; }
+.ain-workbench .ain-observation-tabs button { color: #537396; border: 1px solid transparent; padding: 5px 11px; border-radius: 5px; background: transparent; min-height: 30px; }
+.ain-workbench .ain-observation-tabs button[aria-pressed='true'] { color: #116cac; background: #fff; border-color: #c9dff3; box-shadow: 0 1px 4px #234a7510; font-weight: 600; }
+.ain-workbench .ain-observation label { display: inline-flex; align-items: center; gap: 7px; }
+.ain-workbench .ain-observation select { border: 1px solid #ccdeef; border-radius: 5px; color: #254767; background: #fff; padding: 5px 8px; max-width: 100%; }
+.ain-workbench .ain-observation input[type='checkbox'] { accent-color: #1685ff; }
+.ain-workbench .ain-observation-breadcrumb { font-weight: 600; color: #205e98; }
+.ain-workbench .ain-observation .ain-real-chart .ain-echart { width: calc(100% - 6px); margin: 0 3px 3px; border-radius: 4px; }
+.ain-workbench .ain-observation-layout { display: grid; grid-template-columns: minmax(0, 31fr) minmax(0, 19fr); grid-template-areas: "space overview" "trend comparison"; gap: 8px; align-items: stretch; }
+.ain-workbench .ain-observation-map { grid-area: space; min-width: 0; border: 1px solid #9fc9ed; border-radius: 8px; overflow: hidden; background: #fff; }
+.ain-workbench .ain-observation-map .ain-slot-heading { padding: 8px 10px; background: #edf6ff; }
+.ain-workbench .ain-observation .ain-observation-map .ain-slot-heading h2 { font-size: 16px; color: #1f568e; }
+.ain-workbench .ain-observation-map .ain-spatial-stage { min-height: 0; }
+.ain-workbench .ain-observation-map .ain-spatial-svg { width: 100%; height: clamp(280px, 21vw, 330px); aspect-ratio: auto; max-height: 330px; }
+.ain-workbench .ain-observation-map-controls { padding: 5px 8px; background: #f4f8fe; border-top: 1px solid #e0eaf6; }
+.ain-workbench .ain-observation-map-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding-top: 3px; color: #4c6b8f; font-size: 11px; }
+.ain-workbench .ain-observation-map-notice { margin: 0; padding: 8px 12px; color: #926531; background: #fff6e8; font-size: 11px; }
+.ain-workbench .ain-observation-map-notice .ain-button { margin-left: 8px; }
+.ain-workbench .ain-observation-map .ain-spatial-footer { color: #59738e; padding: 5px 9px; line-height: 1.4; }
+.ain-workbench .ain-observation-link { cursor: pointer; outline: none; }
+.ain-workbench .ain-observation-link-hit { stroke: transparent; stroke-width: 16; }
+.ain-workbench .ain-observation-link:focus-visible .ain-observation-link-hit { stroke: #ffffff55; }
+.ain-workbench .ain-observation-panel { grid-area: overview; display: flex; flex-direction: column; min-width: 0; border: 1px solid #d1e3f8; border-radius: 8px; background: #fff; padding: 10px; max-height: 480px; overflow-y: auto; }
+.ain-workbench .ain-observation-panel h2 { margin: 2px 0 7px; font-size: 16px; }
+.ain-workbench .ain-observation-eyebrow { font-size: 11px; color: #6383a5; }
+.ain-workbench .ain-observation-note { color: #6a8099; font-size: 11px; margin: 6px 0 0; overflow-wrap: anywhere; }
+.ain-workbench .ain-observation-kpis { flex: 1 0 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 9px; }
+.ain-workbench .ain-observation-kpi { display: flex; flex-direction: column; justify-content: center; padding: 8px; border: 1px solid #e0eaf6; border-radius: 7px; background: #f7fbff; }
+.ain-workbench .ain-observation-kpi > span { display: block; color: #647e9a; font-size: 11px; }
+.ain-workbench .ain-observation-kpi strong { display: block; color: #1f568e; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ain-workbench .ain-observation-kpi small { font-size: 10px; font-weight: 400; margin-left: 5px; color: #6885a1; }
+.ain-workbench .ain-observation-context { margin-top: 9px; color: #536f8c; }
+.ain-workbench .ain-observation-context p + p { margin-top: 4px; }
+.ain-workbench .ain-observation-related { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.ain-workbench .ain-observation-empty { padding: 8px 10px; border-radius: 5px; color: #946333; background: #fff5e7; font-size: 11px; margin-top: 10px; }
+.ain-workbench .ain-observation-connection-detail { margin-top: 12px; padding: 10px; background: #f1f8ff; border: 1px solid #d7e8fa; border-radius: 6px; }
+.ain-workbench .ain-observation-connection-detail p { margin: 5px 0; font-size: 11px; }
+.ain-workbench .ain-observation-details { margin-top: 9px; border-top: 1px solid #e1ebf6; padding-top: 10px; }
+.ain-workbench .ain-observation-details summary { cursor: pointer; color: #2474b5; }
+.ain-workbench .ain-observation-details h3 { margin-top: 12px; }
+.ain-workbench .ain-observation-extra { margin-top: 8px; }
+.ain-workbench .ain-observation-extra > div { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid #edf3f9; }
+.ain-workbench .ain-observation-extra dd { margin: 0; font-variant-numeric: tabular-nums; }
+.ain-workbench .ain-observation-table-wrap { overflow: auto; max-height: 180px; margin-top: 7px; }
+.ain-workbench .ain-observation table { width: 100%; border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+.ain-workbench .ain-observation th, .ain-workbench .ain-observation td { padding: 5px; text-align: left; border-bottom: 1px solid #e5eef7; }
+.ain-workbench .ain-observation td button { border: 0; background: transparent; color: #2474b5; padding: 0; }
+.ain-workbench .ain-observation-trends { grid-area: trend; min-width: 0; margin-top: 0; padding: 8px; background: #fff; border: 1px solid #d1e3f8; border-radius: 8px; }
+.ain-workbench .ain-observation-trend-heading h2 { margin: 0; font-size: 13px; }
+.ain-workbench .ain-observation-trend-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px; margin-bottom: 5px; }
+.ain-workbench .ain-observation-trend-heading p { color: #6a8099; font-size: 11px; margin-top: 3px; }
+.ain-workbench .ain-observation-trend-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ain-workbench .ain-observation-trend-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.ain-workbench .ain-observation-trend-grid.is-compare { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ain-workbench .ain-observation-trend-chart { margin: 0; min-width: 0; }
+.ain-workbench .ain-observation-trends .ain-slot-heading { padding: 4px 7px; }
+.ain-workbench .ain-observation .ain-observation-trends .ain-slot-heading h2 { font-size: 11px; }
+.ain-workbench .ain-observation-trends .ain-slot-heading p { display: none; }
+.ain-workbench .ain-observation-trends .ain-echart { height: 128px !important; }
+/* 下排保持辅助图高度，多指标仍使用独立纵轴。 */
+.ain-workbench .ain-observation-trend-grid.is-compare .ain-echart { height: 116px !important; }
+/* 三项用户对比指标并排展示，金色表示当前选中 UE。 */
+.ain-workbench .ain-ue-comparison { grid-area: comparison; min-width: 0; padding: 8px; border: 1px solid #d1e3f8; border-radius: 8px; background: #fff; }
+.ain-workbench .ain-ue-comparison-heading h2 { margin: 0; font-size: 13px; }
+.ain-workbench .ain-ue-comparison-heading > p { margin-top: 3px; color: #6a8099; font-size: 10px; }
+.ain-workbench .ain-ue-comparison-legend { display: flex; flex-wrap: wrap; gap: 12px; color: #6a8099; font-size: 10px; margin: 5px 0 7px; }
+.ain-workbench .ain-ue-comparison-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.ain-workbench .ain-ue-comparison-legend i { display: inline-block; width: 8px; height: 8px; background: #36b7f3; border-radius: 2px; }
+.ain-workbench .ain-ue-comparison-legend i.is-selected { background: #ffbb4a; }
+.ain-workbench .ain-ue-comparison-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.ain-workbench .ain-ue-comparison-chart { margin: 0; min-width: 0; }
+.ain-workbench .ain-ue-comparison-chart .ain-slot-heading { padding: 4px 5px; }
+.ain-workbench .ain-observation .ain-ue-comparison-chart .ain-slot-heading h2 { font-size: 11px; }
+.ain-workbench .ain-ue-comparison-chart .ain-slot-heading p { display: none; }
+.ain-workbench .ain-ue-comparison-chart .ain-echart { height: 116px !important; }
+.ain-workbench .ain-ue-comparison-buttons { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 4px; margin-top: 5px; padding-bottom: 2px; }
+.ain-workbench .ain-ue-comparison-buttons button { flex-shrink: 0; border: 1px solid #d1e3f8; border-radius: 4px; background: #f6faff; color: #507499; padding: 3px 7px; font-size: 10px; }
+.ain-workbench .ain-ue-comparison-buttons button[aria-pressed='true'] { color: #8c5c13; background: #fff3d5; border-color: #e9bc62; }
+@media (min-width: 901px) and (max-width: 1190px) {
+  .ain-workbench .ain-observation .ain-ue-comparison-chart .ain-slot-heading h2 { font-size: 10px; }
+}
+@media (max-width: 900px) {
+  .ain-workbench .ain-observation-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "space" "overview" "trend" "comparison"; }
+  .ain-workbench .ain-observation-panel { max-height: none; }
+  .ain-workbench .ain-observation-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ain-workbench .ain-observation-map .ain-spatial-svg { height: 280px; max-height: 280px; }
+}
+@media (max-width: 600px) {
+  .ain-workbench .ain-observation-object-controls p { width: 100%; margin-left: 0; }
+  .ain-workbench .ain-observation-map-controls .ain-observation-tabs button { padding: 5px 7px; }
+  .ain-workbench .ain-observation-map .ain-spatial-svg { height: 230px; max-height: 230px; }
+  .ain-workbench .ain-observation-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ain-workbench .ain-observation-trend-grid.is-compare { grid-template-columns: minmax(0, 1fr); }
+  .ain-workbench .ain-ue-comparison-charts { grid-template-columns: repeat(3, minmax(150px, 1fr)); overflow-x: auto; }
+}
+/* 左列62%、右列38%，主图保持重点，右侧对比图也有足够宽度。 */
+.ain-workbench .ain-observation-map .ain-slot-heading { padding: 6px 9px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.ain-workbench .ain-observation .ain-observation-map .ain-slot-heading h2 { font-size: 14px; }
+.ain-workbench .ain-observation-map .ain-slot-heading p { margin: 0; font-size: 10px; }
+/* 同比例画面占满宽度，高度由比例确定，不再用固定高度制造两侧暗色留白。 */
+.ain-app.ain-shell .ain-workbench .ain-observation-map .ain-spatial-svg {
+  display: block; width: 100%; height: auto; min-height: 0; max-height: none; aspect-ratio: 640 / 300;
+}
+.ain-workbench .ain-observation-map .ain-spatial-stage { margin: 0 5px; }
+.ain-workbench .ain-observation-map-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 3px 8px; padding: 4px 7px; }
+.ain-workbench .ain-observation-map-options { padding: 0; gap: 4px 7px; }
+.ain-workbench .ain-observation-map .ain-observation-tabs { padding: 2px; }
+.ain-workbench .ain-observation-map .ain-observation-tabs button { padding: 4px 8px; min-height: 26px; font-size: 11px; }
+.ain-workbench .ain-observation-map .ain-spatial-footer { padding: 4px 8px; font-size: 10px; }
+.ain-workbench .ain-observation-map .ain-spatial-key { gap: 3px 9px; margin-bottom: 3px; }
+.ain-workbench .ain-map-footer-line { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 3px 8px; }
+.ain-workbench .ain-map-explanation { color: #607f9e; font-size: 10px; }
+.ain-workbench .ain-map-explanation > summary { cursor: pointer; color: #3278b0; }
+.ain-workbench .ain-map-explanation[open] { flex-basis: 100%; }
+.ain-workbench .ain-map-explanation p { margin-top: 3px; line-height: 1.5; }
+.ain-workbench .ain-observation-panel { padding: 8px; max-height: none; overflow: auto; align-self: stretch; min-height: 0; contain: size; overscroll-behavior: contain; }
+.ain-workbench .ain-observation-panel > * { flex-shrink: 0; }
+.ain-workbench .ain-ue-comparison { align-self: stretch; min-height: 0; overflow: auto; contain: size; overscroll-behavior: contain; }
+.ain-workbench .ain-observation-panel h2 { margin: 1px 0 5px; font-size: 14px; }
+.ain-workbench .ain-observation-panel .ain-observation-tabs { padding: 2px; }
+.ain-workbench .ain-observation-panel .ain-observation-tabs button { padding: 4px 8px; min-height: 26px; font-size: 11px; }
+.ain-workbench .ain-observation-panel .ain-observation-note { margin-top: 4px; font-size: 10px; }
+.ain-workbench .ain-observation-kpis { flex: 0 0 auto; gap: 5px; margin-top: 6px; }
+.ain-workbench .ain-observation-kpi { padding: 6px 7px; }
+.ain-workbench .ain-observation-kpi strong { font-size: 20px; line-height: 1.4; }
+.ain-workbench .ain-observation-context { margin-top: 6px; font-size: 11px; line-height: 1.5; }
+.ain-workbench .ain-observation-related { gap: 4px; margin: 4px 0; max-height: 88px; overflow-y: auto; }
+.ain-workbench .ain-observation-related .ain-button { padding: 3px 6px; font-size: 10px; }
+.ain-workbench .ain-observation-details { margin-top: 6px; padding-top: 6px; font-size: 11px; }
+.ain-workbench .ain-observation-detail-body { margin-top: 5px; }
+.ain-workbench .ain-observation-detail-body:focus-visible { outline: 2px solid #1685ff; outline-offset: 1px; }
+.ain-workbench .ain-observation-detail-body .ain-observation-table-wrap { max-height: none; overflow: visible; }
+.ain-workbench .ain-observation-connection-detail { margin-top: 7px; padding: 7px; }
+/* 小屏改为单列，每块独占一行，避免尺寸包含令卡片失去自然高度。 */
+@media (max-width: 900px) {
+  .ain-workbench .ain-observation-panel { contain: none; height: 420px; min-height: 420px; max-height: 420px; }
+  .ain-workbench .ain-ue-comparison { contain: none; }
+}

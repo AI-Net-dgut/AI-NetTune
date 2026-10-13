@@ -1,3 +1,4 @@
+import type { TreatmentPlan } from "./plan";
 export interface QueryScope { scenario: string; start: string; end: string }
 export const METRIC_META = {
   rsrpDbm: { label: "RSRP", unit: "dBm" },
@@ -21,8 +22,23 @@ export interface NetworkLink {
   primary?: boolean;
 }
 export interface HeatCell { x: number; y: number; value: number; count: number }
+export interface SpatialPoint {
+  x: number; y: number; value: number; variance: number | null;
+}
+export interface SpatialMapData {
+  scope: QueryScope;
+  metric: "rsrp";
+  method: "kriging" | "grid_mean";
+  gridCount: number;
+  samplePoints: number;
+  points: SpatialPoint[];
+  cellSize: { x: number; y: number };
+  varianceNotice: string;
+}
 export interface DashboardData {
   scope: QueryScope; generatedAt: string; metrics: MetricRecord[];
+  /** 回放采样热力图使用最新帧；旧工作台未设置时按历史窗口解释。 */
+  sampledFrameTime?: string | null;
   area: { xMin: number; yMin: number; xMax: number; yMax: number };
   nodes: NetworkNode[]; links: NetworkLink[];
   gridSize: number; cells: HeatCell[]; apMeans: [number, number, number][];
@@ -46,6 +62,7 @@ export interface Diagnosis {
 }
 export interface ChatResult {
   reply: string; intent: string; scope: QueryScope; diagnosis: Diagnosis | null;
+  plans?: TreatmentPlan[];
   chart: { type: string; option: Record<string, unknown> } | null;
 }
 export type ForecastMetric = "rsrp" | "sinr" | "throughput";

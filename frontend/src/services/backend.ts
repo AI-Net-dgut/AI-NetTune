@@ -1,3 +1,4 @@
+import { parsePlans } from "./planContract";
 import type {
   QueryScope,
   MetricRecord,
@@ -9,11 +10,12 @@ import type {
   NetworkNode,
   ForecastResult,
   ForecastMetric,
+  SpatialMapData,
 } from "../types/backend";
+import { parseSpatialMap } from "./spatialMap";
 
 type Obj = Record<string, unknown>;
 type Fetcher = typeof fetch;
-const DAY = 86400_000;
 const MAX_ROWS = 1000;
 
 export const DATASET_BOUNDS = {
@@ -79,7 +81,7 @@ export function scopeLabel(scope: QueryScope) {
 }
 function validateScope(scope: QueryScope) {
   const start = toEpoch(scope.start), end = toEpoch(scope.end);
-  if (!scope.scenario.trim() || end < start || end - start >= 3 * DAY) throw new Error("请选择场景，结束时间不早于开始时间，范围最多三天");
+  if (!scope.scenario.trim() || end < start) throw new Error("请选择场景，结束时间不早于开始时间");
   return { start, end };
 }
 async function request(path: string, signal?: AbortSignal, body?: unknown, fetcher: Fetcher = fetch): Promise<Obj> {
@@ -96,16 +98,16 @@ async function request(path: string, signal?: AbortSignal, body?: unknown, fetch
     });
     if (!res.ok) throw new Error(`后端请求失败（HTTP ${res.status}）`);
     let json: unknown;
-    try { json = await res.json(); } catch { throw new Error("接口未返回 JSON，请检查 Vite 代理和后端端口"); }
+    try { json = await res.json(); } catch (cause) { throw new Error("接口未返回 JSON，请检查 Vite 代理和后端端口", { cause }); }
     const envelope = obj(json);
     if (envelope.code !== 0) throw new Error(str(envelope.message) || "后端业务错误");
     return obj(envelope.data);
   } catch (error) {
     if (controller.signal.aborted) {
       if (signal?.aborted) throw new DOMException("请求已取消", "AbortError");
-      throw new Error("请求超时，请检查后端及模型调用状态");
+      throw new Error("请求超时，请检查后端及模型调用状态", { cause: error });
     }
-    if (error instanceof TypeError) throw new Error("无法连接后端，请保持 8000 端口服务运行");
+    if (error instanceof TypeError) throw new Error("无法连接后端，请保持 8000 端口服务运行", { cause: error });
     throw error;
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
@@ -156,11 +158,8 @@ export async function loadDashboard(scope: QueryScope, signal?: AbortSignal, fet
   if (!metrics.length) return null;
   const latest = metrics.at(-1)!;
   const params = new URLSearchParams({ scenario: scope.scenario, start_time: scope.start, end_time: scope.end, timestamp: latest.backendTime });
-  const heatParams = new URLSearchParams({ scenario: scope.scenario, start_time: scope.start, end_time: scope.end, metric: "rsrp" });
-  const [topology, heat] = await Promise.all([
-    request(`/network/topology/basic?${params}`, signal, undefined, fetcher),
-    request(`/data/heatmap?${heatParams}`, signal, undefined, fetcher),
-  ]);
+  // 空间估计由 fetchSpatialMap 独立加载，避免阻塞基础数据和拓扑。
+  const topology = await request(`/network/topology/basic?${params}`, signal, undefined, fetcher);
   if (topology.timestamp !== latest.backendTime || !Array.isArray(topology.nodes) || !Array.isArray(topology.links)) throw new Error("拓扑时刻或返回结构与当前采样不一致");
   
     // 1. 获取当前查询窗口内每个 UE 的最新位置
@@ -202,13 +201,11 @@ export async function loadDashboard(scope: QueryScope, signal?: AbortSignal, fet
 
   const links = topology.links.map(v => {
     const l = obj(v), source = requiredString(l.source, "link.source"), target = requiredString(l.target, "link.target");
-    return { id: `${source}->${target}`, source, target, rsrp: numeric(l.rsrp), sinr: numeric(l.sinr), throughput: numeric(l.throughput) };
+    return { id: `${source}->${target}`, source, target, rsrp: numeric(l.rsrp), sinr: numeric(l.sinr), throughput: numeric(l.throughput),
+      primary: typeof l.primary === "boolean" ? l.primary : undefined };
   });
-  if (!Array.isArray(heat.values)) throw new Error("热力接口缺少 values 数组");
-  const apMeans = heat.values.map(v => {
-    if (!Array.isArray(v) || v.length < 3 || !Number.isFinite(numeric(v[2]))) throw new Error("热力点位无效");
-    return [coordinate(v[0]), coordinate(v[1]), numeric(v[2])] as [number, number, number];
-  });
+  // 保留旧类型字段以兼容已有调用；主地图使用独立的空间结果。
+  const apMeans: [number, number, number][] = [];
   const gridSize = 20;
   const allX = metrics.map(r => r.x).concat(nodes.map(n => n.x));
   const allY = metrics.map(r => r.y).concat(nodes.map(n => n.y));
@@ -221,6 +218,12 @@ export async function loadDashboard(scope: QueryScope, signal?: AbortSignal, fet
       yMax: Math.ceil(Math.max(...allY) / gridSize) * gridSize,
     }, gridSize, cells: aggregateCells(metrics, gridSize), apMeans,
   };
+}
+export async function fetchSpatialMap(scope: QueryScope, signal?: AbortSignal, fetcher: Fetcher = fetch): Promise<SpatialMapData> {
+  validateScope(scope);
+  const params = new URLSearchParams({ scenario: scope.scenario, start_time: scope.start, end_time: scope.end, metric: "rsrp" });
+  const data = await request(`/data/heatmap?${params}`, signal, undefined, fetcher);
+  return parseSpatialMap(data, scope);
 }
 function candidate(value: unknown, i: number): Candidate {
   const c = obj(value);
@@ -249,14 +252,14 @@ export async function analyzeNetwork(scope: QueryScope, signal?: AbortSignal): P
   const data = await request("/analyze/anomaly", signal, { scenario: scope.scenario, window_start: scope.start, window_end: scope.end, metrics: ["rsrp", "sinr", "throughput", "prb_usage", "packet_loss"] });
   return parseDiagnosis(data, scope);
 }
-export async function chatNetwork(message: string, scenario: string, window?: QueryScope, signal?: AbortSignal): Promise<ChatResult> {
+export async function chatNetwork(message: string, scenario: string, window?: QueryScope, signal?: AbortSignal, currentTime?: string): Promise<ChatResult> {
   const data = await request("/agent/chat", signal, {
     message, scenario, session_id: "frontend-p0",
     // 第4周：把当前展示窗口传给后端工具，保证"对话口径=页面口径"
-    window_start: window?.start, window_end: window?.end,
+    window_start: window?.start, window_end: window?.end, current_time: currentTime,
   });
   const ref = data.query_ref ? obj(data.query_ref) : {};
-  // 工具返回的实际窗口（后端透传），未提供时用传入窗口或默认三天
+  // 工具返回的实际窗口（后端透传）；工作台始终显式传入窗口，避免后端末尾默认范围
   const scope = {
     scenario: str(ref.scenario) || scenario,  
     start: str(ref.start_time) || window?.start || DEFAULT_SCOPE.start,
@@ -266,6 +269,7 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
   const intent = str(data.intent), rawChart = data.chart ? obj(data.chart) : null;
   return {
     reply: requiredString(data.reply, "reply"), intent, scope,
+    plans: parsePlans(data.plans, scope),
     diagnosis: intent === "fault_diagnosis" && data.detail ? parseDiagnosis(data.detail, scope) : null,
     chart: rawChart?.option ? { type: str(rawChart.type), option: obj(rawChart.option) } : null,
   };
