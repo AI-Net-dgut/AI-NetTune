@@ -9,9 +9,10 @@ from pydantic import BaseModel
 import datetime
 import csv as _csv
 import statistics
+import re
 from pathlib import Path
 import llm_agent
-from llm_agent import get_intent, rule_intent
+from llm_agent import get_intent, rule_intent, extract_time_range
 from forecast_model import build_series, DEFAULT_METRICS
 from spatial_model import build_spatial
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
@@ -455,6 +456,8 @@ class ChatRequest(BaseModel):
     # 第4周：前端可把当前展示窗口传给工具，保证"对话口径=页面口径"；不传则用默认三天
     window_start: str | None = None
     window_end: str | None = None
+    # 回放模式：前端播放器携带当前模拟时刻，作为自然语言时间的日期基准 + 防未来上限
+    current_time: str | None = None
 
 VALID_SCENARIOS = ("校园", "商场", "体育馆")
 
@@ -471,6 +474,69 @@ def _default_window(scenario: str):
     end = max(r["timestamp"] for r in rows)
     start = (datetime.fromisoformat(end) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
     return start, end
+
+
+def _resolve_time(expr: str, base_date: str | None, relative_base: str | None) -> str | None:
+    """把时间表达式解析为 'YYYY-MM-DD HH:MM:SS'。
+    expr 形态：'12:34'（时分，需 base_date 拼日期）、'01-02 09:30'（月-日 时分）、
+    '-1h'/'-30m'（相对，以 relative_base 为基准回推）、'now'（= relative_base）。"""
+    if not expr:
+        return None
+    if expr == "now":
+        return relative_base
+    if expr.startswith("-"):
+        if not relative_base:
+            return None
+        try:
+            base = datetime.fromisoformat(relative_base)
+            delta = expr[1:]
+            if delta.endswith("h"):
+                return (base - timedelta(hours=float(delta[:-1]))).strftime("%Y-%m-%d %H:%M:%S")
+            if delta.endswith("m"):
+                return (base - timedelta(minutes=float(delta[:-1]))).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    m = re.match(r"^(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{2})$", expr)   # '01-02 09:30'
+    if m:
+        year = (base_date or "2026")[:4]
+        return f"{year}-{int(m.group(1)):02d}-{int(m.group(2)):02d} {int(m.group(3)):02d}:{int(m.group(4)):02d}:00"
+    m = re.match(r"^(\d{1,2}):(\d{2})$", expr)                         # '12:34'
+    if m:
+        if not base_date:
+            return None
+        return f"{base_date} {int(m.group(1)):02d}:{int(m.group(2)):02d}:00"
+    return None
+
+
+def parse_time_range(tr, current_time: str | None = None):
+    """把 time_range（LLM 或规则提取的表达）解析为查询窗口 (start, end)。
+    回放红线：解析出的 end 超过 current_time（当前模拟时刻）→ 裁剪；start 超过 → 拒绝（None）。
+    解析失败返回 None，上层回退默认窗口，保证演示不被打断。"""
+    try:
+        if isinstance(tr, str):
+            extracted = extract_time_range(tr)
+            if not extracted:
+                return None
+            tr = extracted
+        start_expr, end_expr = tr.get("start"), tr.get("end")
+        if not start_expr or not end_expr:
+            return None
+        base_date = current_time[:10] if current_time else None
+        start = _resolve_time(start_expr, base_date, current_time)
+        end = _resolve_time(end_expr, base_date, current_time)
+        if not start or not end:
+            return None
+        if tr.get("single"):   # 单点"12:34" → 该分钟窗口
+            end = (datetime.fromisoformat(start)
+                   + timedelta(seconds=59)).strftime("%Y-%m-%d %H:%M:%S")
+        if current_time:
+            if end > current_time:
+                end = current_time          # 防未来：裁剪到当前模拟时刻
+            if start > current_time:
+                return None                 # 整个窗口在未来 → 拒绝
+        return start, end
+    except Exception:
+        return None
 
 def resolve_scenario(params_scenario, default_scenario):
     """场景白名单校验：LLM 可能把"A区"之类当成场景，无效则回退请求默认场景"""
@@ -673,7 +739,16 @@ def agent_chat(req: ChatRequest):
     # 4. 执行工具：窗口跟随前端（未传则用动态最近 24h，贴近当前，回放漏传不穿帮）
     scenario = resolve_scenario(params.get("scenario"), req.scenario)
     if not req.window_start or not req.window_end:
-        req.window_start, req.window_end = _default_window(scenario)
+        # 4.1 自然语言时间：用户话里带了时间（如"分析12:34到12:50"）→ 解析为查询窗口
+        tr = params.get("time_range")
+        if not tr:
+            tr = extract_time_range(req.message)   # 规则兜底：LLM 没提但话里有时间
+        parsed = parse_time_range(tr, req.current_time) if tr else None
+        if parsed:
+            req.window_start, req.window_end = parsed
+        # 4.2 仍缺窗口 → 动态最近 24h
+        if not req.window_start or not req.window_end:
+            req.window_start, req.window_end = _default_window(scenario)
     handler = TOOLS.get(intent, TOOLS["query_kpi"])
     data = handler(scenario, req.window_start, req.window_end)
     return {"code": 0, "message": "success", "data": data}

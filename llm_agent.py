@@ -32,14 +32,14 @@ ANOMALY_PATTERNS = [
 # ===== 结构化 JSON Prompt（cell-free build_unified_prompt 借鉴：强制固定 JSON 输出，一次调用完成分类+抽参）=====
 SYSTEM_PROMPT = """你是无线网络监测平台的意图解析器。用户输入一句关于网络监测的自然语言，请判断意图并提取参数，只输出一个 JSON，不要输出任何其他文字、注释或解释：
 {"action": "query_kpi | fault_diagnosis | get_heatmap | get_topology | chat", "scenario": "校园|商场|体育馆", "params": {...}, "confidence": 0-1}
-- query_kpi：查KPI数据。params 含 metric(rsrp/sinr/throughput)、time_range(如"最近1小时")
+- query_kpi：查KPI数据。params 含 metric(rsrp/sinr/throughput)、time_range(如"最近1小时"、"12:34到12:50")
 - fault_diagnosis：故障研判。用户询问网络体验/质量/好坏/是否正常/分析原因/拥塞/信号差等问题时，优先选本意图
 - get_heatmap：热力图。params 含 metric(默认rsrp)
 - get_topology：网络拓扑
 - chat：闲聊/无法判断。params 含 reply(你的简短回答)
 规则：
 1. scenario 必须从用户输入提取，没提到就用空字符串""
-2. 不要编造时间，用户没说时间就不写
+2. 用户提到具体时间或时间段（如"12:34到12:50"、"最近1小时"、"昨天14点"、"01-02 09:30到11:30"）时，必须提取到 params.time_range；用户没说时间就不写，不要编造
 3. 输出必须是合法 JSON，不要带 Markdown 代码块标记"""
 
 
@@ -128,6 +128,50 @@ def parse_unified_response(text: str) -> dict | None:
     return None
 
 
+def extract_time_range(message: str) -> dict | None:
+    """纯规则时间提取（不依赖 LLM，LLM 挂了/没提取时兜底）。
+    返回 {"start": 表达式, "end": 表达式}；相对时间带 relative=True；单点带 single=True。
+    表达式交给 main.parse_time_range 解析为具体时间戳（含防未来校验）。"""
+    if not message:
+        return None
+    # ① 带日期区间："01-02 09:30 到 11:30" / "1月2日09:30分-11:30分"
+    m = re.search(
+        r"(\d{1,2})[-/月](\d{1,2})(?:日)?\s*(\d{1,2}):(\d{2})分?\s*(?:到|至|~|—|－|-)\s*(\d{1,2}):(\d{2})分?",
+        message,
+    )
+    if m:
+        return {
+            "start": f"{m.group(1)}-{m.group(2)} {m.group(3)}:{m.group(4)}",
+            "end": f"{m.group(1)}-{m.group(2)} {m.group(5)}:{m.group(6)}",
+        }
+    # ② 纯时分区间："12:34到12:50" / "12:34分到12:50分" / "12:34-12:50"
+    m = re.search(r"(\d{1,2}):(\d{2})分?\s*(?:到|至|~|—|－|-)\s*(\d{1,2}):(\d{2})分?", message)
+    if m:
+        return {"start": f"{m.group(1)}:{m.group(2)}", "end": f"{m.group(3)}:{m.group(4)}"}
+    # ③ 钟点区间："14点到15点"
+    m = re.search(r"(\d{1,2})点(?:钟)?\s*(?:到|至|~|-)\s*(\d{1,2})点(?:钟)?", message)
+    if m:
+        return {"start": f"{m.group(1)}:00", "end": f"{m.group(2)}:59"}
+    # ④ 相对时间："最近1小时" / "过去30分钟" / "最近半小时"
+    m = re.search(r"(?:最近|过去|前)?\s*(\d+(?:\.\d+)?)\s*(小时|分钟|半小时|h|min)", message)
+    if m:
+        unit = m.group(2)
+        if unit == "半小时":
+            return {"start": "-0.5h", "end": "now", "relative": True}
+        n = float(m.group(1))
+        return {"start": f"-{n}h" if unit in ("小时", "h") else f"-{n}m",
+                "end": "now", "relative": True}
+    m = re.search(r"(?:最近|过去)\s*(半小时)", message)
+    if m:
+        return {"start": "-0.5h", "end": "now", "relative": True}
+    # ⑤ 单点："12:34"（取该分钟窗口）
+    m = re.search(r"(\d{1,2}):(\d{2})", message)
+    if m:
+        return {"start": f"{m.group(1)}:{m.group(2)}",
+                "end": f"{m.group(1)}:{m.group(2)}", "single": True}
+    return None
+
+
 def rule_intent(message: str) -> dict:
     """关键词规则版（fallback：LLM 挂了/超时/输出乱时用，保住核心链路可用）
     第5周升级：黑白名单分层 —— 先排除"为什么/解释"类提问，再按优先级匹配工具意图，
@@ -137,6 +181,11 @@ def rule_intent(message: str) -> dict:
     # ① 提取场景（与 CSV 场景一致），用户没提场景则为空 → 上层回退默认
     scenario = next((s for s in ("校园", "商场", "体育馆") if s in message), None)
     params = {"scenario": scenario} if scenario else {}
+
+    # ①b 提取时间（用户说"12:34到12:50"等 → 交给上层解析成查询窗口）
+    tr = extract_time_range(message)
+    if tr:
+        params["time_range"] = tr
 
     # ② 黑名单：问原因/求解释 → 不触发工具白名单（hit=False，留给 LLM 或 KPI 兜底）
     if any(k in message for k in BLACKLIST_PATTERNS):
