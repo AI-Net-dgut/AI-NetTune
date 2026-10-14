@@ -762,42 +762,86 @@ class ReportRequest(BaseModel):
     format: str = "md"
     include_chart: bool = True
 
+
+# 报告导出格式白名单（P2：仅 md / html，其余一律 40002）
+REPORT_FORMATS = ("md", "html")
+# 空数据集时报告内的标注文案（P2：保留报告ID与查询参数，移除空的KPI统计模块）
+REPORT_EMPTY_TIP = "当前查询条件下无匹配数据"
+
+
+def _report_segments(req: ReportRequest, report_id: str, rows: list, fmt: str):
+    """逐段产出报告内容（生成器）。
+
+    P2 大文件稳定性：分段拼接 + 调用方流式写入，报告内容不会在内存里先拼成完整字符串，
+    长周期大批量数据下也不会因单次写入过大而出现内容截断。
+    P2 空数据场景：rows 为空时不做任何 KPI 计算、不输出空的统计模块，
+    仅保留报告ID与查询参数信息，并在报告中明确标注无匹配数据。
+    """
+    total = len(rows)
+
+    if fmt == "html":
+        from html import escape as _esc
+
+        yield "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n"
+        yield f"<title>网络分析报告 {_esc(report_id)}</title>\n</head>\n<body>\n"
+        yield "<h1>网络分析报告</h1>\n<ul>\n"
+        yield f"<li>报告ID：{_esc(report_id)}</li>\n"
+        yield f"<li>场景：{_esc(req.scenario)}</li>\n"
+        yield f"<li>时间范围：{_esc(req.start_time)} 至 {_esc(req.end_time)}</li>\n"
+        yield "</ul>\n<h2>数据概览</h2>\n"
+        if not total:
+            yield f"<p>{REPORT_EMPTY_TIP}</p>\n"
+        else:
+            yield "<ul>\n"
+            yield f"<li>总采样条数：{total}</li>\n"
+            yield f"<li>平均RSRP：{avg(rows, 'rsrp'):.1f} dBm</li>\n"
+            yield f"<li>平均SINR：{avg(rows, 'sinr'):.1f} dB</li>\n"
+            yield f"<li>平均吞吐量：{avg(rows, 'throughput'):.1f} Mbps</li>\n"
+            yield "</ul>\n"
+        yield "</body>\n</html>\n"
+        return
+
+    yield "# 网络分析报告\n"
+    yield f"- 报告ID：{report_id}\n"
+    yield f"- 场景：{req.scenario}\n"
+    yield f"- 时间范围：{req.start_time} 至 {req.end_time}\n"
+    yield "\n## 数据概览\n"
+    if not total:
+        yield f"{REPORT_EMPTY_TIP}\n"
+        return
+    yield f"- 总采样条数：{total}\n"
+    yield f"- 平均RSRP：{avg(rows, 'rsrp'):.1f} dBm\n"
+    yield f"- 平均SINR：{avg(rows, 'sinr'):.1f} dB\n"
+    yield f"- 平均吞吐量：{avg(rows, 'throughput'):.1f} Mbps\n"
+
+
 @app.post("/api/export/report")
 def export_report(req: ReportRequest):
-    # 第一周：只生成报告编号与下载路径；第3周接入真实报告生成
-        # ===== 新增：参数合法性校验 =====
+    # ===== 1. 参数合法性校验（仅作用于本接口）=====
     if not req.scenario or not req.scenario.strip():
         return error_response(ERROR_CODE["PARAM_MISSING"], "场景参数不能为空")
     if not req.start_time or not req.end_time:
         return error_response(ERROR_CODE["PARAM_MISSING"], "时间参数不能为空")
-    # ==============================
+
+    # ===== 2. 导出格式白名单校验（P2 异常格式参数处理）=====
+    # 仅允许 md / html；不传 format 时沿用默认值 md；非法格式直接返回 40002 且不生成任何文件
+    fmt = (req.format or "").strip().lower()
+    if fmt not in REPORT_FORMATS:
+        return error_response(ERROR_CODE["PARAM_INVALID"], "不支持的导出格式，仅支持md、html")
+
     report_id = "RPT_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-    ext = "md" if req.format in ("md", "markdown") else "html"
-    filename = f"{report_id}.{ext}"
+    filename = f"{report_id}.{fmt}"
     file_path = f"reports/{filename}"
 
-    # ===== 新增：生成真实报告内容并写入文件 =====
-    # 1. 拉取对应范围的数据
+    # ===== 3. 取数：空数据集不抛计算异常，交由分段生成器输出“无匹配数据”报告 =====
     rows = filter_rows(req.scenario, req.start_time, req.end_time)
 
-    # 2. 组装md报告内容
-    content = f"""# 网络分析报告
-    - 报告ID：{report_id}
-    - 场景：{req.scenario}
-    - 时间范围：{req.start_time} 至 {req.end_time}
+    # ===== 4. 分段拼接 + 流式写入（P2 大文件稳定性）=====
+    with open(file_path, "w", encoding="utf-8", newline="\n") as f:
+        for segment in _report_segments(req, report_id, rows, fmt):
+            f.write(segment)
 
-    ## 数据概览
-    - 总采样条数：{len(rows)}
-    - 平均RSRP：{avg(rows, 'rsrp'):.1f} dBm
-    - 平均SINR：{avg(rows, 'sinr'):.1f} dB
-    - 平均吞吐量：{avg(rows, 'throughput'):.1f} Mbps
-    """
-
-    # 3. 写入文件
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    # ============================================
-
+    # ===== 5. 空数据同样返回 200 与标准下载路径，不返回错误码 =====
     return success_response({
         "report_id": report_id,
         "file_url": f"/download/reports/{filename}"
