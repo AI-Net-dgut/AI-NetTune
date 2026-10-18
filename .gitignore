@@ -38,3 +38,5 @@ __pycache__/
 
 # 数据文件（体积大，不传仓库）
 data/
+
+.pnpm-store/
