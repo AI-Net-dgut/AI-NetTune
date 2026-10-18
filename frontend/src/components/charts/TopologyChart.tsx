@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { DashboardData, NetworkLink, NetworkNode } from "../../types/backend";
 import { displayMetric } from "../../services/metrics";
-import { LINK_METRICS, linkMetricColor, linkMetricRange } from "../../services/topology";
+import { LINK_METRICS, linkMetricColor, linkMetricRange, topologyNodes } from "../../services/topology";
 import type { LinkMetric } from "../../services/topology";
 import "./TopologyInteraction.css";
 import SpatialChart, {
@@ -32,7 +32,7 @@ export default function TopologyChart({
   const [metric, setMetric] = useState<LinkMetric>("rsrp");
   const meta = LINK_METRICS[metric];
   const projection = createProjection(data.area);
-  const nodes = data.nodes.filter((node) => projection?.contains(node));
+  const nodes = topologyNodes(data, "window").filter((node) => projection?.contains(node));
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const links = data.links.filter(
     (link) =>
@@ -80,7 +80,7 @@ export default function TopologyChart({
               ? `关注 ${focusedApId}：高亮其服务连接。`
               : `分析 ${ueId || "未选择对象"}：高亮其服务连接。`}
           </p>
-          <p>点击 AP、UE 或连线查看详情。节点位置取最新采样；连线指标为窗口内连接均值。最新采样：{data.metrics.at(-1)?.backendTime}（北京时间）。</p>
+          <p>点击 AP、UE 或连线查看详情。节点为窗口平均位置；无采样节点保留最近已知位置并以灰色虚线标记。链路指标在悬停与详情中展示。最新采样：{data.metrics.at(-1)?.backendTime}（北京时间）。</p>
           {links.length < data.links.length && (
             <p>
               {data.links.length - links.length}{" "}
@@ -110,8 +110,6 @@ export default function TopologyChart({
             const active = selectedLinkId ? link.id === selectedLinkId : focusedApId
               ? link.source === focusedApId
               : link.target === ueId;
-            const midX = (projection.x(source.x) + projection.x(target.x)) / 2;
-            const midY = (projection.y(source.y) + projection.y(target.y)) / 2;
             return (
               <g key={link.id} className={`ain-topology-link-button${active ? " is-active" : ""}`}
                 role="button" tabIndex={0} aria-label={`查看链路 ${source.id} → ${target.id}`}
@@ -132,14 +130,6 @@ export default function TopologyChart({
                   <title>{`${meta.label} ${displayMetric(link[metric])} ${meta.unit}`}</title>
                 </line>
                 <line className="ain-topology-link-hit" x1={projection.x(source.x)} y1={projection.y(source.y)} x2={projection.x(target.x)} y2={projection.y(target.y)} />
-                <text
-                  className="ain-topology-weight"
-                  x={midX}
-                  y={midY - 3}
-                  textAnchor="middle"
-                >
-                  {displayMetric(link[metric])}
-                </text>
               </g>
             );
           })}

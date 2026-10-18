@@ -1,9 +1,10 @@
+/* eslint-disable react-refresh/only-export-components -- 本文件沿用共用SVG图元与坐标工具的统一导出接口。 */
 import type { ReactNode } from "react";
 import type { DashboardData, NetworkNode } from "../../types/backend";
 import "./SpatialCharts.css";
 
 // 两张图共用横向画布；X/Y 均为原始米制坐标，各自映射到对应显示轴。
-// area 取数据实际范围（min~max），坐标系直接贴合数据分布，不留零起点空白。
+// area 由场景提供；回放使用固定部署边界，不能根据每帧 UE 或估计点位重新缩放。
 // 图框尽量撑满画布，四周只留刻度标签所需的最小空间，两张图完全同尺寸对齐。
 const SCENE_FRAME = { width: 640, height: 300, left: 56, right: 24, top: 42, bottom: 48 };
 export const SCENE_VIEWBOX = `0 0 ${SCENE_FRAME.width} ${SCENE_FRAME.height}`;
@@ -119,7 +120,7 @@ export function SceneAxes({
           </text>
         </g>
       ))}
-      <text x={p.left + p.width + 14} y={p.top + p.height + 43} textAnchor="start">
+      <text x={p.left + p.width} y={p.top + p.height + 43} textAnchor="end">
         X / m
       </text>
       <text x={p.left - 8} y={p.top - 8} textAnchor="end">
@@ -143,10 +144,10 @@ export function SceneNode({
   onSelect: (node: NetworkNode) => void;
 }) {
   const ap = node.type === "ap";
-  const color = selected ? "#ffbb4a" : ap ? "#ff5657" : "#22dfb6";
+  const color = selected ? "#ffbb4a" : node.missingSample ? "#8b9caf" : ap ? "#ff5657" : "#22dfb6";
   return (
     <g
-      className={`ain-scene-node${selected ? " is-selected" : ""}`}
+      className={`ain-scene-node${selected ? " is-selected" : ""}${node.missingSample ? " is-missing-sample" : ""}`}
       transform={`translate(${projection.x(node.x)} ${projection.y(node.y)})`}
       role="button"
       tabIndex={0}
@@ -160,7 +161,7 @@ export function SceneNode({
         }
       }}
     >
-      <title>{`${node.id} · (${node.x}, ${node.y}) m`}</title>
+      <title>{`${node.id} · (${Number(node.x.toFixed(2))}, ${Number(node.y.toFixed(2))}) m${node.positionNote ? ` · ${node.positionNote}` : ""}${node.lastSeen ? ` · 最近采样：${node.lastSeen}` : ""}`}</title>
       <circle className="ain-node-hit-area" r={23} fill="transparent" />
       {ap ? (
         <polygon
@@ -172,6 +173,7 @@ export function SceneNode({
       ) : (
         <circle r={8} fill={color} stroke="#102036" strokeWidth={2} />
       )}
+      {node.missingSample && <circle r={15} fill="none" stroke="#8b9caf" strokeWidth={1.5} strokeDasharray="3 3" />}
       {(selected || highlighted) && (
         <circle
           r={22}

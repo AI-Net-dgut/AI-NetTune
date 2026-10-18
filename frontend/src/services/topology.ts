@@ -1,6 +1,35 @@
 import { METRIC_META } from "../types/backend";
-import type { DashboardData, MetricKey, MetricRecord, NetworkLink } from "../types/backend";
+import type { DashboardData, MetricKey, MetricRecord, NetworkLink, NetworkNode } from "../types/backend";
 import { getLatestFrame, getUEHistory } from "./metrics";
+import { uniqueObservationRecords } from "./dataObservation";
+
+// 仅平滑展示位置：窗口模式为采样平均位置；最新帧模式保持实际最新位置。
+// 不改写 data.nodes/data.metrics，不把过往位置标成当前测量，也不补造连接。
+export function topologyNodes(data: DashboardData, period: "latest" | "window"): NetworkNode[] {
+  const records = uniqueObservationRecords(data.metrics);
+  const byUE = new Map<string, MetricRecord[]>();
+  for (const row of records) {
+    const rows = byUE.get(row.ueId) ?? []; rows.push(row); byUE.set(row.ueId, rows);
+  }
+  const latest = new Map(getLatestFrame(records).metrics.map(row => [row.ueId, row]));
+  return data.nodes.map(node => {
+    if (node.type === "ap") return node;
+    const rows = byUE.get(node.id) ?? [], last = rows.at(-1);
+    if (period === "window") {
+      const positions = rows.filter(row => Number.isFinite(row.x) && Number.isFinite(row.y));
+      if (positions.length) return { ...node,
+        x: positions.reduce((sum, row) => sum + row.x, 0) / positions.length,
+        y: positions.reduce((sum, row) => sum + row.y, 0) / positions.length,
+        lastSeen: last?.backendTime ?? node.lastSeen, missingSample: false,
+        positionNote: "窗口平均位置，非某一时刻实际坐标" };
+    } else if (latest.has(node.id)) {
+      const row = latest.get(node.id)!;
+      return { ...node, x: row.x, y: row.y, lastSeen: row.backendTime, missingSample: false, positionNote: "最新帧实际采样位置" };
+    }
+    return { ...node, missingSample: true,
+      positionNote: `${period === "window" ? "本窗口" : "本帧"}无采样，仅显示最近已知位置，不代表离线` };
+  });
+}
 
 export const LINK_METRICS = {
   rsrp: { label: "RSRP", unit: "dBm" },

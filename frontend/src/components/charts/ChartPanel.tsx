@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+/* eslint-disable react-refresh/only-export-components -- 共用图表组件沿用统一导出的轴样式常量。 */
+import { useEffect, useRef, type CSSProperties } from "react";
 import * as echarts from "echarts/core";
 import { BarChart, LineChart, HeatmapChart, GraphChart } from "echarts/charts";
-import { GridComponent, TooltipComponent, VisualMapComponent } from "echarts/components";
+import { GridComponent, TooltipComponent, VisualMapComponent, MarkLineComponent, MarkAreaComponent } from "echarts/components";
 import { SVGRenderer } from "echarts/renderers";
 import type { EChartsOption } from "echarts";
 import "./ChartPanel.css";
@@ -14,6 +15,8 @@ echarts.use([
   GridComponent,
   TooltipComponent,
   VisualMapComponent,
+  MarkLineComponent,
+  MarkAreaComponent,
   SVGRenderer,
 ]);
 
@@ -74,7 +77,7 @@ export default function ChartPanel({
       <div
         ref={container}
         className="ain-echart"
-        style={{ height }}
+        style={{ height, "--ain-chart-height": `${height}px` } as CSSProperties}
         role="img"
         aria-label={`${title}：${description}`}
       />

@@ -17,23 +17,22 @@ import "./QueryPanel.css";
 const EXAMPLES = [
   { label: "全网异常", question: "分析当前网络异常及原因，给出处理方案并比较仿真预计效果" },
   { label: "处理优先级", question: "分析哪个 AP 的异常最需要处理，说明原因，给出方案并比较预计效果" },
-  { label: "指定 AP", question: "分析 AP-02 的异常及原因，给出处理方案并比较调整前后预计效果" },
   { label: "弱覆盖", question: "分析弱覆盖异常的区域及原因，提出方案并比较预计覆盖效果" },
   { label: "AP 拥塞", question: "分析 AP 拥塞异常及原因，提出方案并比较预计负载变化" },
   { label: "连接分配", question: "分析用户连接分配异常及原因，提出调整方案并比较预计用户体验" },
-  { label: "方案比较", question: "分析当前网络异常及原因，比较可行方案的预计效果与代价，说明评估依据" },
   { label: "未来风险", question: "预测未来30分钟可能出现的网络风险，说明依据并给出预防方案" },
-  { label: "预防方案", question: "结合当前异常和未来风险预测，制定预防方案并比较预计效果" },
 ];
 
 export default function QueryPanel({ query, scenario, window: scopeWindow, disabled, data,
   spatial = null, spatialPending = false, spatialError = "", onSpatialRetry = () => {}, focusedApId = null,
   dataLoading = false, dataError = "", replay, onSubmitAnalysis, referenceControls, analysisNotice = "",
+  onOpenForecast, forecastDisabled = false, forecastLabel = "待接入", forecastReview,
 }: {
   query: ReturnType<typeof useNetworkQuery>; scenario: string; window?: QueryScope; disabled: boolean;
   data: DashboardData | null; spatial?: SpatialMapData | null; spatialPending?: boolean; spatialError?: string;
   onSpatialRetry?: () => void; focusedApId?: string | null;
   dataLoading?: boolean; dataError?: string; referenceControls?: ReactNode; analysisNotice?: string;
+  onOpenForecast?: () => void; forecastDisabled?: boolean; forecastLabel?: string; forecastReview?: ReactNode;
   replay?: { playing: boolean; currentTime: string; analysisTime: string | null; hasCurrentData?: boolean; viewTime?: string; mode?: "live" | "analysis" | "history"; canAnalyzeQuestionTime?: boolean; onFreeze?: () => void; onExit?: () => void };
   onSubmitAnalysis?: (message: string, preserveDiagnosis: boolean, retry: boolean) => Promise<void>;
 }) {
@@ -66,7 +65,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
       setSendNotice("当前统计窗口暂无采样，暂不能发起新分析；旧分析的证据和重试仍对应原截止时间。"); return;
     }
     if (needsFutureForecast(message)) {
-      setSendNotice(historical ? "历史查看期间不提供未来预测；可以回顾该时刻的异常原因、处理方案和预计效果。" : "未来预测接口待接入，暂不能分析未来风险；当前可以分析已到达数据的异常原因、处理方案和方案比较。");
+      setSendNotice(historical ? "历史查看期间不提供未来预测；可以回顾该时刻的异常原因、处理方案和预计效果。" : onOpenForecast ? "未来风险请点击上方“预测预警”查看，再将所选预警交给AI详细研判；自由描述未来时间的查询尚未接入。" : "未来预测接口待接入，暂不能分析未来风险；当前可以分析已到达数据的异常原因、处理方案和方案比较。");
       return;
     }
     setSendNotice(""); setEvidenceSelection(null);
@@ -82,8 +81,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
       <div className="ain-ai-heading-title"><span className="ain-ai-symbol" aria-hidden="true">AI</span>
         <div><h2 id="ain-ai-title">AI 网络助手</h2><p>提问 → 原因与证据 → 处理方案 → 仿真效果对比</p></div></div>
       <div className="ain-ai-heading-actions">
-        <button type="button" className="ain-forecast-placeholder" disabled aria-describedby="ain-forecast-pending"
-          title={historical ? "历史查看期间不提供未来预测" : "未来预测接口待接入；本次暂不实现预警浮窗"}>预测预警 <span>待接入</span></button>
+        <button type="button" className={onOpenForecast ? "ain-forecast-trigger" : "ain-forecast-placeholder"} disabled={historical || forecastDisabled || query.pending || dataLoading || !onOpenForecast}
+          onClick={onOpenForecast} title={historical ? "历史查看期间不提供未来预测" : "查看频谱态势、未来风险及相关指标；结果固定到打开时刻"}>预测预警 <span>{historical ? "历史不可用" : forecastLabel}</span></button>
         <span className="ain-ai-status" data-tone={query.error || dataError ? "error" : query.pending || dataLoading ? "info" : "neutral"}>{status}</span>
       </div>
     </header>
@@ -102,7 +101,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
     <div className="ain-query-examples" aria-label="问题示例">
       {EXAMPLES.map(item => <button className="ain-query-example" key={item.label} type="button" disabled={query.pending || (historical && needsFutureForecast(item.question))}
         onClick={() => { setSendNotice(""); setDraft(`${scenario}：${item.question}`); inputRef.current?.focus(); }}>
-        <strong>{item.label}</strong><span>{item.question}{needsFutureForecast(item.question) && <small className="ain-example-pending">{historical ? "历史不可用" : "接口待接入"}</small>}</span></button>)}
+        <strong>{item.label}</strong><span>{item.question}{needsFutureForecast(item.question) && <small className="ain-example-pending">{historical ? "历史不可用" : onOpenForecast ? "上方查看预警" : "接口待接入"}</small>}</span></button>)}
     </div>
     <form className="ain-query-form" onSubmit={event => { event.preventDefault(); send(); }}>
       <label className="ain-input-label" htmlFor="ain-question">输入你的网络问题</label>
@@ -125,6 +124,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         <div className="ain-ai-column-heading"><h3 id="ain-ai-diagnosis-title">问题研判与证据</h3>
           <span>{query.pending ? "等待本次结果" : diagnosis?.state === "anomaly" ? "发现异常" : diagnosis?.state === "normal" ? "未发现明显异常" : "助手回答"}</span></div>
         <div className="ain-ai-answer" aria-live="polite" aria-busy={query.pending}>
+          {forecastReview}
           {query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
           {query.pending && <p className="ain-ai-pending" role="status">正在查询固定分析时刻的数据…{analysis ? "下方保留此辅助查询关联的研判。" : "本次结果尚未返回，上一轮研判和方案已清空。"}</p>}
           {query.error && <div className="ain-query-error" role="alert"><p>{query.error}</p>
@@ -135,7 +135,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
             <p className="ain-ai-result-scope">返回范围：{scopeLabel(result.scope)}</p></div>}
           {analysis && <><div className="ain-ai-analysis-caption">{result === analysis ? "本次研判" : "关联研判（保留）"}{result !== analysis && diagnosisQuestion && ` · ${diagnosisQuestion}`}</div>
             <DiagnosisReply result={analysis} onEvidence={selection => setEvidenceSelection(previous => ({ ...selection, id: (previous?.id ?? 0) + 1, diagnosisId: query.diagnosisId, requestId: query.requestId }))} /></>}
-          {!analysis && !result && !query.pending && !query.error && <p className="ain-ai-empty">{dataStatus ? `${dataStatus}，加载有效数据后开始研判。` : "先选择一个问题示例，或直接描述异常。回答、证据图和处理建议会展示在这里。"}</p>}
+          {!forecastReview && !analysis && !result && !query.pending && !query.error && <p className="ain-ai-empty">{dataStatus ? `${dataStatus}，加载有效数据后开始研判。` : "先选择一个问题示例，或直接描述异常。回答、证据图和处理建议会展示在这里。"}</p>}
         </div>
         {data && (diagnosis || result?.chart) && <DiagnosisCharts key={`${query.diagnosisId}-${result?.chart ? query.requestId : "evidence"}-${currentEvidenceSelection?.id ?? 0}`}
           data={data} diagnosis={analysisMismatch ? null : diagnosis} toolResult={mismatch ? null : result}

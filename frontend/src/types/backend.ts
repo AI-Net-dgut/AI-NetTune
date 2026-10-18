@@ -15,7 +15,14 @@ export type MetricRecord = Record<MetricKey, number> & {
   ueId: string; apId: string; timestamp: string; backendTime: string;
   x: number; y: number; apX: number; apY: number; status: string;
 };
-export interface NetworkNode { id: string; type: "ap" | "ue"; x: number; y: number }
+export interface NetworkNode {
+  id: string; type: "ap" | "ue"; x: number; y: number;
+  /** 仅保留已到达的最近采样，不代表本帧/本窗口仍有采样。 */
+  lastSeen?: string;
+  /** 以下两个字段由图层按所选口径计算，不改变原始采样。 */
+  missingSample?: boolean;
+  positionNote?: string;
+}
 export interface NetworkLink {
   id: string; source: string; target: string;
   rsrp: number; sinr: number; throughput: number;

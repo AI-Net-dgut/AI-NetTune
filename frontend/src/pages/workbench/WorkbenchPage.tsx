@@ -18,6 +18,11 @@ import ReplayControls from "../../replay/ReplayControls";
 import HistoryControls from "../../replay/HistoryControls";
 import ReferenceWindowControls from "../../replay/ReferenceWindowControls";
 import type { ReplayConfig } from "../../replay/config";
+import useForecastPreview from "../../forecast/useForecastPreview";
+import ForecastDialog from "../../forecast/ForecastDialog";
+import ForecastReview from "../../forecast/ForecastReview";
+import { FORECAST_CONFIG } from "../../forecast/config";
+import type { ForecastHandoff } from "../../forecast/types";
 import "./WorkbenchPage.css";
 import "./BackendIntegration.css";
 
@@ -39,12 +44,14 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
   const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(null);
   const snapshotRef = useRef<AnalysisSnapshot | null>(null);
   const query = useNetworkQuery();
+  const forecast = useForecastPreview({ clock, config, readClock });
+  const [forecastTransfer, setForecastTransfer] = useState<{ key: string; handoff: ForecastHandoff } | null>(null);
   const resetQuery = query.reset;
   const clearedContext = useRef(contextKey);
   const requestSerial = useRef(0);
   const clearContext = useCallback((key: string) => {
     clearedContext.current = key; requestSerial.current++;
-    snapshotRef.current = null; setSnapshot(null); resetQuery();
+    snapshotRef.current = null; setSnapshot(null); resetQuery(); setForecastTransfer(null);
   }, [resetQuery]);
   const act = useCallback((action: ReplayAction) => {
     const before = replayContextKey(readClock());
@@ -120,6 +127,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     const captured = (preserveDiagnosis || retry) && previous ? previous
       : captureAnalysis(source.records, config, current, source.aps, focus.contextKey === key ? focus.id : null);
     if (!captured.data.metrics.length) { setAnalysisNotice({ key, text: "指定范围暂无监测采样，未发送分析；可以调整范围或返回当前。" }); return; }
+    setForecastTransfer(null);
     snapshotRef.current = captured; setSnapshot(captured);
     act({ type: "lock", value: true });
     const serial = ++requestSerial.current;
@@ -144,6 +152,17 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     reload(value => value + 1);
   }
 
+  function reviewForecast(handoff: ForecastHandoff) {
+    const current = readClock(), session = forecast.session;
+    if (!session || current.locked || current.viewMode === "history" || session.key !== replayContextKey(current)
+      || forecast.result !== handoff.result || handoff.result.status !== "ready") return;
+    act({ type: "forecast-analysis", startMs: toEpoch(handoff.result.history.start), endMs: toEpoch(handoff.result.baseTime) });
+    const next = readClock();
+    if (next.viewMode !== "analysis" || formatReplayTime(viewTime(next)) !== handoff.result.baseTime) return;
+    setForecastTransfer({ key: replayContextKey(next), handoff }); forecast.close();
+    if (typeof document !== "undefined") document.getElementById("ain-ai-module")?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  }
+
   return <main className="ain-workbench">
     <div className="ain-workbench-title"><div><h1>网络分析与管理</h1>
       <p>主时钟持续运行，固定查看时刻研判原因与处理方案。</p></div>
@@ -152,6 +171,9 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     <ReplayControls state={clock} act={act} loading={loading} onReload={reloadSource} config={config} />
 
     <QueryPanel analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
+      onOpenForecast={forecast.open} forecastDisabled={source.status !== "ready" || clock.locked}
+      forecastLabel={forecast.lastResult?.status === "ready" ? `${forecast.lastResult.source === "demo" ? "示例·" : "最近查看·"}${forecast.lastResult.alerts.length}项` : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测"}
+      forecastReview={forecastTransfer?.key === contextKey ? <ForecastReview key={`${forecastTransfer.key}-${forecastTransfer.handoff.result.id}`} handoff={forecastTransfer.handoff} /> : undefined}
       disabled={!data?.metrics.length || loading || Boolean(source.error)} data={data}
       spatial={visibleSpatial.data} spatialPending={visibleSpatial.loading} spatialError={visibleSpatial.error}
       onSpatialRetry={visibleSpatial.retry} focusedApId={activeSnapshot ? activeSnapshot.focusedApId : focusedApId}
@@ -164,18 +186,25 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
       <header className="ain-feature-heading ain-data-heading"><div className="ain-module-title">
         <h2 className="ain-feature-title" id="ain-data-title">数据展示</h2>
         <p>{clock.viewMode === "live" ? "跟随主时钟更新" : "与AI查看时刻同步固定"} · 选择对象观察指标、地图与连接</p></div>
-        <span className="ain-feature-context">{clock.viewMode === "history" ? "历史回顾 · 预测不可用" : clock.viewMode === "analysis" ? "分析视图已固定" : "仅展示已到达数据"}</span></header>
-      <HistoryControls state={clock} act={act} loading={loading} config={config} />
+        <span className="ain-feature-context">{clock.viewMode === "history" ? "历史回顾" : clock.viewMode === "analysis" ? "固定分析" : "跟随当前"}</span>
+        <HistoryControls state={clock} act={act} loading={loading} config={config} />
+      </header>
       {clock.viewMode === "history" && <ReferenceWindowControls key={`history-${contextKey}`} idPrefix="ain-history-reference"
         state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />}
       <section className="ain-filter-panel ain-replay-data-info" aria-label="回放数据来源与统计口径">
-        <div className="ain-data-bar"><span className="ain-source-badge">CSV 仿真历史数据</span>
-          <span>场景：{config.scenario}</span><span>查看截止时刻：{displayedTime}</span>
-          {clock.viewMode !== "live" && <span>主时钟：{currentTime} · {clock.playing ? "持续运行" : "已到末尾"}</span>}
-          {data && <><span>窗口内 {data.metrics.length} 条记录</span>
-            <span>{data.nodes.filter(node => node.type === "ap").length} AP / {data.nodes.filter(node => node.type === "ue").length} UE</span>
-            <span>最近有效采样：{data.metrics.at(-1)?.backendTime ?? "暂无"}</span></>}
-          <p className="ain-loaded-scope">趋势／窗口统计：{scopeLabel(scope)}；主图采样信号与最新帧连接使用最近有效采样。</p>
+        <div className="ain-data-bar">
+          <div className="ain-data-meta-summary">
+            <span className="ain-data-scene">{config.scenario}</span>
+            <span>查看截止：<time dateTime={displayedTime.replace(" ", "T") + "+08:00"}>{displayedTime}</time></span>
+            {data && <span className="ain-data-meta-count">{data.metrics.length} 条 · {data.nodes.filter(node => node.type === "ap").length} AP / {data.nodes.filter(node => node.type === "ue").length} UE</span>}
+          </div>
+          <details className="ain-data-meta-details"><summary>范围与采样详情</summary>
+            <dl><div><dt>数据来源</dt><dd>CSV 仿真历史数据</dd></div>
+              <div><dt>分析范围</dt><dd>{scopeLabel(scope)}</dd></div>
+              <div><dt>主时钟</dt><dd>{currentTime} · {clock.playing ? "持续运行" : "已到末尾"}</dd></div>
+              <div><dt>最近有效采样</dt><dd>{data?.metrics.at(-1)?.backendTime ?? "暂无"}</dd></div></dl>
+            <p>设备数为截至查看时刻的已知设备；主图默认窗口主连接与平均位置，采样信号使用最近有效帧，可切换最新帧实际连接。时间均为北京时间。</p>
+          </details>
         </div>
         {source.notice && <p className="ain-filter-note">{source.notice}</p>}
       </section>
@@ -191,5 +220,8 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
           spatialNotice={clock.viewMode === "live" ? "实时跟随展示最新采样；固定查看时刻后加载对应窗口的空间估计。" : ""} />
       </>}
     </section>
+    {forecast.session && <ForecastDialog request={forecast.session.request} result={forecast.result} pending={forecast.pending}
+      error={forecast.error} onClose={forecast.close} onRefresh={forecast.refresh} onAnalyze={reviewForecast}
+      canAnalyze={!clock.locked && clock.viewMode !== "history" && source.status === "ready"} fixedView={clock.viewMode === "analysis"} />}
   </main>;
 }

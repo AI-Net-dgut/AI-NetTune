@@ -53,10 +53,10 @@ export default function ObservationPanel({ data, target, period, onPeriod, onSel
       {snapshot.lastSeen && ` 窗口内最后采样：${snapshot.lastSeen}。`}</p>}
     <div className="ain-observation-context">
       {target.kind === 'all' ? <>
-        <p>已加载：{data.nodes.filter(node => node.type === 'ap').length} 个 AP / {data.nodes.filter(node => node.type === 'ue').length} 个 UE</p>
+        <p>已知设备：{data.nodes.filter(node => node.type === 'ap').length} 个 AP / {data.nodes.filter(node => node.type === 'ue').length} 个 UE；当前有采样数量见上方指标。</p>
         <p>采样 RSRP 范围：{rsrp.length ? `${displayMetric(Math.min(...rsrp))}～${displayMetric(Math.max(...rsrp))} dBm` : '暂无有效数据'}</p>
       </> : <>
-        {selectedNode && <p>最新位置：({displayMetric(selectedNode.x)}, {displayMetric(selectedNode.y)}) m</p>}
+        {selectedNode && <p>最近已知位置：({displayMetric(selectedNode.x)}, {displayMetric(selectedNode.y)}) m{selectedNode.lastSeen && `；采样于 ${selectedNode.lastSeen}`}</p>}
         {target.kind === 'ap' ? <p>{period === 'latest' ? '最新帧实际服务 UE' : '窗口出现过的服务 UE'}：{snapshot.userIds.length} 个</p>
           : <p>最新帧服务 AP：<strong>{latestUE?.apId || '本帧无采样'}</strong>{period === 'window' && currentUser && `；窗口涉及 ${snapshot.apIds.length} 个 AP`}</p>}
         <p>{target.kind === 'ap' ? '窗口服务过的用户' : '窗口出现过的服务 AP'}：</p>

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import type { DashboardData, NetworkLink, SpatialMapData } from '../../types/backend';
 import type { ObservationTarget } from '../../services/dataObservation';
 import { isRelatedLink, latestObservationLinks, targetLabel } from '../../services/dataObservation';
-import { getSpatialArea } from '../../services/spatialMap';
+import { topologyNodes } from '../../services/topology';
 import { displayMetric } from '../../services/metrics';
 import SpatialChart, { createProjection, SceneAxes, SceneNode, SCENE_VIEWBOX } from '../charts/SpatialChart';
 
@@ -23,17 +23,12 @@ interface Props {
 export default function NetworkSpaceView({ data, target, spatial, pending, error, onRetry, onSelect, selectedLink, onSelectLink, spatialNotice = '' }: Props) {
   const [layer, setLayer] = useState<Layer>('sampled');
   const [connections, setConnections] = useState(true);
-  const [connectionPeriod, setConnectionPeriod] = useState<'latest' | 'window'>('latest');
+  const [connectionPeriod, setConnectionPeriod] = useState<'latest' | 'window'>('window');
   const latestLinks = useMemo(() => latestObservationLinks(data.metrics), [data.metrics]);
   const links = connectionPeriod === 'latest' ? latestLinks : data.links;
-  // 所有图层使用同一范围，切换图层不重定位节点。
-  const area = useMemo(() => {
-    const base = spatial ? getSpatialArea(spatial, data.area) : data.area;
-    const xMin = Math.min(base.xMin, data.area.xMin), yMin = Math.min(base.yMin, data.area.yMin);
-    const xMax = Math.max(base.xMax, data.area.xMax + data.gridSize);
-    const yMax = Math.max(base.yMax, data.area.yMax + data.gridSize);
-    return { xMin, yMin, xMax, yMax };
-  }, [data, spatial]);
+  // 场景固定边界；异步估计结果和 UE 移动都不再改变画布比例。
+  const area = data.area;
+  const nodes = useMemo(() => topologyNodes(data, connectionPeriod), [data, connectionPeriod]);
   const projection = createProjection(area);
   const availableVariance = spatial?.method === 'kriging' && spatial.points.some(point => point.variance !== null);
   const sampled = layer === 'sampled' || (layer === 'estimated' && (!spatial || !spatial.points.length));
@@ -52,7 +47,10 @@ export default function NetworkSpaceView({ data, target, spatial, pending, error
   const color = (value: number) => layer === 'variance'
     ? VARIANCE_COLORS[varianceMax === varianceMin ? 0 : Math.min(4, Math.floor((value - varianceMin) / (varianceMax - varianceMin) * 5))]
     : BANDS[value < -105 ? 0 : value < -95 ? 1 : value < -85 ? 2 : value < -75 ? 3 : 4].color;
-  const byId = new Map(data.nodes.map(node => [node.id, node]));
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const missingNodes = nodes.filter(node => node.missingSample).length;
+  const outsideNodes = nodes.filter(node => !projection?.contains(node)).length;
+  const outsideCells = cells.filter(cell => cell.x < area.xMin || cell.y < area.yMin || cell.x + cell.width > area.xMax || cell.y + cell.height > area.yMax).length;
   const related = new Set(links.filter(link => isRelatedLink(link, target)).flatMap(link => [link.source, link.target]));
   const description = layer === 'topology' ? 'AP / UE 位置与服务关系' : layer === 'variance' ? '空间不确定性 · dB²'
     : sampled ? data.sampledFrameTime !== undefined ? `最新帧采样网格 · ${data.sampledFrameTime ?? '暂无采样'} · RSRP`
@@ -62,7 +60,8 @@ export default function NetworkSpaceView({ data, target, spatial, pending, error
     {layer === 'variance' && availableVariance && <p>方差范围：{varianceMin.toFixed(2)}～{varianceMax.toFixed(2)} dB²（蓝 → 红）；越大表示估计越不确定，空白表示未返回方差。</p>}
     <div className="ain-map-footer-line"><span>▲ AP · ● UE · 金色圈为选中对象</span>
       <details className="ain-map-explanation"><summary>图表说明</summary>
-        <p>亮线为关联连接。节点位置取各对象窗口内最新采样。</p><p>最新帧连接为同一帧服务关系；窗口主服务关系为窗口汇总，非同一时刻拓扑。</p>
+        <p>亮线为关联连接。{connectionPeriod === 'window' ? '节点采用窗口平均位置，连线为连接记录占比最高的主服务 AP；这是窗口汇总，非某一时刻拓扑。' : '节点采用最新帧实际采样位置，连线为同一帧服务关系。'}</p>
+        <p>灰色虚线圈节点表示缺少对应采样，仅保留最近已知位置，不代表设备离线。坐标轴固定为场景范围。</p>
         <p>{layer === 'topology' ? '背景只展示网络结构。' : layer === 'variance' ? '方差不是信号强度。'
           : sampled || spatial?.method === 'grid_mean' ? '空白网格表示没有采样，不代表没有信号。' : '所选历史窗口的空间估计，可覆盖未采样位置。'}
           {layer !== 'topology' && ' 背景始终为全网范围；选中对象只改变高亮、指标和趋势。'}</p>
@@ -77,11 +76,14 @@ export default function NetworkSpaceView({ data, target, spatial, pending, error
       <div className="ain-observation-map-options">
         <label><input type="checkbox" checked={connections} onChange={event => setConnections(event.target.checked)} />显示连接</label>
         <label>连接口径<select value={connectionPeriod} onChange={event => setConnectionPeriod(event.target.value as 'latest' | 'window')}>
-          <option value="latest">最新帧连接</option><option value="window">窗口主连接</option>
+          <option value="window">窗口主连接（稳定概览）</option><option value="latest">最新帧连接（实际切换）</option>
         </select></label>
+        <span>位置：{connectionPeriod === 'window' ? '窗口平均' : '最新采样'}</span>
         <span>关注：{targetLabel(target)}</span>
       </div>
     </div>
+    {missingNodes > 0 && <p className="ain-observation-map-notice" role="status">{missingNodes} 个 UE 在{connectionPeriod === 'window' ? '本窗口' : '最新帧'}无采样，灰色标记保留最近已知位置；未补造指标或服务连接。</p>}
+    {(outsideNodes > 0 || outsideCells > 0) && <p className="ain-observation-map-notice" role="status">{outsideNodes > 0 && `${outsideNodes} 个节点超出场景边界；`}{outsideCells > 0 && `${outsideCells} 个信号网格超出边界并裁剪；`}请核对场景坐标配置，画布不随异常坐标缩放。</p>}
     {(layer === 'estimated' || layer === 'variance') && <>
       {spatialNotice && <p className="ain-observation-map-notice" role="status">{spatialNotice}</p>}
       {pending && <p className="ain-observation-map-notice" role="status">空间结果加载中{layer === 'estimated' ? '，暂显示采样信号' : ''}…</p>}
@@ -110,7 +112,7 @@ export default function NetworkSpaceView({ data, target, spatial, pending, error
           <line className="ain-observation-link-hit" x1={projection.x(source.x)} y1={projection.y(source.y)} x2={projection.x(end.x)} y2={projection.y(end.y)} />
         </g>;
       })}
-      {data.nodes.filter(node => projection.contains(node)).map(node => <SceneNode key={node.id} node={node} projection={projection}
+      {nodes.filter(node => projection.contains(node)).map(node => <SceneNode key={node.id} node={node} projection={projection}
         selected={target.kind !== 'all' && node.id === target.id} highlighted={target.kind !== 'all' && related.has(node.id)}
         onSelect={item => onSelect({ kind: item.type, id: item.id })} />)}
     </svg> : <p className="ain-spatial-empty">坐标范围无效，无法绘制。</p>}

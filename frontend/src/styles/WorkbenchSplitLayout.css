@@ -1,0 +1,150 @@
+/* 桌面工作台：固定可视高度、双栏独立滚动；历史展开不改变右栏高度。 */
+.ain-app.ain-shell .ain-workbench {
+  --ain-pane-height: clamp(480px, calc(100dvh - 154px), 800px);
+  display: grid;
+  grid-template-columns: minmax(0, 64fr) minmax(340px, 36fr);
+  grid-template-rows: auto minmax(0, var(--ain-pane-height));
+  align-items: start;
+  gap: 10px;
+  padding: 14px 20px 20px;
+}
+.ain-app.ain-shell .ain-workbench > .ain-workbench-title { display: none; }
+.ain-app.ain-shell .ain-workbench > .ain-replay-controls { grid-column: 1 / -1; grid-row: 1; margin: 0; }
+.ain-app.ain-shell .ain-workbench > .ain-data-module.ain-feature-module,
+.ain-app.ain-shell .ain-workbench > .ain-ai-panel.ain-ai-v3 {
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  height: var(--ain-pane-height);
+  max-height: var(--ain-pane-height);
+  margin: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  box-sizing: border-box;
+}
+.ain-app.ain-shell .ain-workbench > .ain-data-module.ain-feature-module { grid-column: 1; }
+.ain-app.ain-shell .ain-workbench > .ain-ai-panel.ain-ai-v3 { grid-column: 2; padding: 10px; }
+
+/* 右栏完整保留回答与方案，通过栏内滚动查看，不再按长答案拉高整页。 */
+.ain-app.ain-shell .ain-workbench .ain-ai-workspace { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 8px; padding-top: 8px; }
+.ain-app.ain-shell .ain-workbench .ain-ai-panel .ain-management-integrated { border: 0 !important; border-radius: 0 !important; padding: 0 !important; background: transparent !important; }
+.ain-app.ain-shell .ain-workbench .ain-query-examples { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.ain-app.ain-shell .ain-workbench .ain-query-example { min-width: 0; padding: 6px 7px; }
+.ain-app.ain-shell .ain-workbench .ain-query-example span { font-size: 11px; line-height: 1.5; }
+.ain-app.ain-shell .ain-workbench .ain-diagnosis-prose > div + div { margin-top: 6px; }
+.ain-app.ain-shell .ain-workbench .ain-ai-result-scope { margin: 4px 0; }
+.ain-app.ain-shell .ain-workbench .ain-ai-panel .ain-reference-actual { flex-basis: 100%; overflow-wrap: anywhere; font-size: 10px; }
+
+/* 沿用当前版本的简洁说明策略，状态、错误、实际分析范围不隐藏。 */
+.ain-app.ain-shell .ain-workbench .ain-replay-note,
+.ain-app.ain-shell .ain-workbench .ain-time-guide,
+.ain-app.ain-shell .ain-workbench .ain-reference-hint,
+.ain-app.ain-shell .ain-workbench .ain-query-input-meta > span:first-child,
+.ain-app.ain-shell .ain-workbench .ain-ai-note:not([role]),
+.ain-app.ain-shell .ain-workbench .ain-map-explanation,
+.ain-app.ain-shell .ain-workbench .ain-observation-map .ain-slot-heading p,
+.ain-app.ain-shell .ain-workbench .ain-observation-map .ain-spatial-footer,
+.ain-app.ain-shell .ain-workbench .ain-observation-note,
+.ain-app.ain-shell .ain-workbench .ain-feature-heading .ain-module-title p,
+.ain-app.ain-shell .ain-workbench .ain-ai-replay-scope > span:not(.ain-ai-view-mode),
+.ain-app.ain-shell .ain-workbench .ain-ai-scope:not(.ain-ai-replay-scope) { display: none; }
+
+/* 历史入口进入标题栏的正常布局，取消原先覆盖信息栏的绝对定位。 */
+.ain-app.ain-shell .ain-workbench .ain-feature-heading.ain-data-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px 9px;
+  padding-bottom: 7px;
+}
+.ain-app.ain-shell .ain-workbench .ain-data-heading .ain-feature-context {
+  display: inline-block; margin: 0; padding: 2px 6px; border-radius: 4px;
+  background: #eaf3fc; color: #547496; font-size: 10px; white-space: nowrap;
+}
+.ain-app.ain-shell .ain-workbench .ain-data-heading > .ain-history-controls { min-width: 0; margin: 0; }
+.ain-app.ain-shell .ain-workbench .ain-data-heading > .ain-history-controls[data-mode='history'] { grid-column: 1 / -1; }
+.ain-app.ain-shell .ain-workbench .ain-live-history-entry { min-height: 0; margin: 0; padding: 0; }
+.ain-app.ain-shell .ain-workbench .ain-live-history-entry .ain-replay-actions { position: static; margin: 0; }
+.ain-app.ain-shell .ain-workbench .ain-history-controls .ain-replay-history { margin: 0; padding: 7px 8px; }
+.ain-app.ain-shell .ain-workbench .ain-history-controls .ain-replay-main { gap: 5px 10px; }
+.ain-app.ain-shell .ain-workbench .ain-history-range-legend { margin-top: 4px; }
+.ain-app.ain-shell .ain-workbench .ain-history-range-help { margin-top: 4px; font-size: 10px; }
+.ain-app.ain-shell .ain-workbench .ain-reference-actual { overflow-wrap: anywhere; }
+
+/* 顶部信息只显示查看时间与计数，完整范围/采样信息可展开，不堆在一行。 */
+.ain-app.ain-shell .ain-workbench .ain-replay-data-info { padding: 7px 9px; }
+.ain-app.ain-shell .ain-workbench .ain-replay-data-info .ain-data-bar { display: block; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; font-size: 11px; }
+.ain-app.ain-shell .ain-workbench .ain-data-scene { font-weight: 600; color: #286da4; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-summary time { font-variant-numeric: tabular-nums; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-count { margin-left: auto; color: #69809a; white-space: nowrap; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-details { margin-top: 5px; font-size: 10px; color: #6c829a; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-details summary { cursor: pointer; color: #3975ad; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-details dl { margin: 5px 0; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-details dl > div { display: grid; grid-template-columns: 85px minmax(0, 1fr); gap: 8px; padding: 2px 0; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-details dd { margin: 0; overflow-wrap: anywhere; }
+.ain-app.ain-shell .ain-workbench .ain-data-meta-details p { margin-top: 4px; line-height: 1.6; }
+
+/* 上排主图占2/3；下排两图各占1/2，高度限制为辅助图规格。 */
+.ain-app.ain-shell .ain-workbench .ain-observation-layout {
+  display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-areas: none; grid-template-rows: auto auto; gap: 8px; align-items: stretch;
+}
+.ain-app.ain-shell .ain-workbench .ain-observation-map { grid-area: auto; grid-column: 1 / 9; grid-row: 1; }
+.ain-app.ain-shell .ain-workbench .ain-observation-panel { grid-area: auto; grid-column: 9 / -1; grid-row: 1; contain: size; height: auto; min-height: 0; max-height: none; overflow: auto; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trends { grid-area: auto; grid-column: 1 / 7; grid-row: 2; display: flex; flex-direction: column; min-height: 0; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison { grid-area: auto; grid-column: 7 / -1; grid-row: 2; contain: none; overflow: visible; min-height: 0; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trends,
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison { height: 220px; max-height: 220px; box-sizing: border-box; overflow: auto; }
+
+/* stage同时包含工具栏与SVG，必须自然排布；不能给二者相同固定高度。 */
+.ain-app.ain-shell .ain-workbench .ain-observation-map .ain-spatial-stage { display: block; width: auto; height: auto; min-height: 0; max-height: none; aspect-ratio: auto; }
+.ain-app.ain-shell .ain-workbench .ain-observation-map .ain-spatial-svg { display: block; width: 100%; height: auto; min-height: 0; max-height: none; aspect-ratio: 640 / 300; }
+.ain-app.ain-shell .ain-workbench .ain-observation-map-controls { padding: 6px 8px; }
+.ain-app.ain-shell .ain-workbench .ain-observation-map-controls .ain-observation-tabs button { padding: 4px 7px; min-height: 27px; font-size: 11px; }
+.ain-app.ain-shell .ain-workbench .ain-observation-map-options { gap: 5px 9px; font-size: 10px; }
+
+/* 时间图压低为辅助图；多指标在固定高度内滚动，不撑高下排。 */
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-heading { align-items: flex-start; gap: 6px 10px; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-controls { gap: 5px 8px; font-size: 10px; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-heading > div > p { display: none; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-grid { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr); overflow: auto; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-chart { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-grid:not(.is-compare) .ain-slot-heading { display: none; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-chart .ain-echart { flex: 1; height: 100% !important; min-height: 130px; width: 100%; margin: 0; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-grid.is-compare { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; gap: 5px; }
+.ain-app.ain-shell .ain-workbench .ain-observation-trend-grid.is-compare .ain-echart { flex: none; height: 100px !important; min-height: 100px; }
+
+/* 三个指标并排为矮卡片，各自保留单位和横向用户条形。窄屏可横向滚动。 */
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-charts { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)); gap: 5px; overflow-x: auto; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-chart { min-width: 0; max-height: 136px; overflow: auto; border: 0; box-shadow: none; border-radius: 5px; background: #f7fbff; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-chart .ain-slot-heading { border: 0; padding: 3px 7px 0; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-chart .ain-slot-heading h2 { color: #527393; font-size: 10px; font-weight: 500; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-chart .ain-echart { width: 100%; height: max(100px, var(--ain-chart-height, 72px)) !important; min-height: 100px; aspect-ratio: auto; margin: 0; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-legend { margin: 3px 0 4px; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-heading > p { margin: 2px 0; }
+.ain-app.ain-shell .ain-workbench .ain-ue-comparison-buttons { flex-wrap: wrap; overflow: visible; }
+
+@media (max-width: 1300px) and (min-width: 1025px) {
+  .ain-app.ain-shell .ain-workbench { grid-template-columns: minmax(0, 61fr) minmax(340px, 39fr); padding-left: 12px; padding-right: 12px; }
+}
+@media (max-width: 1024px) {
+  .ain-app.ain-shell .ain-workbench { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; padding: 12px; }
+  .ain-app.ain-shell .ain-workbench > .ain-data-module.ain-feature-module,
+  .ain-app.ain-shell .ain-workbench > .ain-ai-panel.ain-ai-v3 { grid-column: 1; height: auto; max-height: none; overflow: visible; scrollbar-gutter: auto; }
+  .ain-app.ain-shell .ain-workbench > .ain-data-module.ain-feature-module { grid-row: 2; }
+  .ain-app.ain-shell .ain-workbench > .ain-ai-panel.ain-ai-v3 { grid-row: 3; }
+  .ain-app.ain-shell .ain-workbench .ain-observation-panel { contain: size; height: auto; min-height: 0; max-height: none; }
+}
+@media (max-width: 680px) {
+  .ain-app.ain-shell .ain-workbench .ain-observation-layout { grid-template-columns: minmax(0, 1fr); }
+  .ain-app.ain-shell .ain-workbench .ain-observation-map,
+  .ain-app.ain-shell .ain-workbench .ain-observation-panel,
+  .ain-app.ain-shell .ain-workbench .ain-observation-trends,
+  .ain-app.ain-shell .ain-workbench .ain-ue-comparison { grid-column: 1; grid-row: auto; }
+  .ain-app.ain-shell .ain-workbench .ain-observation-panel { contain: none; max-height: 420px; }
+  .ain-app.ain-shell .ain-workbench .ain-data-meta-count { margin-left: 0; }
+  .ain-app.ain-shell .ain-workbench .ain-observation-object-controls p { display: none; }
+}

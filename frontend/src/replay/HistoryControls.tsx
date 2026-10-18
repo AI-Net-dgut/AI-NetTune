@@ -20,8 +20,8 @@ export default function HistoryControls({ state, act, loading, config }: {
     if (disabled || !historical) return;
     act({ type: "history-range", startMs: state.startMs + start * 1000, endMs: state.startMs + end * 1000 });
   }
-  return <section className="ain-history-controls" aria-label="历史数据查看控制">
-    {!historical ? <div className="ain-replay-main"><span className="ain-replay-note">手动选历史：拖动两个滑块直接选择开始与结束时间；AI与图表同步。</span>
+  return <section className="ain-history-controls" data-mode={historical ? "history" : "live"} aria-label="历史数据查看控制">
+    {!historical ? <div className="ain-replay-main ain-live-history-entry"><span className="ain-replay-note">手动选历史：拖动两个滑块直接选择开始与结束时间；AI与图表同步。</span>
       <div className="ain-replay-actions"><button className="ain-button" type="button" disabled={disabled}
         onClick={() => act({ type: "history" })}>查看历史数据</button></div></div>
       : <div className="ain-replay-history"><div className="ain-replay-main"><strong>历史范围：{scope.start} — {scope.end}</strong>

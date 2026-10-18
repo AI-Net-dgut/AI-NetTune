@@ -15,6 +15,7 @@ export type ReplayAction =
   | { type: "seek"; timeMs: number }
   | { type: "select-range"; startMs: number; endMs: number }
   | { type: "history-range"; startMs: number; endMs: number }
+  | { type: "forecast-analysis"; startMs: number; endMs: number }
   | { type: "reference"; minutes: number }
   | { type: "reference-start"; timeMs: number }
   | { type: "speed"; value: number }
@@ -43,7 +44,7 @@ export function replayReducer(state: ReplayState, action: ReplayAction): ReplayS
   if (action.type === "live") return state.viewMode === "live" && !state.locked ? state
     : { ...state, viewMode: "live", viewMs: state.currentMs, customStartMs: null, locked: false, viewRevision: state.viewRevision + 1 };
   // 锁的是分析上下文；主时钟tick仍须运行，跨轮会废弃旧上下文。
-  if (state.locked && ["seek", "history", "freeze", "restart", "reference", "reference-start", "select-range", "history-range"].includes(action.type)) return state;
+  if (state.locked && ["seek", "history", "freeze", "restart", "reference", "reference-start", "select-range", "history-range", "forecast-analysis"].includes(action.type)) return state;
   switch (action.type) {
     case "unready": return { ...state, ready: false, playing: false, locked: false,
       viewMode: "live", viewMs: state.currentMs, viewRevision: state.viewRevision + 1 };
@@ -62,6 +63,12 @@ export function replayReducer(state: ReplayState, action: ReplayAction): ReplayS
       if (!state.ready || state.viewMode !== "history" || !Number.isFinite(action.timeMs)) return state;
       const viewMs = Math.max(state.startMs, Math.min(Math.floor(state.currentMs / 1000) * 1000, Math.floor(action.timeMs / 1000) * 1000));
       return viewMs === state.viewMs ? state : { ...state, viewMs, customStartMs: state.customStartMs !== null && state.customStartMs > viewMs ? null : state.customStartMs, viewRevision: state.viewRevision + 1 };
+    }
+    case "forecast-analysis": {
+      if (!state.ready || state.viewMode === "history" || !Number.isFinite(action.startMs) || !Number.isFinite(action.endMs)) return state;
+      const start = Math.floor(action.startMs / 1000) * 1000, end = Math.floor(action.endMs / 1000) * 1000;
+      if (start < state.startMs || start > end || end > Math.min(state.endMs, state.currentMs)) return state;
+      return { ...state, viewMode: "analysis", viewMs: end, customStartMs: start, viewRevision: state.viewRevision + 1 };
     }
     case "select-range":
     case "history-range": {

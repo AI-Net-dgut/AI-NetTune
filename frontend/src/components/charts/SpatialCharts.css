@@ -35,7 +35,10 @@
 .ain-scene-node {
   cursor: pointer;
   outline: none;
+  transition: transform 200ms linear;
 }
+.ain-scene-node.is-missing-sample { opacity: .65; }
+@media (prefers-reduced-motion: reduce) { .ain-scene-node { transition: none; } }
 
 .ain-scene-node text {
   font-size: 16px;

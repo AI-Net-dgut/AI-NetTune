@@ -18,14 +18,14 @@ function MetricTrend({ data, target, metric, small = false }: { data: DashboardD
   const span = (raw.at(-1)?.time ?? 0) - (raw[0]?.time ?? 0);
   const option: EChartsOption = {
     animation: false, backgroundColor: CHART_BACKGROUND, textStyle: { fontFamily: CHART_FONT },
-    grid: { left: 8, right: 12, top: 20, bottom: 6, containLabel: true },
+    grid: { left: 46, right: 18, top: 25, bottom: 28, containLabel: false },
     tooltip: { trigger: 'axis', renderMode: 'richText', formatter: (params: unknown) => {
       const first = (Array.isArray(params) ? params[0] : params) as { dataIndex?: number } | undefined;
       const point = points[first?.dataIndex ?? -1];
       if (!point) return '暂无采样';
       return `${label}\n${dateTime.format(point.time)}${binned ? ` — ${dateTime.format(point.endTime)}` : ''}（北京时间）\n${binned ? '区间时刻均值' : target.kind === 'ue' ? '采样值' : '同刻用户均值'}：${displayMetric(point.value ?? undefined)} ${meta.unit}\n有效记录：${point.count}${binned ? `\n区间采样范围：${displayMetric(point.min ?? undefined)}～${displayMetric(point.max ?? undefined)} ${meta.unit}` : ''}`;
     } },
-    xAxis: { ...AXIS_STYLE, type: 'time', splitNumber: small ? 3 : 6, axisLabel: { ...AXIS_STYLE.axisLabel,
+    xAxis: { ...AXIS_STYLE, type: 'time', splitNumber: small ? 3 : 4, axisLabel: { ...AXIS_STYLE.axisLabel, fontSize: 10,
       formatter: (value: number) => span >= 86400000 ? dateTime.format(value) : clock.format(value), hideOverlap: true } },
     yAxis: { ...AXIS_STYLE, type: 'value', scale: true, name: meta.unit, nameTextStyle: { color: '#c3d5ee' },
       min: metric === 'rsrpDbm' || metric === 'sinrDb' ? undefined : 0, splitNumber: 3 },

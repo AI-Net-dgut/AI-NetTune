@@ -1,6 +1,7 @@
 import { aggregateCells, fetchRecords, toEpoch } from "../services/backend";
 import { observationMeans, uniqueObservationRecords } from "../services/dataObservation";
 import { getLatestFrame } from "../services/metrics";
+import { sceneArea } from "../services/sceneGeometry";
 import type { DashboardData, MetricRecord, NetworkLink, NetworkNode, QueryScope } from "../types/backend";
 import { formatReplayTime } from "./replayState";
 import type { ReplayConfig } from "./config";
@@ -36,25 +37,29 @@ function windowLinks(metrics: MetricRecord[]): NetworkLink[] {
 
 export function buildReplayDashboard(records: MetricRecord[], scope: QueryScope, knownAPs: NetworkNode[]): DashboardData {
   const start = toEpoch(scope.start), end = toEpoch(scope.end);
-  const metrics = uniqueObservationRecords(records.filter(row => {
-    const time = Date.parse(row.timestamp); return time >= start && time <= end;
-  }));
-  const latest = getLatestFrame(metrics);
+  const windowRecords: MetricRecord[] = [];
   const nodes = new Map<string, NetworkNode>();
+  const lastSeenTimes = new Map<string, number>();
   // 仅保留已知静态部署，不复用预加载末尾的 UE 坐标或服务关系。
   for (const ap of knownAPs) if (ap.type === "ap") nodes.set(ap.id, { ...ap });
-  for (const row of metrics) {
-    nodes.set(row.apId, { id: row.apId, type: "ap", x: row.apX, y: row.apY });
-    nodes.set(row.ueId, { id: row.ueId, type: "ue", x: row.x, y: row.y });
+  // 已出现的节点短暂缺采样时保留最近已知位置；指标和连接仍只使用当前窗口。
+  // 单次扫描，不为保留节点而对截至当前的全部历史重新排序。
+  for (const row of records) {
+    const time = Date.parse(row.timestamp);
+    if (!Number.isFinite(time) || time > end) continue;
+    if (time >= start) windowRecords.push(row);
+    if (!nodes.has(row.apId)) nodes.set(row.apId, { id: row.apId, type: "ap", x: row.apX, y: row.apY });
+    if (time >= (lastSeenTimes.get(row.ueId) ?? -Infinity)) {
+      nodes.set(row.ueId, { id: row.ueId, type: "ue", x: row.x, y: row.y, lastSeen: row.backendTime });
+      lastSeenTimes.set(row.ueId, time);
+    }
   }
+  const metrics = uniqueObservationRecords(windowRecords);
+  const latest = getLatestFrame(metrics);
   const values = [...nodes.values()], gridSize = 20;
-  const xs = values.map(node => node.x), ys = values.map(node => node.y);
   return {
     scope: { ...scope }, generatedAt: latest.timestamp ?? "", sampledFrameTime: latest.metrics[0]?.backendTime ?? null, metrics, nodes: values,
     links: windowLinks(metrics), gridSize, cells: aggregateCells(latest.metrics, gridSize), apMeans: [],
-    area: { xMin: Math.floor(Math.min(0, ...xs) / gridSize) * gridSize,
-      yMin: Math.floor(Math.min(0, ...ys) / gridSize) * gridSize,
-      xMax: Math.max(gridSize, Math.ceil(Math.max(0, ...xs) / gridSize) * gridSize),
-      yMax: Math.max(gridSize, Math.ceil(Math.max(0, ...ys) / gridSize) * gridSize) },
+    area: sceneArea(scope.scenario, values),
   };
 }
