@@ -12,7 +12,7 @@ import statistics
 import re
 from pathlib import Path
 import llm_agent
-from llm_agent import get_intent, rule_intent, extract_time_range
+from llm_agent import get_intent, rule_intent, extract_time_range, call_llm_chat
 from forecast_model import build_series, DEFAULT_METRICS
 from spatial_model import build_spatial
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
@@ -1105,6 +1105,166 @@ def predict_result(
         "model": "placeholder",
         "predict_list": [],
         "total": 0,
+    })
+
+
+# ============================================================================
+# 预测预警 v2 双接口（前端 forecast/api.ts 契约）
+#   POST /api/forecast/preview  预测预览：返回 spectra/alerts/impacts
+#   POST /api/forecast/analyze   AI 文字研判：基于一轮预测给出原因/证据/方案
+# 说明：频谱频段数据（band_id + power_dbm + occupancy_pct）尚未由
+#       data_generator.py 扩展完成，preview 暂返回 insufficient_data 占位；
+#       analyze 已可独立工作（拉真实历史 KPI 趋势喂 LLM）。
+# ============================================================================
+# 内存缓存：forecastId -> 该轮 preview 结果，供 analyze 按 alertId 反查预警详情
+_FORECAST_CACHE: dict = {}
+
+
+class _TimeRange(BaseModel):
+    start: str
+    end: str
+
+
+class ForecastPreviewRequest(BaseModel):
+    scenario: str
+    baseTime: str
+    history: _TimeRange
+    horizonMinutes: float
+
+
+class ForecastAnalyzeRequest(BaseModel):
+    forecastId: str
+    scenario: str
+    baseTime: str
+    alertId: str | None = None
+    history: _TimeRange
+    forecast: _TimeRange
+
+
+def _parse_ts(value: str):
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+@app.post("/api/forecast/preview", summary="预测预警 v2：预测预览（频谱数据接入中，占位实现）")
+def forecast_preview(req: ForecastPreviewRequest):
+    """频谱频段数据扩展完成前的占位：返回 insufficient_data，不带图表。
+    前端约定：不可用状态可被正常渲染为'数据接入中'提示，不阻塞浮窗打开。"""
+    try:
+        base_dt = _parse_ts(req.baseTime)
+    except (ValueError, TypeError):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "baseTime 格式应为 yyyy-MM-dd HH:mm:ss")
+    if req.horizonMinutes <= 0 or req.horizonMinutes > 1440:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "horizonMinutes 需在 1~1440 分钟之间")
+
+    fid = "FC_" + base_dt.strftime("%Y%m%d%H%M%S")
+    result = {
+        "id": fid,
+        "scenario": req.scenario,
+        "baseTime": req.baseTime,
+        "history": {"start": req.history.start, "end": req.history.end},
+        "forecast": {"start": req.baseTime,
+                     "end": (base_dt + timedelta(minutes=req.horizonMinutes)).strftime("%Y-%m-%d %H:%M:%S")},
+        "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "simulation",
+        "status": "insufficient_data",
+        "message": "电磁频谱频段数据接入中，暂不提供频谱预测；AI 研判仍可使用。",
+        "alerts": [],
+        "spectra": [],
+        "impacts": [],
+    }
+    _FORECAST_CACHE[fid] = result
+    return success_response(result)
+
+
+@app.post("/api/forecast/analyze", summary="预测预警 v2：AI 文字研判")
+def forecast_analyze(req: ForecastAnalyzeRequest):
+    """按 forecastId + alertId 对一轮预测做文字研判。
+    优先复用 preview 缓存中的预警详情；缓存缺失时用历史 KPI 趋势兜底组 prompt。
+    LLM 不可用时降级 source=rule 模板文案，接口不崩。"""
+    cached = _FORECAST_CACHE.get(req.forecastId, {})
+    alert_detail = None
+    if req.alertId:
+        for a in cached.get("alerts", []):
+            if a.get("id") == req.alertId:
+                alert_detail = a
+                break
+
+    # 拉历史窗口真实数据，算 KPI 现状与近窗口趋势（供 prompt 使用）
+    try:
+        hist_rows = filter_rows(req.scenario, req.history.start, req.history.end)
+    except Exception:
+        hist_rows = []
+
+    def _avg(rows, key):
+        vals = [float(r.get(key)) for r in rows if r.get(key) not in (None, "")]
+        return sum(vals) / len(vals) if vals else None
+
+    avg_rsrp = _avg(hist_rows, "rsrp")
+    avg_sinr = _avg(hist_rows, "sinr")
+    avg_thr = _avg(hist_rows, "throughput")
+    n_rows = len(hist_rows)
+    # 无数据窗口：均值为 None，统一转成"暂缺"文本，避免 f-string 格式化 None 崩溃
+    rsrp_text = f"{avg_rsrp:.1f}" if avg_rsrp is not None else "暂缺"
+    sinr_text = f"{avg_sinr:.1f}" if avg_sinr is not None else "暂缺"
+    thr_text = f"{avg_thr:.1f}" if avg_thr is not None else "暂缺"
+    # 趋势：窗口后半段 vs 前半段平均 SINR
+    trend_text = "历史趋势暂缺"
+    if n_rows >= 10:
+        half = n_rows // 2
+        first_sinr = _avg(hist_rows[:half], "sinr")
+        second_sinr = _avg(hist_rows[half:], "sinr")
+        if first_sinr is not None and second_sinr is not None:
+            delta = second_sinr - first_sinr
+            direction = "恶化（下降）" if delta < -1 else ("改善（上升）" if delta > 1 else "基本平稳")
+            trend_text = f"窗口后半段 SINR 较前半段{direction}，变化约 {delta:+.1f} dB"
+
+    alert_desc = (
+        f"预警标题：{alert_detail.get('title')}；摘要：{alert_detail.get('summary')}；"
+        f"等级：{alert_detail.get('severity')}；时段：{alert_detail.get('start')} ~ {alert_detail.get('end')}"
+        if alert_detail else f"预警ID：{req.alertId or '未指定'}"
+    )
+
+    system_prompt = (
+        "你是校园无线网络监测平台的资深运维研判助手。针对一条预测预警，用中文写一段 250~400 字的专业研判，"
+        "面向网络运维人员。必须按顺序覆盖：①风险概述（发生了什么、大约何时、影响哪些用户/区域）；"
+        "②可能原因（结合给出的历史数据趋势推测，不要凭空编造）；③支持证据与反面疑点；"
+        "④影响范围；⑤预防/处置方案与预期效果；⑥不确定性说明（这条预测的可信边界）。"
+        "语气克制专业，不喊口号，不要编造未给出的数值。"
+    )
+    user_message = (
+        f"场景：{req.scenario}\n预测基准时刻：{req.baseTime}\n"
+        f"预测窗口：{req.forecast.start} ~ {req.forecast.end}\n"
+        f"历史观测窗口：{req.history.start} ~ {req.history.end}（共 {n_rows} 条采样）\n"
+        f"历史均值：RSRP={rsrp_text} dBm，SINR={sinr_text} dB，吞吐量={thr_text} Mbps\n"
+        f"{trend_text}\n{alert_desc}\n请按系统要求输出研判文字。"
+    )
+
+    reply = None
+    source = "rule"
+    try:
+        if llm_agent.LLM_API_KEY:
+            reply = call_llm_chat(system_prompt, user_message, temperature=0.3)
+            if reply:
+                source = "llm"
+    except Exception:
+        reply = None
+
+    if not reply:
+        reply = (
+            f"【规则研判】预测窗口 {req.forecast.start} ~ {req.forecast.end} 内检测到需要关注的风险"
+            f"（{alert_detail.get('title', '见预警摘要') if alert_detail else '预警事件'}）。"
+            f"历史窗口 RSRP={rsrp_text} dBm、SINR={sinr_text} dB，{trend_text}。"
+            f"建议：提前核查相关 AP 负载与邻区干扰，关注受影响 UE 的接入与切换状态；"
+            f"若窗口后半段 SINR 持续走低，考虑均衡邻区负载或扩容。"
+            f"不确定性：当前 LLM 研判不可用，以上为基于历史均值的规则提示，未结合频谱细节。"
+        )
+
+    return success_response({
+        "forecastId": req.forecastId,
+        "baseTime": req.baseTime,
+        "alertId": req.alertId,
+        "source": source,
+        "reply": reply,
     })
 
 
