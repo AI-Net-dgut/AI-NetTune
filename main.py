@@ -128,6 +128,31 @@ def load_data():
 
 DF = load_data()
 
+# ============ 频谱数据（data/spectrum_7d.csv，预测预警 v2 真实数据源） ============
+# 7天×1440分钟×3 AP×50频段 = 1,512,000 行；1分钟一帧，与网络数据同时间轴
+# 字段：timestamp/observation_id(AP-01..03)/band_id(band-0..49)/lower_mhz/upper_mhz
+#       /power_dbm/occupancy_pct/network_status(normal|weak_coverage|congestion)/scenario
+import pandas as _pd
+SPECTRUM_PATH = Path(__file__).resolve().parent / "data" / "spectrum_7d.csv"
+_SPEC = {"df": None, "max_ts": None, "bands": None}
+
+
+def load_spectrum():
+    if not SPECTRUM_PATH.exists():
+        print("[WARN] 未找到 data/spectrum_7d.csv，forecast preview 将降级 insufficient_data")
+        return
+    df = _pd.read_csv(SPECTRUM_PATH, encoding="utf-8-sig")
+    df["timestamp"] = _pd.to_datetime(df["timestamp"], format="%Y-%m-%d %H:%M:%S")
+    _SPEC["df"] = df
+    _SPEC["max_ts"] = df["timestamp"].max()
+    bands = (df[["band_id", "lower_mhz", "upper_mhz"]].drop_duplicates()
+             .sort_values("lower_mhz").to_dict("records"))
+    _SPEC["bands"] = bands
+    print(f"[OK] spectrum_7d.csv 加载完成：{len(df)} 行，时间至 {_SPEC['max_ts']}, {len(bands)} 频段")
+
+
+load_spectrum()
+
 # 完整 18 列：11 核心 KPI + AP/UE 坐标（4列）+ 故障深度分析辅助字段（3列）
 ALL_COLUMNS = ["timestamp", "ap_id", "ap_x", "ap_y", "user_id", "ue_x", "ue_y",
                "rsrp", "sinr", "throughput", "latency", "packet_loss", "prb_usage",
@@ -1145,10 +1170,10 @@ def _parse_ts(value: str):
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
 
 
-@app.post("/api/forecast/preview", summary="预测预警 v2：预测预览（频谱数据接入中，占位实现）")
+@app.post("/api/forecast/preview", summary="预测预警 v2：预测预览（真实频谱数据）")
 def forecast_preview(req: ForecastPreviewRequest):
-    """频谱频段数据扩展完成前的占位：返回 insufficient_data，不带图表。
-    前端约定：不可用状态可被正常渲染为'数据接入中'提示，不阻塞浮窗打开。"""
+    """真读 spectrum_7d.csv：按 baseTime 返回历史频谱帧 + 未来外推 + 风险预警。
+    频谱数据范围 2026-01-01~01-07，超出范围自动降级 insufficient_data。"""
     try:
         base_dt = _parse_ts(req.baseTime)
     except (ValueError, TypeError):
@@ -1157,20 +1182,166 @@ def forecast_preview(req: ForecastPreviewRequest):
         return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "horizonMinutes 需在 1~1440 分钟之间")
 
     fid = "FC_" + base_dt.strftime("%Y%m%d%H%M%S")
+    fore_end = base_dt + timedelta(minutes=req.horizonMinutes)
+
+    # 频谱未加载或 baseTime 超出频谱数据范围 → 降级占位
+    if _SPEC["df"] is None or base_dt > _SPEC["max_ts"]:
+        result = {
+            "id": fid, "scenario": req.scenario, "baseTime": req.baseTime,
+            "history": {"start": req.history.start, "end": req.history.end},
+            "forecast": {"start": req.baseTime, "end": fore_end.strftime("%Y-%m-%d %H:%M:%S")},
+            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "simulation", "status": "insufficient_data",
+            "message": "当前时刻超出频谱数据范围（频谱覆盖 2026-01-01 ~ 01-07），暂不提供频谱预测。",
+            "alerts": [], "spectra": [], "impacts": [],
+        }
+        _FORECAST_CACHE[fid] = result
+        return success_response(result)
+
+    hist_start = _parse_ts(req.history.start)
+    hist_end = _parse_ts(req.history.end)
+    bands = _SPEC["bands"]
+    df = _SPEC["df"]
+
+    def fmt(dt):
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    spectra = []
+    alerts = []
+    band_list = [{"id": b["band_id"], "label": f'{b["lower_mhz"]}-{b["upper_mhz"]}MHz',
+                  "lowerMHz": int(b["lower_mhz"]), "upperMHz": int(b["upper_mhz"])} for b in bands]
+
+    for ap in ["AP-01", "AP-02", "AP-03"]:
+        ap_df = df[df.observation_id == ap]
+        hist_sub = ap_df[(ap_df.timestamp >= hist_start) & (ap_df.timestamp < hist_end)]
+        # 按分钟透视：ts -> {band_id: power}, {band_id: occ}
+        hist_by_ts = {}
+        for ts, grp in hist_sub.groupby("timestamp"):
+            hist_by_ts[ts] = (dict(zip(grp.band_id, grp.power_dbm)),
+                              dict(zip(grp.band_id, grp.occupancy_pct)))
+
+        # 未来外推：历史窗口最后 10 分钟各频段均值
+        recent = hist_sub.sort_values("timestamp").tail(10 * len(bands))
+        def _avg_by_band(col):
+            out = {}
+            for b in bands:
+                bid = b["band_id"]
+                vals = recent[recent.band_id == bid][col]
+                out[bid] = float(vals.mean()) if len(vals) else None
+            return out
+        avg_power = _avg_by_band("power_dbm")
+        avg_occ = _avg_by_band("occupancy_pct")
+
+        def build_hist(metric):
+            frames = []
+            for ts in sorted(hist_by_ts.keys()):
+                pmap, omap = hist_by_ts[ts]
+                mp = pmap if metric == "power" else omap
+                frames.append({
+                    "start": fmt(ts), "end": fmt(ts + timedelta(minutes=1)),
+                    "values": [round(float(mp[b["band_id"]]), 2) if b["band_id"] in mp else None
+                               for b in bands],
+                })
+            return frames
+
+        def build_pred(metric):
+            ref = avg_power if metric == "power" else avg_occ
+            frames = []
+            t = base_dt
+            for _ in range(int(req.horizonMinutes)):
+                frames.append({
+                    "start": fmt(t), "end": fmt(t + timedelta(minutes=1)),
+                    "values": [round(ref[b["band_id"]], 2) if ref[b["band_id"]] is not None else None
+                               for b in bands],
+                })
+                t += timedelta(minutes=1)
+            return frames
+
+        for metric, sid_suffix, unit, scale in [
+            ("power", "power", "dBm", {"min": -110, "max": -40}),
+            ("occupancy", "occupancy", "%", {"min": 0, "max": 100}),
+        ]:
+            spectra.append({
+                "id": f"{ap}-{sid_suffix}", "observationLabel": ap, "observationId": ap,
+                "metric": metric, "unit": unit, "scale": scale, "bands": band_list,
+                "history": build_hist(metric), "predicted": build_pred(metric),
+            })
+
+        # alerts：历史窗口最后 10 分钟状态统计 → 预测未来持续
+        status_sub = hist_sub[["timestamp", "network_status"]].drop_duplicates()
+        recent_st = status_sub[status_sub.timestamp >= hist_end - timedelta(minutes=10)]
+        n_recent = len(recent_st)
+        if n_recent:
+            n_cong = int((recent_st.network_status == "congestion").sum())
+            n_weak = int((recent_st.network_status == "weak_coverage").sum())
+            def _sev(n):
+                r = n / n_recent
+                return "high" if r >= 0.5 else ("medium" if r >= 0.2 else "low")
+            if n_cong >= max(2, n_recent * 0.1):
+                alerts.append({
+                    "id": f"ALT-{ap}-cong", "target": ap,
+                    "title": f"{ap} 预测拥塞持续",
+                    "summary": f"历史窗口末段 {n_cong}/{n_recent} 分钟处于拥塞（占用率85-95%），"
+                               f"预计未来{int(req.horizonMinutes)}分钟持续，吞吐下降、时延上升。",
+                    "severity": _sev(n_cong),
+                    "start": fmt(base_dt), "end": fmt(fore_end),
+                    "spectrumId": f"{ap}-occupancy", "impactId": None,
+                    "bandIds": [b["band_id"] for b in bands],
+                })
+            if n_weak >= max(2, n_recent * 0.1):
+                alerts.append({
+                    "id": f"ALT-{ap}-weak", "target": ap,
+                    "title": f"{ap} 预测弱覆盖持续",
+                    "summary": f"历史窗口末段 {n_weak}/{n_recent} 分钟处于弱覆盖（功率偏低、占用率10-30%），"
+                               f"预计未来{int(req.horizonMinutes)}分钟覆盖改善有限。",
+                    "severity": _sev(n_weak),
+                    "start": fmt(base_dt), "end": fmt(fore_end),
+                    "spectrumId": f"{ap}-power", "impactId": None,
+                    "bandIds": [b["band_id"] for b in bands],
+                })
+
+    # impacts：SINR/吞吐从主网络数据按分钟聚合，预测=末值±10%
+    impacts = []
+    try:
+        rows = filter_rows(req.scenario, req.history.start, req.history.end)
+        for key, label, unit, sid in [("sinr", "SINR", "dB", "imp-sinr"),
+                                       ("throughput", "吞吐量", "Mbps", "imp-thr")]:
+            by_ts = {}
+            for r in rows:
+                v = r.get(key)
+                if v not in (None, ""):
+                    by_ts.setdefault(r["timestamp"], []).append(float(v))
+            hist_pts = [{"time": ts, "value": round(sum(vs) / len(vs), 2)}
+                        for ts, vs in sorted(by_ts.items())]
+            if len(hist_pts) > 60:
+                hist_pts = hist_pts[::max(1, len(hist_pts) // 60)]
+            last_val = hist_pts[-1]["value"] if hist_pts else 0.0
+            pred_pts = []
+            t = base_dt
+            for _ in range(max(1, int(req.horizonMinutes // 5))):
+                pred_pts.append({"time": fmt(t), "value": round(last_val, 2),
+                                 "lower": round(last_val * 0.9, 2),
+                                 "upper": round(last_val * 1.1, 2)})
+                t += timedelta(minutes=5)
+            impacts.append({"id": sid, "targetLabel": "全网", "label": label, "unit": unit,
+                            "history": hist_pts, "predicted": pred_pts})
+    except Exception:
+        pass
+
+    views_ap = alerts[0]["target"] if alerts else "AP-01"
     result = {
-        "id": fid,
-        "scenario": req.scenario,
-        "baseTime": req.baseTime,
+        "id": fid, "scenario": req.scenario, "baseTime": req.baseTime,
         "history": {"start": req.history.start, "end": req.history.end},
-        "forecast": {"start": req.baseTime,
-                     "end": (base_dt + timedelta(minutes=req.horizonMinutes)).strftime("%Y-%m-%d %H:%M:%S")},
+        "forecast": {"start": req.baseTime, "end": fmt(fore_end)},
         "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "source": "simulation",
-        "status": "insufficient_data",
-        "message": "电磁频谱频段数据接入中，暂不提供频谱预测；AI 研判仍可使用。",
-        "alerts": [],
-        "spectra": [],
-        "impacts": [],
+        "source": "simulation", "status": "ready",
+        "message": "预测窗口内发现需要关注的风险" if alerts else "预测窗口内整体正常",
+        "alerts": alerts, "spectra": spectra, "impacts": impacts,
+        "spectrumViews": {
+            "powerId": f"{views_ap}-power", "occupancyId": f"{views_ap}-occupancy",
+            "recommendedView": "occupancy" if alerts else "curve",
+            "reason": "存在拥塞/覆盖风险，优先展示对应频谱视图",
+        },
     }
     _FORECAST_CACHE[fid] = result
     return success_response(result)
