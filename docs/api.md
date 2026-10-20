@@ -17,6 +17,8 @@ Base URL: http://localhost:8000
 |8|GET|/api/predict/result|时序预测结果查询（契约v1·查询壳：转调接口10数据，不新建模型）|
 |9|GET|/api/network/topology/enhanced|拓扑增强数据（契约v1）|
 |10|POST|/api/analyze/forecast|区域信号/频谱态势预测（Prophet 时序模型）|
+|11|POST|/api/forecast/preview|预测预览（频谱预测预警 v2，baseTime 防未来）|
+|12|POST|/api/forecast/analyze|预测研判（基于同一轮预测的文字分析，v2）|
 
 ## 通用响应格式
 成功: {"code": 0, "message": "success", "data": {...}}
@@ -549,3 +551,180 @@ POST /api/analyze/forecast
 - 数据源为 30 天仿真数据（`data/network_data_30d(1).csv`，main.py 默认读取；3d 版备份为 `data/network_data_3d_bak.csv`）
 - 30d 数据第 4 天起每 2 天注入一组故障，anomaly 演示窗口请选择 1 月 4 日之后以观察到异常样本
 - 错误码：复用全局错误码体系——参数缺失 40001、格式非法 40002、范围越界 40003、服务异常 50001
+
+## 接口 11：预测预览（频谱预测预警 v2）
+
+POST /api/forecast/preview
+
+功能：生成/取得一轮频谱预测（支持频谱曲线 curve / 功率时频 power-time / 占用态势 occupancy 三种视图）。
+**防未来口径（硬约束）**：模型与预警只能使用 `baseTime` 及以前的数据，禁止读取七天 CSV 的未来真值或未来异常标签。
+`history` 为前端当前实际参考范围（可能由用户自定义，不保证总是 60 分钟）；`history.end` 必须等于 `baseTime`。前端不上传完整七天数据，不在切换视图时再次请求。
+
+### 请求
+
+```json
+{
+  "scenario": "校园",
+  "baseTime": "2026-01-02 14:00:00",
+  "history": {"start": "2026-01-02 13:00:00", "end": "2026-01-02 14:00:00"},
+  "horizonMinutes": 30
+}
+```
+
+|参数|类型|必填|说明|
+|---|---|---|---|
+|scenario|string|是|业务场景，如 校园（与 VALID_SCENARIOS 白名单一致）|
+|baseTime|string|是|模拟主时钟或固定查看时刻，格式 yyyy-MM-dd HH:mm:ss；预测与预警只基于该时刻及以前的数据|
+|history|object|是|历史参考范围：{start, end}，end 必须等于 baseTime；前端可自定义，不保证 60 分钟|
+|horizonMinutes|int|否|预测时长分钟，合法范围 1~1440，默认 30（由前端 config.ts 控制）|
+
+### 响应（顶层）
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "id": "fc-20260102-1400-30",
+    "scenario": "校园",
+    "baseTime": "2026-01-02 14:00:00",
+    "history": {"start": "2026-01-02 13:00:00", "end": "2026-01-02 14:00:00"},
+    "forecast": {"start": "2026-01-02 14:00:00", "end": "2026-01-02 14:30:00"},
+    "generatedAt": "2026-01-02 14:00:01",
+    "source": "simulation",
+    "status": "ready",
+    "message": "完成预测，未发现明显风险",
+    "alerts": [],
+    "spectra": [],
+    "impacts": [],
+    "spectrumViews": null
+  }
+}
+```
+
+|字段|类型|说明|
+|---|---|---|
+|id|string|唯一预测 ID：识别场景、基准、历史范围、预测时长、数据/模型版本|
+|scenario / baseTime|string|与请求一致|
+|history|object|与请求的历史起止完全一致|
+|forecast|object|{start=baseTime, end=baseTime+horizonMinutes}|
+|generatedAt|string|结果实际生成时间，可与 baseTime 不同|
+|source|string|simulation 或 measurement；禁止用 demo 冒充真实接口|
+|status|string|ready（完成预测）/ insufficient_data（数据不足）/ unavailable（不可用）；后两者必须返回空的 alerts/spectra/impacts，且省略 spectrumViews 或返回 null，不得夹带过时结论|
+|alerts|array|风险数组，无风险时为空数组|
+|spectra|array|频谱数据数组，功率与占用率为不同记录（metric 区分）|
+|impacts|array|SINR、时延等相关指标预测数组（无网络性能预测能力时可不返回）|
+|spectrumViews|object \| null|无风险时的概览视图组（可选）；含义与 alerts 内 spectrumViews 相同|
+
+### alerts[] 条目
+
+|字段|类型|说明|
+|---|---|---|
+|id|string|风险 ID；同一持续风险保持同一 id 并更新，避免每分钟新增事件|
+|target|string|风险对象（如 AP-02）|
+|title / summary|string|风险标题与摘要|
+|severity|string|high / medium / low|
+|start / end|string|风险时段，必须在 forecast 范围内|
+|spectrumId|string|主关联频谱记录 ID（兼容字段）；非空时必须属于该风险组|
+|bandIds|array|受影响频段 ID 列表（引用 spectrumId 对应频率网格）；无超阈值频段时为空数组|
+|impactId|string|关联的 impacts 指标 ID|
+|spectrumViews|object|{powerId, occupancyId, recommendedView, reason}：powerId 必须指向 metric=power、occupancyId 必须指向 metric=occupancy；缺少数据时相应 ID 为 null；同一组引用的频谱记录必须来自同一 observationId；recommendedView 可为 curve/power-time/occupancy|
+
+> 风险分数不能直接当作发生概率；不提供 spectrumViews 的旧响应仍可用（仅展示 spectrumId 关联的单类指标）。
+
+### spectra[] 条目
+
+|字段|类型|说明|
+|---|---|---|
+|id|string|频谱记录 ID|
+|observationId|string|观测点 ID（AP），同视图组校验用；旧版单图记录可不提供|
+|observationLabel|string|观测点可读标签|
+|metric|string|power 或 occupancy|
+|unit|string|dBm 或 %；占用率色标必须为 0—100，功率色标由后端给定（历史与预测共用）|
+|scale|object|{min, max} 功率量程|
+|bands|array|频段数组，每项 {id, label, lowerMHz, upperMHz}；按频率升序且不重叠，ID 唯一，单位 MHz；**首版最多 128 段**|
+|history|array|历史帧数组，每项 {start, end, values[]}；end ≤ baseTime，按时间升序不重叠，允许缺口|
+|predicted|array|预测帧数组，每项 {start, end, values[]}；start ≥ baseTime；只有历史、没有未来预测也可返回|
+
+> values 按 bands 顺序对应，缺失值用 null（不能用 0 代替）；占用率范围 0—100；帧描述实际采样/统计时段（不把统计区间伪装成精确瞬时测量）。
+> **上限约束：单侧帧数 × 频段数 ≤ 40000**，超出由后端汇总，前端不会静默截断。
+
+### impacts[] 条目
+
+|字段|类型|说明|
+|---|---|---|
+|id / targetLabel / label / unit|string|指标标识、对象标签、名称与单位|
+|history / predicted|array|点数组 {time, value}，时间在各自范围内且升序不重复；缺失 value=null|
+|predicted[].lower / upper|number|可选置信区间，成对提供且 lower ≤ value ≤ upper；无可靠区间则省略|
+|threshold|object|可选阈值 {value, direction: above\|below}，direction 为 above 或 below|
+
+## 接口 12：预测研判（基于同一轮预测，v2）
+
+POST /api/forecast/analyze
+
+功能：根据同一轮预测（forecastId）及风险（alertId）生成文字研判；无风险时 alertId=null 分析整体态势。
+后端按 forecastId 取得同一份预测和截至 baseTime 的历史证据，**不得用请求到达时的系统时间替换 baseTime**。
+
+### 请求
+
+```json
+{
+  "forecastId": "fc-20260102-1400-30",
+  "scenario": "校园",
+  "baseTime": "2026-01-02 14:00:00",
+  "alertId": "risk-ap02-busy",
+  "history": {"start": "2026-01-02 13:00:00", "end": "2026-01-02 14:00:00"},
+  "forecast": {"start": "2026-01-02 14:00:00", "end": "2026-01-02 14:30:00"}
+}
+```
+
+### 响应
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "forecastId": "fc-20260102-1400-30",
+    "baseTime": "2026-01-02 14:00:00",
+    "alertId": "risk-ap02-busy",
+    "source": "llm",
+    "reply": "风险、对象、时段、证据、候选原因、预防方案、预计效果与不确定性的文字描述"
+  }
+}
+```
+
+|字段|类型|说明|
+|---|---|---|
+|forecastId / baseTime / alertId|string|必须与请求一致（alertId 无风险时为 null）|
+|source|string|llm 或 rule|
+|reply|string|普通文字组织：风险、对象时段、证据、候选原因、预防方案、预计效果与不确定性|
+
+错误码：接口 11/12 复用全局错误码体系——参数缺失 40001、格式非法 40002、范围越界 40003、服务异常 50001。
+
+## 频谱数据文件与统计口径（v2，四条锁定口径）
+
+预测预警 v2 的频谱数据文件：`data/spectrum_7d.csv`（7 天版；`--days 3/30` 对应 `spectrum.csv` / `spectrum_30d.csv`）。
+
+### 字段说明（9 字段）
+
+|字段|类型|说明|
+|---|---|---|
+|timestamp|string|1 分钟一帧的时间戳 yyyy-MM-dd HH:mm:ss，与 network_data 同时间轴|
+|observation_id|string|观测点（AP）ID：AP-01 / AP-02 / AP-03|
+|band_id|string|频段 ID：band-0 … band-49（对应 n78 网格）|
+|lower_mhz / upper_mhz|number|频段上下边界 MHz|
+|power_dbm|number|观测点在频段内的接收功率 dBm（非功率谱密度）|
+|occupancy_pct|number|频段在 1 分钟帧内被占用时间比例 %|
+|network_status|string|normal / weak_coverage / congestion；与 network_data_7d_events.csv 逐分钟逐 AP 对齐（含 EV 事件与背景异常标签）|
+|scenario|string|业务场景，如 校园|
+
+### 四条锁定口径
+
+1. **频段固定网格**：5G n78 3300—3800 MHz，10 MHz/段，共 50 段，升序不重叠（首版 ≤128 段上限）。
+2. **history 帧按前端传入窗口**：接口按 `history.start/end`（约 60 分钟）裁剪历史帧，不按 7 天全量返回；单侧帧数 × 频段数 ≤ 40000。
+3. **统计方式**：`power_dbm` 为观测点（AP）在频段内的接收功率，由中心 3550 MHz 高斯包络 + 帧内随机波动生成，**非功率谱密度**（若采用 dBm/Hz 需另行扩展单位和语义）；`occupancy_pct` 占用判定阈值为接收功率 ≥ −95 dBm 视为忙，分母为帧内采样次数（1 分钟 = 60 次 1s 采样）；正常帧 20–55%，拥塞故障帧 85–95%，弱覆盖故障帧 10–30%；约 2% 帧存在背景干扰（数值突降/突升，状态仍为 normal）。
+4. **防未来口径**：模型与预警只用 `baseTime` 及以前的数据，不读取 7 天 CSV 的未来真值或未来异常标签。
+
+> 事件对齐说明（v2.6）：频谱 `network_status` 由生成器 `--events data/network_data_7d_events.csv` 模式逐分钟逐 AP 取自网络事件表（含非整点事件段如 09:44 起），保证预测预警与数据展示故障研判使用同一份事件定义。
+> 数据文件按 `.gitignore` 不入仓库，由数据侧另行转交。

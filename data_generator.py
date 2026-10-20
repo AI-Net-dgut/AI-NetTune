@@ -1,5 +1,5 @@
 """
-仿真数据生成器 v2.4（唐苗数据扩展版，基于程思源 v2.3）
+仿真数据生成器 v2.6（唐苗数据扩展版，基于程思源 v2.3）
 项目：AI-NetTune 多模态无线网络智能监测平台
 设计思路：
 - 固定AP点位 + UE随机位置，模拟用户移动
@@ -18,6 +18,26 @@ v2.4 扩展（唐苗，支持 7/30 天长周期数据集）：
 2. 故障注入按周规律延伸：第4天起每2天一组故障（弱覆盖/拥塞交替、AP轮换），
    保证全周期每天均有异常样本，异常占比与3天版（约8%）持平，供 Prophet/LSTM 训练
 3. 校验逻辑增强：新增按天故障分布统计，确认每天均有异常样本
+v2.5 扩展（唐苗，频谱维度，配合前端预测预警 v2 契约）：
+1. 新增频谱数据生成：输出 data/spectrum[_7d/_30d].csv，
+   字段 timestamp/observation_id/band_id/lower_mhz/upper_mhz/power_dbm/occupancy_pct/network_status/scenario
+2. 频段网格固定为 5G n78（3300-3800 MHz），10 MHz 一段共 50 段，升序不重叠（≤128 上限）
+3. 口径（已与组长确认，需同步 docs/api.md）：
+   - power_dbm：观测点（AP）在该频段的接收功率 dBm，由中心 3550 MHz 高斯包络 + 帧内随机波动生成，
+     非功率谱密度；
+   - occupancy_pct：该频段在 1 分钟统计帧内被占用的时间比例（%），占用判定阈值为接收功率
+     ≥ -95 dBm 视为忙；分母为帧内采样次数（1 分钟 = 60 次 1s 采样，生成时以概率直接抽样）；
+   - 正常帧：占用 20-55%（日内波动）；拥塞故障帧：85-95%；弱覆盖故障帧：10-30%；
+   - 背景干扰：约 2% 帧随机频段功率突降/占用突升，network_status 仍为 normal（模拟未标注干扰）；
+   - 频谱帧同样遵守防未来口径：数据文件只含真实生成的历史序列，接口侧预测只用 baseTime 以前。
+4. 与 network_data 同时间轴（1 分钟一帧 × 3 观测点 × 50 频段 = 150 行/帧）
+v2.6 扩展（唐苗，事件表对齐，修复前端《预测预警问题同步》问题1）：
+1. 新增 --events <events_csv> 参数：频谱 network_status 逐分钟逐 AP 取自网络 events 表
+   （network_data_7d_events.csv），含 EV 事件与背景异常标签，彻底消除双源不一致；
+   未传 --events 时保持 v2.5 的 FAULT_SCHEDULE 注入（3/30 天版）。
+2. 事件段分钟精度跟随网络表（如 09:44 起非整点）；数值联动沿用 v2.5 口径：
+   weak→功率降 15dB + 占用 10-30%；congestion→占用 85-95%（中心加权）+ 功率正常；
+   背景干扰（2%）只叠加在 normal 帧上，避免双重异常。
 扩展说明：
 - 核心字段15个，保持接口契约不变
 - 末尾追加3个辅助字段，用于故障原因深度分析
@@ -61,6 +81,23 @@ BASE_PACKET_LOSS = 0.5         # 基础丢包率 %
 RSRP_WEAK_THRESHOLD = -110     # 弱覆盖阈值 dBm
 PRB_CONGESTION_THRESHOLD = 85  # 拥塞PRB阈值 %
 LOSS_CONGESTION_THRESHOLD = 5  # 拥塞丢包阈值 %
+
+# ---------- 频谱维度配置（v2.5，口径与组长确认：n78 固定网格 / ≤128 段） ----------
+SPECTRUM_BAND_START_MHZ = 3300     # n78 起始频率 MHz
+SPECTRUM_BAND_END_MHZ = 3800       # n78 结束频率 MHz
+SPECTRUM_BAND_WIDTH_MHZ = 10       # 每段带宽 MHz → 50 段（3300-3800），升序不重叠
+SPECTRUM_CENTER_MHZ = 3550.0       # 频谱包络中心频率 MHz
+SPECTRUM_DROP_K = 8.0              # 包络衰减系数：drop(dB)=((f-center)/200)^2*K（边缘落差约12dB）
+SPECTRUM_POWER_BASE_DBM = -60.0    # 包络中心接收功率 dBm（观测点级）
+SPECTRUM_POWER_FLUCT_DB = 1.5      # 正常帧功率随机波动 dB
+POWER_BUSY_THRESHOLD_DBM = -95.0   # 占用判定阈值：接收功率≥此值视为频段忙
+OCC_NORMAL_RANGE = (20.0, 55.0)    # 正常帧占用率区间 %
+OCC_CONGEST_RANGE = (85.0, 95.0)   # 拥塞故障帧占用率区间 %
+OCC_WEAK_RANGE = (10.0, 30.0)      # 弱覆盖故障帧占用率区间 %
+SPECTRUM_NOISE_RATIO = 0.02        # 背景干扰帧比例（模拟未标注干扰，status 保持 normal）
+SPECTRUM_NOISE_BANDS = (3, 8)      # 背景干扰波及的连续频段数
+SPECTRUM_POWER_DROP_DB = 8.0       # 背景干扰功率突降 dB
+SPECTRUM_OCC_RISE = 30.0           # 背景干扰占用率突升百分点（相对正常上限）
 
 # ---------- 故障注入配置（演示用：固定时段制造可复现故障） ----------
 # 每条: (起始时间, 结束时间, 目标AP, 故障类型, 强度)
@@ -108,6 +145,7 @@ MAP_RANGE_Y = (20, 430)        # 用户活动纵向范围 米
 
 # ---------- 输出配置 ----------
 OUTPUT_PATH = "data/network_data.csv"   # 默认输出；--days 7/30 时自动命名 _7d/_30d
+SPECTRUM_OUTPUT_PATH = "data/spectrum.csv"  # v2.5 频谱输出；--days 7/30 时自动命名 _7d/_30d
 OUTPUT_ENCODING = "utf-8-sig"
 
 # ==================================================
@@ -305,31 +343,161 @@ def validate_and_export(df: pd.DataFrame):
     print("=" * 50)
 
 # ==================================================
+# 4.5 频谱数据生成（v2.5：n78 固定网格 + 功率包络 + 占用率，与故障注入联动）
+# ==================================================
+def build_spectrum_bands() -> list:
+    """n78 固定频段网格：3300-3800 MHz，10 MHz/段，共 50 段，升序不重叠（≤128 上限）"""
+    bands = []
+    lo = SPECTRUM_BAND_START_MHZ
+    idx = 0
+    while lo + SPECTRUM_BAND_WIDTH_MHZ <= SPECTRUM_BAND_END_MHZ:
+        hi = lo + SPECTRUM_BAND_WIDTH_MHZ
+        bands.append({"band_id": f"band-{idx}", "lower_mhz": lo, "upper_mhz": hi})
+        lo = hi
+        idx += 1
+    return bands
+
+
+def _spectrum_envelope(band_centers: np.ndarray) -> np.ndarray:
+    """高斯包络：中心 3550 MHz 最高，向两侧按 ((f-3550)/200)^2*K dB 衰减（边缘落差约12dB）"""
+    delta = (band_centers - SPECTRUM_CENTER_MHZ) / 200.0
+    return SPECTRUM_POWER_BASE_DBM - (delta ** 2) * SPECTRUM_DROP_K
+
+
+def generate_spectrum_dataset(total_days: int, fault_schedule: list, events_df=None) -> pd.DataFrame:
+    """逐帧生成频谱数据：每帧 3 观测点(AP) × 50 频段 = 150 行。
+    与 network_data 同时间轴（1 分钟/帧）。
+    v2.6：传入 events_df（网络 events 表）时，逐分钟逐 AP 的 network_status 直接取自
+    该表（含 EV 事件与背景异常标签），数值按状态联动 → 与网络表事件完全一致；
+    未传入时沿用 v2.5 的 FAULT_SCHEDULE 注入（3/30 天版）。
+    口径：power_dbm = 观测点在频段内的接收功率（dBm，非功率谱密度）；
+          occupancy_pct = 频段在 1 分钟帧内被占用时间比例（占用判定 ≥ POWER_BUSY_THRESHOLD_DBM）。
+    """
+    bands = build_spectrum_bands()
+    n_bands = len(bands)
+    band_centers = np.array([(b["lower_mhz"] + b["upper_mhz"]) / 2.0 for b in bands])
+    envelope = _spectrum_envelope(band_centers)
+    aps = sorted(AP_INFO.keys())  # AP-01 / AP-02 / AP-03
+    n_aps = len(aps)
+    total_slots = total_days * 24 * 60  # 1 分钟一帧
+    start = datetime.strptime(START_TIME, "%Y-%m-%d %H:%M:%S")
+
+    # v2.6：预构建 (timestamp, ap_id) → 异常状态 映射（故障优先，首个非 normal）
+    status_map = {}
+    if events_df is not None:
+        for ts, ap, st in events_df[["timestamp", "ap_id", "network_status"]].itertuples(index=False):
+            if st != "normal" and (ts, ap) not in status_map:
+                status_map[(ts, ap)] = st
+        print(f"[v2.6] 已加载网络事件表：异常 (时间,AP) 键 {len(status_map)} 个")
+
+    records = []
+    for i in range(total_slots):
+        ts_str = (start + timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S")
+        fault_ap, fault_type, fault_strength = get_active_fault(ts_str)
+        # 背景干扰：约 2% 帧随机 AP × 连续频段（模拟未标注干扰，status 保持 normal）
+        noise_ap_idx = np.random.randint(0, n_aps) if np.random.rand() < SPECTRUM_NOISE_RATIO else None
+        noise_start = np.random.randint(0, n_bands - SPECTRUM_NOISE_BANDS[1])
+        noise_len = np.random.randint(*SPECTRUM_NOISE_BANDS)
+        for ap_idx, ap_id in enumerate(aps):
+            power_row = envelope + np.random.normal(0, SPECTRUM_POWER_FLUCT_DB, n_bands)
+            occ_row = np.random.uniform(*OCC_NORMAL_RANGE, n_bands)
+            # v2.6：状态源二选一 —— events 表（精确对齐）或 FAULT_SCHEDULE（默认）
+            if events_df is not None:
+                status = status_map.get((ts_str, ap_id), "normal")
+            else:
+                status = "normal"
+                if fault_ap == ap_id:
+                    if fault_type == "weak_coverage":
+                        status = "weak_coverage"
+                    elif fault_type == "congestion":
+                        status = "congestion"
+            # 数值联动（两种状态源共用同一口径）
+            if status == "weak_coverage":
+                power_row -= SPECTRUM_DROP_K + 7.0  # 弱覆盖功率整体下降（约15dB，与网络表弱覆盖深度一致）
+                occ_row = np.random.uniform(*OCC_WEAK_RANGE, n_bands)
+            elif status == "congestion":
+                occ_row = np.random.uniform(*OCC_CONGEST_RANGE, n_bands)
+                occ_row = occ_row - np.abs(band_centers - SPECTRUM_CENTER_MHZ) / 500.0 * 15.0
+                occ_row = np.clip(occ_row, 85.0, 95.0)
+            # 背景干扰只叠加在 normal 帧，避免双重异常（占用率冲顶 100%）难以解释
+            if noise_ap_idx == ap_idx and status == "normal":
+                power_row[noise_start:noise_start + noise_len] -= SPECTRUM_POWER_DROP_DB
+                occ_row[noise_start:noise_start + noise_len] += SPECTRUM_OCC_RISE
+                occ_row = np.clip(occ_row, 0.0, 100.0)
+            for b_idx, b in enumerate(bands):
+                records.append({
+                    "timestamp": ts_str,
+                    "observation_id": ap_id,
+                    "band_id": b["band_id"],
+                    "lower_mhz": b["lower_mhz"],
+                    "upper_mhz": b["upper_mhz"],
+                    "power_dbm": round(float(power_row[b_idx]), 2),
+                    "occupancy_pct": round(float(occ_row[b_idx]), 2),
+                    "network_status": status,
+                    "scenario": SCENE_NAME,
+                })
+    return pd.DataFrame(records)
+
+
+def validate_and_export_spectrum(df: pd.DataFrame):
+    print("=" * 50)
+    print("频谱数据生成完成（v2.5）")
+    print(f"总记录数：{len(df)}")
+    print(f"字段数量：{len(df.columns)}")
+    # 频段网格校验：升序不重叠
+    bands = df[["band_id", "lower_mhz", "upper_mhz"]].drop_duplicates().sort_values("lower_mhz")
+    overlap = (bands["lower_mhz"].values[1:] < bands["upper_mhz"].values[:-1]).any()
+    print(f"频段数：{len(bands)}（上限 128）；升序不重叠：{not overlap}")
+    # 取值范围校验
+    print(f"power_dbm 范围：[{df['power_dbm'].min()}, {df['power_dbm'].max()}] dBm")
+    print(f"occupancy_pct 范围：[{df['occupancy_pct'].min()}, {df['occupancy_pct'].max()}] %")
+    bad_occ = ((df["occupancy_pct"] < 0) | (df["occupancy_pct"] > 100)).sum()
+    print(f"占用率越界记录数：{bad_occ}")
+    # 帧级状态分布
+    n_frames = df["timestamp"].nunique()
+    status_count = df.drop_duplicates(["timestamp", "observation_id"])["network_status"].value_counts().to_dict()
+    print(f"观测帧数：{n_frames}；帧状态分布（按观测点帧）：{status_count}")
+    df.to_csv(SPECTRUM_OUTPUT_PATH, index=False, encoding=OUTPUT_ENCODING)
+    print(f"文件已导出：{SPECTRUM_OUTPUT_PATH}")
+    print("=" * 50)
+
+# ==================================================
 # 5. 程序入口
 # ==================================================
 def parse_args():
-    """命令行参数：--days 生成天数(3/7/30)，--output 自定义输出路径"""
-    parser = argparse.ArgumentParser(description="AI-NetTune 仿真数据生成器 v2.4")
+    """命令行参数：--days 生成天数(3/7/30)，--output 自定义输出路径，--events 网络事件表对齐"""
+    parser = argparse.ArgumentParser(description="AI-NetTune 仿真数据生成器 v2.6")
     parser.add_argument("--days", type=int, default=3, choices=[3, 7, 30],
                         help="生成总天数（3/7/30），默认3")
     parser.add_argument("--output", type=str, default=None,
                         help="自定义输出路径，默认按天数自动命名")
+    parser.add_argument("--events", type=str, default=None,
+                        help="网络事件表CSV（如 data/network_data_7d_events.csv）：频谱状态逐分钟对齐该表")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    global TOTAL_DAYS, OUTPUT_PATH, FAULT_SCHEDULE
+    global TOTAL_DAYS, OUTPUT_PATH, FAULT_SCHEDULE, SPECTRUM_OUTPUT_PATH
     TOTAL_DAYS = args.days
     if args.output:
         OUTPUT_PATH = args.output
     else:
         suffix = {3: "", 7: "_7d", 30: "_30d"}.get(args.days, "")
         OUTPUT_PATH = f"data/network_data{suffix}.csv"
+        SPECTRUM_OUTPUT_PATH = f"data/spectrum{suffix}.csv"
     FAULT_SCHEDULE = build_fault_schedule(TOTAL_DAYS)  # 按天数延伸故障时间表
-    print(f"[v2.4] 生成 {TOTAL_DAYS} 天数据，故障注入 {len(FAULT_SCHEDULE)} 条 → {OUTPUT_PATH}")
+    print(f"[v2.6] 生成 {TOTAL_DAYS} 天数据，故障注入 {len(FAULT_SCHEDULE)} 条 → {OUTPUT_PATH}")
     dataset = generate_dataset()
     validate_and_export(dataset)
+
+    # v2.5/v2.6：同步生成频谱数据（n78 网格；--events 时与网络事件表精确对齐，供预测预警 v2 契约）
+    events_df = None
+    if args.events:
+        events_df = pd.read_csv(args.events)
+        print(f"[v2.6] 频谱状态源 = 网络事件表 {args.events}（{len(events_df)} 行）")
+    spectrum = generate_spectrum_dataset(TOTAL_DAYS, FAULT_SCHEDULE, events_df=events_df)
+    validate_and_export_spectrum(spectrum)
 
     # 如果不需要校验，把上面 validate_and_export 一行替换成下面这行即可
     # dataset.to_csv(OUTPUT_PATH, index=False, encoding=OUTPUT_ENCODING)
