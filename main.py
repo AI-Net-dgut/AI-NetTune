@@ -725,12 +725,64 @@ def tool_topology(scenario: str, win_start: str | None = None, win_end: str | No
             "detail": {"node_count": len(nodes), "link_count": len(links), "scenario": scenario},
             "query_ref": {"scenario": scenario, "start_time": win_start, "end_time": win_end}}
 
+# ---- 工具5：未来预测（复用 forecast_preview，把预警拼成自然语言） ----
+def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:
+    """AI对话问"未来会怎样"时调用：以对话窗口末尾为基准时刻，跑一次预测，把预警拼成人话。"""
+    win_end = win_end or TOOL_WINDOW_END
+    try:
+        base_dt = datetime.strptime(win_end, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return {"reply": "暂无法确定当前时刻，预测不可用。",
+                "intent": "forecast", "chart": None, "query_ref": {"scenario": scenario}}
+    # 频谱数据只到 01-07，若对话窗口末尾超出范围，回退到频谱最新时刻作基准
+    if _SPEC["max_ts"] is not None:
+        max_dt = _SPEC["max_ts"] if isinstance(_SPEC["max_ts"], datetime) \
+            else datetime.strptime(str(_SPEC["max_ts"]), "%Y-%m-%d %H:%M:%S")
+        if base_dt > max_dt:
+            base_dt = max_dt
+            win_end = max_dt.strftime("%Y-%m-%d %H:%M:%S")
+    hist_start = (base_dt - timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        req = ForecastPreviewRequest(
+            scenario=scenario, baseTime=win_end,
+            history=_TimeRange(start=hist_start, end=win_end),
+            horizonMinutes=30,
+        )
+        resp = forecast_preview(req)
+        data = resp.get("data", {})
+    except Exception as e:
+        return {"reply": f"预测模块暂时不可用：{e}",
+                "intent": "forecast", "chart": None, "query_ref": {"scenario": scenario}}
+
+    status = data.get("status")
+    if status == "insufficient_data":
+        return {"reply": "当前时刻超出频谱数据覆盖范围（2026-01-01~01-07），暂无法预测。",
+                "intent": "forecast", "chart": None,
+                "query_ref": {"scenario": scenario, "end_time": win_end}}
+
+    alerts = data.get("alerts", [])
+    if not alerts:
+        reply = (f"以 {win_end} 为基准，未来30分钟内未发现明显网络风险，"
+                 f"各AP负载与覆盖处于正常区间。如需查看详细频谱，可打开右上角「预测预警」面板。")
+    else:
+        sev_text = {"high": "高风险", "medium": "中风险", "low": "低风险"}
+        lines = [f"以 {win_end} 为基准，未来30分钟内发现 {len(alerts)} 项风险："]
+        for i, a in enumerate(alerts, 1):
+            lines.append(f"  {i}. [{sev_text.get(a['severity'], a['severity'])}] {a['title']}：{a['summary']}")
+        lines.append("建议打开「预测预警」面板查看频谱热力图，并点击「交给AI详细研判」获取处置方案。")
+        reply = "\n".join(lines)
+
+    return {"reply": reply, "intent": "forecast", "chart": None,
+            "detail": {"alert_count": len(alerts), "status": status},
+            "query_ref": {"scenario": scenario, "end_time": win_end}}
+
 # ---- Function Calling 工具注册表：意图名 → 工具函数（新增工具在这里登记即可） ----
 TOOLS = {
     "query_kpi": tool_query_kpi,
     "fault_diagnosis": tool_fault_diagnosis,
     "get_heatmap": tool_heatmap,
     "get_topology": tool_topology,
+    "forecast": tool_forecast,
 }
 
 

@@ -24,6 +24,7 @@ BLACKLIST_PATTERNS = [
 # 白名单：按优先级分层匹配工具意图（明确的指令词优先，避免宽泛词抢意图）
 HEATMAP_PATTERNS = ["热力", "信号分布", "覆盖图", "覆盖热", "地图"]
 TOPOLOGY_PATTERNS = ["拓扑", "基站", "连接关系", "连接情况"]
+FORECAST_PATTERNS = ["预测", "未来", "预警", "将来", "预防", "会怎样", "会不会", "接下来", "之后会"]
 ANOMALY_PATTERNS = [
     "异常", "故障", "卡", "掉线", "拥塞", "弱", "覆盖问题", "信号差", "网络差",
     "质量差", "体验差", "不好", "不稳定", "分析问题", "分析原因", "有问题",
@@ -31,11 +32,12 @@ ANOMALY_PATTERNS = [
 
 # ===== 结构化 JSON Prompt（cell-free build_unified_prompt 借鉴：强制固定 JSON 输出，一次调用完成分类+抽参）=====
 SYSTEM_PROMPT = """你是无线网络监测平台的意图解析器。用户输入一句关于网络监测的自然语言，请判断意图并提取参数，只输出一个 JSON，不要输出任何其他文字、注释或解释：
-{"action": "query_kpi | fault_diagnosis | get_heatmap | get_topology | chat", "scenario": "校园|商场|体育馆", "params": {...}, "confidence": 0-1}
+{"action": "query_kpi | fault_diagnosis | get_heatmap | get_topology | forecast | chat", "scenario": "校园|商场|体育馆", "params": {...}, "confidence": 0-1}
 - query_kpi：查KPI数据。params 含 metric(rsrp/sinr/throughput)、time_range(如"最近1小时"、"12:34到12:50")
 - fault_diagnosis：故障研判。用户询问网络体验/质量/好坏/是否正常/分析原因/拥塞/信号差等问题时，优先选本意图
 - get_heatmap：热力图。params 含 metric(默认rsrp)
 - get_topology：网络拓扑
+- forecast：未来预测/预警。用户问"未来/预测/接下来/会怎样/会不会出问题"时选本意图
 - chat：闲聊/无法判断。params 含 reply(你的简短回答)
 规则：
 1. scenario 必须从用户输入提取，没提到就用空字符串""
@@ -196,6 +198,8 @@ def rule_intent(message: str) -> dict:
         return {"intent": "get_heatmap", "params": params, "hit": True}
     if any(k in message for k in TOPOLOGY_PATTERNS):
         return {"intent": "get_topology", "params": params, "hit": True}
+    if any(k in message for k in FORECAST_PATTERNS):
+        return {"intent": "forecast", "params": params, "hit": True}
     if any(k in message for k in ANOMALY_PATTERNS):
         return {"intent": "fault_diagnosis", "params": params, "hit": True}
     return {"intent": "query_kpi", "params": params, "hit": False}
