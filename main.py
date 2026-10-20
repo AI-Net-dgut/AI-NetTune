@@ -1248,10 +1248,13 @@ def forecast_preview(req: ForecastPreviewRequest):
             ref = avg_power if metric == "power" else avg_occ
             frames = []
             t = base_dt
-            for _ in range(int(req.horizonMinutes)):
+            for minute_idx in range(int(req.horizonMinutes)):
+                # 确定性分钟级微扰±1dB：同分钟值稳定不抖，避免预测区呈现纯色块
+                jitter = 1.0 if minute_idx % 2 == 0 else -1.0
                 frames.append({
                     "start": fmt(t), "end": fmt(t + timedelta(minutes=1)),
-                    "values": [round(ref[b["band_id"]], 2) if ref[b["band_id"]] is not None else None
+                    "values": [round((ref[b["band_id"]] or 0) + jitter, 2)
+                               if ref[b["band_id"]] is not None else None
                                for b in bands],
                 })
                 t += timedelta(minutes=1)
@@ -1286,7 +1289,8 @@ def forecast_preview(req: ForecastPreviewRequest):
                     "severity": _sev(n_cong),
                     "start": fmt(base_dt), "end": fmt(fore_end),
                     "spectrumId": f"{ap}-occupancy", "impactId": None,
-                    "bandIds": [b["band_id"] for b in bands],
+                    "bandIds": [b["band_id"] for b in bands
+                                if avg_occ.get(b["band_id"]) is not None and avg_occ[b["band_id"]] > 85][:5],
                 })
             if n_weak >= max(2, n_recent * 0.1):
                 alerts.append({
@@ -1297,7 +1301,8 @@ def forecast_preview(req: ForecastPreviewRequest):
                     "severity": _sev(n_weak),
                     "start": fmt(base_dt), "end": fmt(fore_end),
                     "spectrumId": f"{ap}-power", "impactId": None,
-                    "bandIds": [b["band_id"] for b in bands],
+                    "bandIds": [b["band_id"] for b in bands
+                                if avg_power.get(b["band_id"]) is not None and avg_power[b["band_id"]] < -95][:5],
                 })
 
     # impacts：SINR/吞吐从主网络数据按分钟聚合，预测=末值±10%
