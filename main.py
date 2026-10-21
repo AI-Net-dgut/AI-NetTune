@@ -19,6 +19,7 @@ import forecast_model as _fm
 from forecast_model import build_series, DEFAULT_METRICS
 import spatial_model as _sm
 from spatial_model import build_spatial
+import plan_model
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
@@ -559,6 +560,25 @@ def analyze_anomaly(req: AnomalyRequest):
                 })
     alarm_history = alarm_history[:50]
 
+    # 5) 处理方案与对比仿真（闭环里的"方案制定"）：按主异常 AP 生成候选方案。
+    #    仿真失败不影响研判本身，所以整体包在 try 里并只打印告警。
+    plans = []
+    try:
+        if is_anomaly and anomaly_type in ("覆盖故障", "网络拥塞", "边缘弱用户"):
+            plan_ap = m.get("ap_id")
+            plan_rows = by_ap.get(plan_ap, [])
+            if plan_ap and plan_rows:
+                plans = plan_model.build_plans(
+                    plan_ap, anomaly_type, plan_rows,
+                    {"scenario": req.scenario, "start": req.window_start, "end": req.window_end},
+                    {"tilt": 8, "power": 33},
+                )
+                for p in plans:
+                    _remember_plan(p)
+    except Exception as exc:
+        print(f"[Main] 方案生成失败（不影响研判）：{exc}")
+        plans = []
+
     return {
         "code": 0,
         "message": "success",
@@ -577,8 +597,69 @@ def analyze_anomaly(req: AnomalyRequest):
             "hourly_trend": hourly_trend,        # 新增：小时级趋势
             "ap_comparison": ap_comparison,      # 新增：多AP横向对比
             "alarm_history": alarm_history,      # 新增：告警历史
+            "plans": plans,                      # 新增：处理方案 + 对比仿真（闭环"方案制定"）
         },
     }
+
+
+# ============ 接口14：方案对比仿真（改参数后重算预计效果） ============
+# 方案在 /api/analyze/anomaly（及对话结果）里已经带了一份按建议值算好的 simulation；
+# 这个接口用于"用户改了参数后重新评估"，逻辑完全复用 plan_model.simulate。
+_PLAN_CACHE = {}
+_PLAN_CACHE_LIMIT = 200
+
+
+def _remember_plan(plan):
+    """记住已生成的方案，供 /api/plan/simulate 反查参数定义。
+
+    方案 id 按 (AP, 故障类型, 序号) 生成，重复研判会覆盖同一条，所以缓存不会无限膨胀；
+    仍然加一个上限，避免长期运行累积（教训来自 _FORECAST_CACHE）。
+    """
+    if len(_PLAN_CACHE) >= _PLAN_CACHE_LIMIT:
+        for key in list(_PLAN_CACHE)[:50]:
+            _PLAN_CACHE.pop(key, None)
+    _PLAN_CACHE[plan["id"]] = plan
+
+
+class PlanSimulateRequest(BaseModel):
+    plan_id: str
+    scenario: str
+    window_start: str
+    window_end: str
+    ap_id: str | None = None
+    parameter_values: dict[str, str | float] = {}
+
+
+@app.post("/api/plan/simulate", summary="接口14：方案对比仿真（改参数后重算预计效果）")
+def plan_simulate(req: PlanSimulateRequest):
+    """按用户修改后的参数值重算"保持原配置 vs 采用方案"的指标对比。
+
+    约定：
+      * 只接受**本进程生成过**的 plan_id（缓存命中）；否则提示重新研判，不做猜测性仿真；
+      * 参数在服务端按方案定义再夹一次范围，非法值不会算进结论；
+      * 返回结构与方案内自带的 simulation 完全一致，前端可直接替换展示。
+    """
+    plan = _PLAN_CACHE.get(req.plan_id)
+    if plan is None:
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            "方案已过期（可能服务已重启），请重新发起一次研判后再仿真")
+
+    if req.scenario not in VALID_SCENARIOS:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "scenario仅支持" + "/".join(VALID_SCENARIOS))
+    if req.window_start > req.window_end:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "起始时间不能晚于结束时间")
+
+    ap_id = req.ap_id or plan["objectIds"][0]
+    rows = [r for r in filter_rows(req.scenario, req.window_start, req.window_end)
+            if r["ap_id"] == ap_id]
+    if not rows:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"{ap_id} 在该窗口没有采样，无法做同条件对比")
+
+    scope = {"scenario": req.scenario, "start": req.window_start, "end": req.window_end}
+    return success_response(plan_model.simulate(plan, rows, req.parameter_values or {}, scope, ap_id))
 
 # ============ 接口3：自然语言对话（统一规则源：llm_agent.rule_intent → LLM 增强 → 工具注册表分发） ============
 class ChatRequest(BaseModel):
@@ -752,8 +833,11 @@ def tool_fault_diagnosis(scenario: str, win_start: str | None = None, win_end: s
         },
     }
     return {"reply": reply, "intent": "fault_diagnosis", "chart": chart,
-            "detail": d, "query_ref": {"scenario": scenario,
-                                       "start_time": win_start, "end_time": win_end}}
+            "detail": d,
+            # 方案放在对话结果的顶层：前端 services/backend.ts 读的是 data.plans
+            "plans": d.get("plans", []),
+            "query_ref": {"scenario": scenario,
+                          "start_time": win_start, "end_time": win_end}}
 
 # ---- 工具3：热力图（真实：按 UE 坐标网格聚合 RSRP，ECharts heatmap 直接渲染） ----
 def tool_heatmap(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:

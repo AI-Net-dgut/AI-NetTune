@@ -53,3 +53,8 @@ export function parsePlans(v: unknown, expected: QueryScope): TreatmentPlan[] {
       conditions: strings(p.conditions), tradeoffs: strings(p.tradeoffs), tasks: strings(p.tasks), parameters, simulation: simulation(p.simulation, ownScope) }];
   });
 }
+
+/** 解析"改参数后重算"返回的单个仿真结果（供 /api/plan/simulate 复用同一套校验）。 */
+export function parseSimulation(v: unknown, expected: QueryScope): SimulationResult | null {
+  return simulation(v, expected);
+}

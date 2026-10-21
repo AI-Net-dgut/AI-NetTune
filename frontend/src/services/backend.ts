@@ -1,4 +1,5 @@
-import { parsePlans } from "./planContract";
+import { parsePlans, parseSimulation } from "./planContract";
+import type { SimulationResult, TreatmentPlan } from "../types/plan";
 import type {
   QueryScope,
   MetricRecord,
@@ -256,6 +257,17 @@ export async function analyzeNetwork(scope: QueryScope, signal?: AbortSignal): P
   validateScope(scope);
   const data = await request("/analyze/anomaly", signal, { scenario: scope.scenario, window_start: scope.start, window_end: scope.end, metrics: ["rsrp", "sinr", "throughput", "prb_usage", "packet_loss"] });
   return parseDiagnosis(data, scope);
+}
+/** 用用户修改后的参数重算"原配置 vs 方案"的预计效果（接口14）。 */
+export async function simulatePlan(scope: QueryScope, plan: TreatmentPlan, values: Record<string, string>,
+  apId: string, signal?: AbortSignal): Promise<SimulationResult | null> {
+  validateScope(scope);
+  const data = await request("/plan/simulate", signal, {
+    plan_id: plan.id, scenario: scope.scenario,
+    window_start: scope.start, window_end: scope.end,
+    ap_id: apId, parameter_values: values,
+  });
+  return parseSimulation(data, scope);
 }
 export async function chatNetwork(message: string, scenario: string, window?: QueryScope, signal?: AbortSignal, currentTime?: string): Promise<ChatResult> {
   const data = await request("/agent/chat", signal, {

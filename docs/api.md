@@ -20,6 +20,7 @@ Base URL: http://localhost:8000
 |11|POST|/api/forecast/preview|预测预览（频谱预测预警 v2，baseTime 防未来）|
 |12|POST|/api/forecast/analyze|预测研判（基于同一轮预测的文字分析，v2）|
 |13|GET|/api/health|部署自检（数据文件/依赖/大模型就绪状态，不依赖数据文件、永远可访问）|
+|14|POST|/api/plan/simulate|方案对比仿真（改参数后在同一窗口重算"原配置 vs 方案"）|
 
 ## 通用响应格式
 成功: {"code": 0, "message": "success", "data": {...}}
@@ -868,3 +869,98 @@ POST /api/forecast/analyze
 - 启动时后端还会打印一份等价的「启动自检」横幅到控制台。
 - 命令行自检（更详细，含逐文件 SHA256 与两表重叠检查）：`python scripts/doctor.py`。
 - 环境变量与数据交付方式见 `DEPLOY.md` 与 `data/README.md`。
+
+## 接口 14：方案对比仿真（POST /api/plan/simulate）
+
+功能：用户改完方案参数后，在**同一时间窗口、同一批采样点**上重算"保持原配置 vs 采用方案"的指标对比。
+对应闭环里的"方案制定 — 动态调整"一环。
+
+### 方案从哪来
+
+`POST /api/analyze/anomaly`（接口 2）与 `POST /api/agent/chat`（接口 3，`fault_diagnosis` 意图）的响应里新增 `plans[]`：
+
+|字段|类型|说明|
+|---|---|---|
+|id|string|方案 ID，形如 `PLAN-AP-02-tilt-1`；接口 14 用它反查参数定义|
+|name / description|string|方案名与说明|
+|scope|object|`{scenario, start, end}`，必须与研判范围一致|
+|objectIds|string[]|作用对象（当前单个 AP）|
+|goals|string[]|目标指标，取值同前端 `METRIC_META`（rsrpDbm / sinrDb / throughputMbps / resourceUtilizationPct …）|
+|conditions / tradeoffs / tasks|string[]|适用条件、代价与限制、需要人工执行的任务|
+|parameters|array|可编辑参数：`{id, objectId, key, label, description, type: number\|enum, unit, currentValue, suggestedValue, editable, min, max, step, options[]}`|
+|simulation|object|按 `suggestedValue` 算好的仿真结果，结构同接口 14 的响应|
+
+> 只有"覆盖故障 / 网络拥塞 / 边缘弱用户"才产出方案；判为"正常"时 `plans` 为空数组。
+> 旧前端不受影响：没有 `plans` 时沿用本地 `fallbackPlan`。
+
+### 接口 14 请求
+
+```json
+{
+  "plan_id": "PLAN-AP-02-tilt-1",
+  "scenario": "校园",
+  "window_start": "2026-01-01 10:00:00",
+  "window_end": "2026-01-01 11:59:59",
+  "ap_id": "AP-02",
+  "parameter_values": { "tilt": 2 }
+}
+```
+
+### 接口 14 响应（`data`）
+
+```json
+{
+  "id": "SIM-PLAN-AP-02-tilt-1",
+  "status": "completed",
+  "scope": { "scenario": "校园", "start": "2026-01-01 10:00:00", "end": "2026-01-01 11:59:59" },
+  "method": "经验系数外推（非信道模型）：参数改动折算为指标偏移，逐样本叠加后在同一窗口重算",
+  "summary": "下调天线下倾角： RSRP -115.56 → -108.36 dBm（+7.2）；弱覆盖样本占比 89% → 68%；吞吐 5.95 → 7.23 Mbps（+22%）。",
+  "assumptions": ["对比双方使用同一时间窗口、同一批采样点，只有配置参数不同", "..."],
+  "limitations": ["经验系数来自工程经验，不是本场景实测标定", "..."],
+  "parameterValues": { "tilt": 2 },
+  "metrics": [{ "key": "rsrpDbm", "objectId": "AP-02", "before": -115.56, "after": -108.36 }],
+  "trend": { "metric": "rsrpDbm", "objectId": "AP-02",
+             "points": [{ "time": "2026-01-01T10:00:00+08:00", "before": -78.2, "after": -74.6 }] },
+  "coverage": { "area": { "xMin": 0, "yMin": 0, "xMax": 500, "yMax": 450 },
+                "cellSize": { "x": 20, "y": 20 },
+                "points": [{ "x": 30, "y": 30, "before": -92.1, "after": -88.5 }] }
+}
+```
+
+### 仿真口径（务必如实表述）
+
+|环节|做法|
+|---|---|
+|参数 → 指标偏移|**经验系数**折算，**不使用信道/传播模型**（与"Model-free"口径一致）|
+|前后对比|把偏移**逐样本**叠加到同一窗口的真实采样上，再重新统计均值/弱覆盖占比|
+|覆盖对比|20 m 网格上的 RSRP 前后对比，只输出有采样的格子|
+|趋势对比|10 分钟桶的 RSRP 前后序列（时间带 `+08:00` 偏移）|
+
+经验系数（`plan_model.py` 顶部常量，可调）：
+
+|参数|系数|
+|---|---|
+|天线下倾角|每减小 1°，RSRP +1.2 dB|
+|发射功率 / 波束增益|每 +1 dB，RSRP +1 dB|
+|RSRP → SINR|每 +1 dB RSRP，SINR +0.4 dB|
+|RSRP → 吞吐|每 +1 dB RSRP，吞吐 +3%|
+|分流比例|每分流 1%，本区 PRB −0.8 个百分点|
+|扩容|新增 1 载波，PRB −18 个百分点|
+|PRB → 吞吐|PRB 每降 1 个百分点，吞吐 +2%|
+|PRB → 时延 / 丢包|PRB 每降 1 个百分点，时延 −0.4%、丢包 −2%|
+
+### 错误码
+
+|场景|code|message|
+|---|---|---|
+|plan_id 不在本进程缓存（服务重启/方案过期）|40002|方案已过期（可能服务已重启），请重新发起一次研判后再仿真|
+|scenario 不在白名单|40002|scenario仅支持…|
+|start 晚于 end|40003|起始时间不能晚于结束时间|
+|该窗口该 AP 无采样|40002|AP-xx 在该窗口没有采样，无法做同条件对比|
+
+### 限制（必须知道）
+
+- 参数值在服务端按方案定义**再夹一次范围**，非法值不会算进结论；但前端仍应先校验再提交。
+- 方案缓存为进程内字典（上限 200 条，满后按 FIFO 淘汰 50 条），**服务重启后旧 plan_id 失效**。
+- 天线下倾角 / 发射功率的"当前值"是默认工参（数据表没有工参字段），已在 `assumptions` 里写明。
+- 未评估对邻区的连带影响与切换冲击，`limitations` 里已写明。
