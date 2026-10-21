@@ -26,8 +26,14 @@ export default function ForecastDialog({ request, result, pending, error, onClos
   const globalImpact = globalImpacts.find(s => s.id === globalMetric) ?? globalImpacts[0];
   const impact = linkedImpact ?? (alert ? globalImpact : globalImpact ?? result?.impacts[0]);
   const globalOnly = Boolean(result?.integrationNotice && !linkedImpact && impact?.targetLabel === "全网");
+  // 这里必须保留手动 memo：弹窗每秒跟随主时钟重渲染（currentTime 变化），
+  // 每次重建 ECharts option 会让图表反复 setOption。result/impact 来自 props，
+  // 只会被整体替换、不会被就地修改，依赖是安全的。
+  // 用区块禁用而不是 disable-next-line：该规则报在依赖数组那一行，不在 const 声明行。
+  /* eslint-disable react-hooks/preserve-manual-memoization -- 依赖对象不会被就地 mutate，见上 */
   const trend = useMemo(() => result && impact && [...impact.history, ...impact.predicted].some(p => p.value !== null)
     ? forecastTrendOption(result, impact) : null, [result, impact]);
+  /* eslint-enable react-hooks/preserve-manual-memoization */
   const demo = result?.source === "demo";
   const noRiskToReview = Boolean(result && (request.targetWindow || result.integrationNotice) && !scopedAlerts.length);
   const horizons = [...new Set<number>([...FORECAST_HORIZONS, request.horizonMinutes])].sort((a, b) => a - b);

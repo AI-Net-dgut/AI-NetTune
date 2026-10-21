@@ -250,7 +250,7 @@ async function fetchJson(
     return await response.json();
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error("请求超时，请稍后重试。");
+      throw new Error("请求超时，请稍后重试。", { cause: error });
     }
 
     throw error instanceof Error

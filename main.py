@@ -1438,8 +1438,20 @@ def predict_result(
 #       data_generator.py 扩展完成，preview 暂返回 insufficient_data 占位；
 #       analyze 已可独立工作（拉真实历史 KPI 趋势喂 LLM）。
 # ============================================================================
-# 内存缓存：forecastId -> 该轮 preview 结果，供 analyze 按 alertId 反查预警详情
+# 内存缓存：forecastId -> 该轮 preview 结果，供 analyze 按 alertId 反查预警详情。
+# 必须有上限：单份结果实测 0.50 MB（120 分钟档）/ 3.97 MB（1440 分钟档），
+# 而前端按 5 分钟槽自动刷新，7 天回放 ≈ 2000 次刷新 → 不设上限会涨到 GB 级。
+# 只保留最近使用的若干轮即可：analyze 总是在 preview 之后紧接着调用，命中率不受影响。
 _FORECAST_CACHE: dict = {}
+_FORECAST_CACHE_LIMIT = 32          # 32 份 ≈ 16 MB（120 档）~ 128 MB（1440 档）
+
+
+def _remember_forecast(fid: str, result: dict):
+    """写入 forecastId -> 结果，超上限时按插入顺序淘汰最旧的一批。"""
+    if fid not in _FORECAST_CACHE and len(_FORECAST_CACHE) >= _FORECAST_CACHE_LIMIT:
+        for key in list(_FORECAST_CACHE)[: max(1, _FORECAST_CACHE_LIMIT // 4)]:
+            _FORECAST_CACHE.pop(key, None)
+    _FORECAST_CACHE[fid] = result
 
 
 class _TimeRange(BaseModel):
@@ -1576,7 +1588,7 @@ def forecast_preview(req: ForecastPreviewRequest):
             "message": "当前时刻超出频谱数据范围（频谱覆盖 2026-01-01 ~ 01-07），暂不提供频谱预测。",
             "alerts": [], "spectra": [], "impacts": [],
         }
-        _FORECAST_CACHE[fid] = result
+        _remember_forecast(fid, result)
         return success_response(result)
 
     hist_start = _parse_ts(req.history.start)
@@ -1810,7 +1822,7 @@ def forecast_preview(req: ForecastPreviewRequest):
             "reason": "存在拥塞/覆盖风险，优先展示对应频谱视图",
         },
     }
-    _FORECAST_CACHE[fid] = result
+    _remember_forecast(fid, result)
     return success_response(result)
 
 

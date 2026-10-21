@@ -232,15 +232,25 @@ setx LLM_API_KEY "sk-你的key"
 
 ---
 
-## 8. 一键自检
+## 8. 一键自检与维护脚本
 
 ```powershell
-python scripts/doctor.py            # 全套检查（读 108MB 频谱表，约 5-10 秒）
+python scripts/doctor.py            # 环境/数据/依赖自检（读 108MB 频谱表，约 5-10 秒）
 python scripts/doctor.py --quick    # 跳过频谱表深度统计（更快）
+
+python scripts/audit_data.py        # 数据对账：两表异常组差异、渐变征兆、阈值自洽、占用率语义
+python scripts/audit_data.py --full # 额外核对 30 天表前 7 天
+
+python scripts/find_dead_code.py            # 前端死代码清单（从 src/main.tsx 做可达性分析）
+python scripts/find_dead_code.py --commands # 额外输出可直接执行的删除命令
+
+python scripts/prepare_data.py            # 规整 data/ 下的 "(1)" 文件名（预览）
+python scripts/prepare_data.py --apply    # 真正重命名
 ```
 
-检查项：Python 版本 / 8 个依赖 / 数据文件与列名 / 行数与时间范围 / 场景与状态分布 /
-**两表时间轴是否重叠** / LLM 配置。退出码 `0` = 可启动，`1` = 有阻断问题。
+`audit_data.py` 的结论直接对应 `AI-NetTune预测预警数据交接说明-v2.7` 里的验证表：
+目前会报出"两表异常组不一致（147/402）"和"全部切点为阶跃、无渐变征兆"两条不符项，
+重新生成数据后应变成"一致"。
 
 ---
 

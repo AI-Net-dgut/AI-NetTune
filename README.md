@@ -191,6 +191,8 @@ AI-NetTune/
 ├── DEPLOY.md          # 部署手册：数据准备 / 环境变量 / 反向代理 / 故障排查
 ├── scripts/
 │   ├── doctor.py      # 部署自检（Python/依赖/数据/时间轴/LLM）
+│   ├── audit_data.py  # 数据对账（两表异常组/渐变征兆/阈值自洽/占用率语义）
+│   ├── find_dead_code.py # 前端死代码分析（可达性扫描 + 删除命令）
 │   └── prepare_data.py # 规整 data/ 下的 "(1)" 文件名
 ├── data/              # 数据文件（.gitignore 忽略大文件，仅保留 README.md）
 │   ├── README.md              # 数据交付清单（大小 / SHA256 / 时间范围）
