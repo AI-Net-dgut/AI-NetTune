@@ -10,6 +10,24 @@
 | `network_data_7d.csv` | 30,240 × 18 | 3.4 MB | `5BFD190C338802D1F903A628EAD1A8B37CFBEEF5BD9A4B0FC3F12FEAD4031019` |
 | `network_data_30d.csv` | 129,600 × 18 | 14.6 MB | `F20F798EACDEC1E7ED25441BC8EC0E49ABC8A838A539326CDF6262BAA243F24C` |
 | `spectrum_7d.csv` | 1,512,000 × 9 | 103.5 MB | `255BDDE7BB7962FC8F6E5CA28FD8FFBC37E12369906A79AA64D2339E2AFABAFE` |
+| `fault_events.csv` | 8 × 9 | 1 KB | 见下（内容随故障时间表变化，不固定哈希） |
+
+**`fault_events.csv` 是"事件"的单一事实来源**（v2.8 新增，补上审查报告 D-2）：
+
+| 列 | 说明 |
+|---|---|
+| `event_id` | EV-001 起顺序编号 |
+| `scenario` | 场景（当前只有「校园」） |
+| `ap_id` | 涉及 AP |
+| `fault_type` | `weak_coverage` / `congestion` |
+| `start_time` / `end_time` | 事件起止（绝对时间，与 seed 无关） |
+| `ramp_minutes` | 渐入/渐出分钟数（当前 20） |
+| `strength` | 弱覆盖=额外衰减 dB；拥塞=目标 PRB % |
+| `labeled_from_expect` | 说明"何时才会打上异常标签"：渐变期未达阈值时标签仍为 normal |
+
+> 此前该文件从未生成，`EV-001~004` 只存在于交接文档正文里；前端
+> `CASE_WINDOWS` 的案例起点是手写时间戳，改数据即失效。现在生成器每次运行都会
+> 同步输出本表，前端可直接读它来确定案例窗口。
 
 **数据版本：v2.8（2026-10-21 重新生成）**
 

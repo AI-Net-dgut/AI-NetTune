@@ -23,8 +23,11 @@ DEFAULT_METRICS = ["rsrp", "sinr", "throughput"]
 TRAIN_RATIO = 0.8          # 前 80% 训练
 FORECAST_HORIZON = 24      # 未来延伸 24 小时（1 天）
 
-# Prophet 单次拟合的时间上限（秒）。Windows 上首次拟合会卡在建 Stan 模型阶段，
-# 实测 400+ 秒无响应；前端 45 秒就超时。超时后本进程改用 moving_average。
+# Prophet 单次拟合的时间上限（秒）。**Prophet 本身是能用的**——本项目演示机
+# 启动预热实测 2.1 秒即成功，接口10 全程走 prophet。这个超时是给"环境不在状态"兜底：
+# 受限沙箱、首次 Stan 模型编译、缺 C++ 工具链等情况下，首次拟合可能长时间不返回
+# （只读沙箱里实测过 400+ 秒无响应），而前端 45 秒就超时。
+# 超时后本进程改用 moving_average，并在 limitations 里如实说明原因。
 PROPHET_TIMEOUT_SEC = float(os.getenv("NETTUNE_PROPHET_TIMEOUT", "20"))
 _prophet_state = {"disabled": False, "reason": ""}
 # 预热状态：warming=True 期间到达的请求直接用移动平均，避免和预热线程抢着等超时
@@ -150,8 +153,9 @@ def _run_with_timeout(fn, timeout_sec: float):
     """在可丢弃的守护线程里执行 fn，超过 timeout 就放弃。
 
     Prophet 底层是 Stan（C++），Python 侧无法中断；但请求不能无限等——
-    Windows 上首次拟合会卡在建模型阶段（实测 400+ 秒无响应），
-    而前端 45 秒就超时了。这里超时即放弃等待，并让上层降级。
+    正常环境首次拟合 2 秒级即可返回，可受限沙箱/首次 Stan 编译等情况下
+    可能长时间不返回（实测过 400+ 秒），而前端 45 秒就超时了。
+    这里超时即放弃等待，并让上层降级。
     被放弃的线程是 daemon，不会阻止进程退出。
     """
     box: dict = {}
@@ -273,7 +277,8 @@ def make_future_bins(last_bin: str, horizon: int) -> list[str]:
 def warm_up() -> None:
     """启动时在后台预热一次 Prophet，把首次拟合的开销从"用户请求"挪到"服务启动"。
 
-    背景：Windows 上 Prophet 首次拟合会卡在建 Stan 模型阶段（实测 400+ 秒无响应）。
+    背景：Prophet 首次拟含有一次性开销（Stan 模型编译），演示机实测预热 2.1 秒成功；
+    若环境不在状态（受限沙箱、缺 C++ 工具链等）则可能长时间不返回（实测过 400+ 秒）。
     若不预热，用户第一次打开"预测对比"要干等一个超时周期；预热失败则本进程永久
     降级为 moving_average，之后的请求都是毫秒级。
 

@@ -52,6 +52,7 @@ v2.7 扩展（唐苗，全量事件对齐 + 功率阈值对齐，修复前端《
 """
 
 import argparse
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import random
@@ -161,6 +162,43 @@ MAP_RANGE_Y = (20, 430)        # 用户活动纵向范围 米
 OUTPUT_PATH = "data/network_data.csv"   # 默认输出；--days 7/30 时自动命名 _7d/_30d
 SPECTRUM_OUTPUT_PATH = "data/spectrum.csv"  # v2.5 频谱输出；--days 7/30 时自动命名 _7d/_30d
 OUTPUT_ENCODING = "utf-8-sig"
+FAULT_EVENTS_OUTPUT = "data/fault_events.csv"   # D-2：故障事件清单（单一事实来源）
+
+
+def write_fault_events(schedule: list) -> None:
+    """把故障注入时间表落成 CSV，供前端案例起点、交接文档、评审复现统一引用。
+
+    背景（审查报告 D-2）：交接文档与《团队分工》都提到"数据生成器同步输出
+    fault_events.csv 故障事件清单"，但该文件从未被生成过，EV-001~004 只存在于
+    文档正文里；前端 CASE_WINDOWS 的三个案例起点是手写时间戳，改数据就失效。
+
+    列：event_id / scenario / ap_id / fault_type / start_time / end_time /
+        ramp_minutes / strength / labeled_from_expect
+    最后一个字段是提示：渐变期只有越过判定阈值才标异常，所以"事件开始"与
+    "首次出现 weak_coverage 标签"并不在同一分钟。
+    """
+    import csv
+    rows = []
+    for idx, (start, end, ap, ftype, strength) in enumerate(schedule, start=1):
+        rows.append({
+            "event_id": f"EV-{idx:03d}",
+            "scenario": SCENE_NAME,
+            "ap_id": ap,
+            "fault_type": ftype,
+            "start_time": start,
+            "end_time": end,
+            "ramp_minutes": RAMP_MINUTES,
+            "strength": strength,
+            "labeled_from_expect": ("事件内 RSRP 跌破 -110 dBm 后" if ftype == "weak_coverage"
+                                    else "事件内 PRB>85% 且丢包>5% 后"),
+        })
+    path = Path(FAULT_EVENTS_OUTPUT)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding=OUTPUT_ENCODING, newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"[v2.8] 已输出故障事件清单：{FAULT_EVENTS_OUTPUT}（{len(rows)} 条）")
 
 # ==================================================
 # 2. 工具函数
@@ -645,6 +683,10 @@ def main():
     FAULT_SCHEDULE = build_fault_schedule(TOTAL_DAYS)  # 按天数延伸故障时间表
     print(f"[v2.8] 生成 {TOTAL_DAYS} 天数据，故障注入 {len(FAULT_SCHEDULE)} 条，"
           f"渐变 {RAMP_MINUTES} 分钟 → {OUTPUT_PATH}")
+    # D-2：把故障时间表落成 CSV，作为"事件"的单一事实来源。
+    # 此前前端 CASE_WINDOWS 手写案例起点时间戳，交接文档提到的 fault_events.csv
+    # 从未生成过（EV-001~004 只活在文档里），改数据就会失效。
+    write_fault_events(FAULT_SCHEDULE)
     dataset = generate_dataset()
     validate_and_export(dataset)
 
