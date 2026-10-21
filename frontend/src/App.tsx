@@ -3,7 +3,7 @@ import AppHeader from "./components/layout/AppHeader";
 import HomePage from "./pages/home/HomePage";
 import WorkbenchPage from "./pages/workbench/WorkbenchPage";
 import "./App.css";
-// 工作台左右分栏（AI 左 / 数据右）。必须是最后一份样式，才能覆盖组件内的布局规则。
+// 工作台左右分栏（数据左 / AI右）；最后导入以统一各组件的布局覆盖。
 import "./styles/WorkbenchSplitLayout.css";
 
 function PendingPage({

@@ -2,7 +2,7 @@ import type { ChatResult } from "../types/backend";
 import { displayMetric } from "../services/metrics";
 import { scopeLabel } from "../services/backend";
 import { evidenceText } from "../components/analysis/diagnosisPresentation";
-import { diagnosisParagraphs } from "./diagnosisReply";
+import { diagnosisParagraphs } from "./diagnosisModel";
 import { candidateGroups } from "../components/management/planWorkspace";
 import type { EvidenceSelection } from "./DiagnosisCharts";
 

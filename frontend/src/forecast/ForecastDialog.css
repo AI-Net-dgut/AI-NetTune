@@ -102,3 +102,6 @@
   .ain-spectrum-curve figcaption label { width: 100%; }
   .ain-spectrum-curve select { width: 100%; }
 }
+
+.ain-forecast-horizon { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: #355574; font-size: 12px; }
+.ain-forecast-horizon select { min-width: 160px; padding: 5px 8px; border: 1px solid #cbd9e9; border-radius: 6px; color: #24496d; background: #fff; }

@@ -7,7 +7,7 @@ export default function TimeSelectionGuide({ historical }: { historical: boolean
       <div><strong>直接问历史</strong><p>输入“分析01-01 14:00到15:00的网络异常”；发送时自动固定起止范围，无需提前固定。</p></div>
       <div><strong><a href="#ain-data-module">手动选历史 ↓</a></strong><p>在数据区拖动双滑块选择开始与结束时间，也可用参考时长快捷选择，然后提问。</p></div>
     </div>
-    <p className="ain-time-guide-note">固定的是查看时刻，主时钟继续运行。普通问题采用已选范围；明确起止时间会切换范围。相对时间以发送时主时钟计算。</p>
+    <p className="ain-time-guide-note">固定查看时刻不会自动暂停主时钟，可通过顶部按钮控制播放。普通问题采用已选范围；明确起止时间会切换范围。相对时间以发送时主时钟计算。</p>
     <details className="ain-time-guide-future">
       <summary>未来时刻／未来时间段怎么问 <span>预测待接入</span></summary>
       <div className="ain-time-guide-future-methods">

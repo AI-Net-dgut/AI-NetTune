@@ -9,7 +9,7 @@ import { getSpatialArea } from "../services/spatialMap";
 import ChartPanel, { CHART_FONT, LIGHT_AXIS_STYLE } from "../components/charts/ChartPanel";
 import SpatialChart, { createProjection, SceneAxes, SceneNode, SCENE_VIEWBOX } from "../components/charts/SpatialChart";
 import ToolResultPanel from "../components/analysis/ToolResultPanel";
-import { diagnosisMetric, sameQueryScope } from "./diagnosisReply";
+import { diagnosisMetric, sameQueryScope } from "./diagnosisModel";
 import { scopeLabel } from "../services/backend";
 import { toolLineMetadata } from "../components/analysis/toolChartMetadata";
 

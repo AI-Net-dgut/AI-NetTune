@@ -2,10 +2,10 @@ import { useMemo, useState } from "react";
 import ChartPanel from "../components/charts/ChartPanel";
 import SpectrumChart from "./SpectrumChart";
 import { spectrumCurveOption } from "./charts";
-import { alertForSpectrum, defaultSpectrumFrame, resolveSpectrumViews, spectrumFrames } from "./spectrumViews";
+import { alertForSpectrum, defaultSpectrumFrame, resolveSpectrumViews, spectrumFrames } from "./spectrumModel";
 import type { ForecastAlert, ForecastResult, SpectrumView } from "./types";
 
-export default function SpectrumViewPanel({ result, alert }: { result: ForecastResult; alert?: ForecastAlert }) {
+export default function SpectrumViewPanel({ result, alert, focusTime }: { result: ForecastResult; alert?: ForecastAlert; focusTime?: string }) {
   const model = useMemo(() => resolveSpectrumViews(result, alert), [result, alert]);
   const [choice, setChoice] = useState<{ result: ForecastResult; alertId: string | null; view: SpectrumView; frame: number | null } | null>(null);
   // 在上下文变化时真正丢弃选择，避免A→B→A时旧曲线/历史时段重新出现。
@@ -15,7 +15,7 @@ export default function SpectrumViewPanel({ result, alert }: { result: ForecastR
   const spectrum = selected === "occupancy" ? model.occupancy : model.power;
   const mappedAlert = spectrum ? alertForSpectrum(result, alert, spectrum) : undefined;
   const frames = useMemo(() => model.power ? spectrumFrames(model.power) : [], [model.power]);
-  const defaultFrame = model.power ? defaultSpectrumFrame(model.power, alert) : 0;
+  const defaultFrame = model.power ? defaultSpectrumFrame(model.power, alert, focusTime) : 0;
   const index = manual?.frame != null && manual.frame >= 0 && manual.frame < frames.length ? manual.frame : defaultFrame;
   const frame = frames[index];
   const curve = useMemo(() => selected === "curve" && spectrum && frame ? spectrumCurveOption(result, spectrum, frame, mappedAlert?.bandIds) : null,

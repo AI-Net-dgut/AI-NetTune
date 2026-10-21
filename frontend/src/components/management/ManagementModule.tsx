@@ -4,7 +4,7 @@ import type { DashboardData, Diagnosis } from '../../types/backend';
 import type { TreatmentPlan } from '../../types/plan';
 import type { DiagnosisPreparation, ManagementHandle } from './preparePlan';
 import { fallbackPlan, initialParameterValues, isSimulationCurrent, validateParameter } from './planWorkspace';
-import { sameQueryScope } from '../../chat/diagnosisReply';
+import { sameQueryScope } from '../../chat/diagnosisModel';
 import { buildBaseline } from './managementDraft';
 import { METRIC_META } from '../../types/backend';
 import { displayMetric } from '../../services/metrics';

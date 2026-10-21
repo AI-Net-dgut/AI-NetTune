@@ -1,7 +1,9 @@
 import type { EChartsOption } from "echarts";
 import { toEpoch } from "../services/backend";
 import type { ForecastResult, SpectrumForecast, ImpactForecast } from "./types";
-import type { TaggedSpectrumFrame } from "./spectrumViews";
+import type { TaggedSpectrumFrame } from "./spectrumModel";
+import { spectrumHighlightRanges, summarizeSpectrumFrames } from './spectrumModel';
+import { FORECAST_LIMITS } from './config';
 
 const palette = [[33, 69, 209], [45, 142, 240], [58, 214, 220], [213, 231, 91], [255, 179, 63], [226, 79, 67]];
 export function spectrumColor(value: number | null, min: number, max: number) {
@@ -11,10 +13,10 @@ export function spectrumColor(value: number | null, min: number, max: number) {
   return `rgb(${palette[index].map((n, i) => Math.round(n + (palette[index + 1][i] - n) * mix)).join(",")})`;
 }
 export function spectrumCells(result: ForecastResult, spectrum: SpectrumForecast) {
-  return (["history", "predicted"] as const).flatMap(kind => spectrum[kind].flatMap(frame => spectrum.bands.map((band, i) => ({
+  return (["history", "predicted"] as const).flatMap(kind => summarizeSpectrumFrames(spectrum[kind], FORECAST_LIMITS.displayFrames).flatMap(frame => spectrum.bands.map((band, i) => ({
     kind, ...band, start: frame.start, end: frame.end, value: frame.values[i],
     fill: spectrumColor(frame.values[i], spectrum.scale.min, spectrum.scale.max),
-    label: `${kind === "history" ? "历史观测" : "未来预测"} · ${frame.start}—${frame.end}\n${spectrum.observationLabel} · ${band.label} ${band.lowerMHz}—${band.upperMHz} MHz\n${frame.values[i] === null ? "暂无数据" : `${frame.values[i]} ${spectrum.unit}`} · 基准 ${result.baseTime}`,
+    label: `${kind === "history" ? "历史观测" : "未来预测"} · ${frame.start}—${frame.end}\n${spectrum.observationLabel} · ${band.label} ${band.lowerMHz}—${band.upperMHz} MHz\n${frame.values[i] === null ? "暂无数据" : `${Number(frame.values[i]!.toFixed(2))} ${spectrum.unit}`}${frame.sampleCount ? ` · ${frame.sampleCount}帧按有效时长汇总` : ''} · 基准 ${result.baseTime}`,
   }))));
 }
 export function spectrumCurveOption(result: ForecastResult, spectrum: SpectrumForecast, frame: TaggedSpectrumFrame, bandIds: string[] = []): EChartsOption {
@@ -42,7 +44,7 @@ export function spectrumCurveOption(result: ForecastResult, spectrum: SpectrumFo
       splitLine: { lineStyle: { color: "#eaf0f7" } }, axisLabel: { color: "#607995", fontSize: 10, formatter: (n: number) => Number(n.toFixed(2)).toString() } },
     series: [{ name: "分频段接收功率", type: "line", data: points.map(p => p.value), connectNulls: false,
       showSymbol: spectrum.bands.length <= 64, symbolSize: 4, lineStyle: { color, width: 2, type: frame.kind === "predicted" ? "dashed" : "solid" }, itemStyle: { color },
-      markArea: { silent: true, itemStyle: { color: "rgba(245,182,64,0.12)" }, data: spectrum.bands.filter(b => bandIds.includes(b.id)).map(b => [{ xAxis: b.lowerMHz / 1000 }, { xAxis: b.upperMHz / 1000 }]) } }],
+      markArea: { silent: true, itemStyle: { color: "rgba(245,182,64,0.12)" }, data: spectrumHighlightRanges(spectrum.bands, bandIds).map(b => [{ xAxis: b.lowerMHz / 1000 }, { xAxis: b.upperMHz / 1000 }]) } }],
   };
 }
 export function forecastTrendOption(result: ForecastResult, impact: ImpactForecast): EChartsOption {

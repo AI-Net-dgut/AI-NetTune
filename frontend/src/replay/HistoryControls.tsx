@@ -25,7 +25,7 @@ export default function HistoryControls({ state, act, loading, config }: {
       <div className="ain-replay-actions"><button className="ain-button" type="button" disabled={disabled}
         onClick={() => act({ type: "history" })}>查看历史数据</button></div></div>
       : <div className="ain-replay-history"><div className="ain-replay-main"><strong>历史范围：{scope.start} — {scope.end}</strong>
-        <span className="ain-replay-note">主时钟继续运行 · 历史模式不提供未来预测</span>
+        <span className="ain-replay-note">主时钟{state.playing ? '运行中' : '已暂停'} · 历史模式不提供未来预测</span>
         <div className="ain-replay-actions"><button type="button" className="ain-button" disabled={disabled || endProgress === 0}
           title="将开始与结束时间同时向前移动5分钟，超出数据起点的部分截断"
           onClick={() => changeRange(Math.max(0, startProgress - 300), Math.max(0, endProgress - 300))}>回退5分钟</button>

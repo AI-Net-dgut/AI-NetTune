@@ -1,6 +1,7 @@
 import type { QueryScope } from "../types/backend";
 import { toEpoch } from "../services/backend";
 import { formatReplayTime } from "./replayState";
+import { needsFutureForecast } from "./questionIntent";
 
 export interface HistoryTimeContext { scenario: string; masterTime: string; dataStart: string; dataEnd: string }
 export type HistoryTimeResult = { kind: "none" } | { kind: "error"; message: string }
@@ -11,6 +12,7 @@ export function hasHistoryTimeHint(message: string): boolean {
   return /\d{1,2}[:：]\d{2}|\d{1,2}点|昨天|前天|昨日|前日|今天|今日|(?<![A-Za-z0-9])\d{1,2}[-/]\d{1,2}(?![A-Za-z0-9])|(?:最近|过去|近|前)\s*(?:\d+(?:\.\d+)?|半|[一二两三四五六七八九十]个?)\s*(?:小时|分钟|天)|\d{1,2}月\d{1,2}日|\d{4}[-/]\d{1,2}[-/]\d{1,2}|(?:\d+(?:\.\d+)?|半)\s*(?:小时|分钟|天)前|上周|上个月/.test(message);
 }
 export function resolveHistoryQuestion(message: string, context: HistoryTimeContext): HistoryTimeResult {
+  if (needsFutureForecast(message)) return { kind: "none" };
   if (!hasHistoryTimeHint(message)) return { kind: "none" };
   try {
     const master = toEpoch(context.masterTime), lower = toEpoch(context.dataStart), upper = Math.min(master, toEpoch(context.dataEnd));

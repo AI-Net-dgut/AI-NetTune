@@ -28,7 +28,7 @@ const capabilities = [
 
 const workflow = [
   { title: "进入工作台", description: "从1月2日09:15开始演示，数据加载后自动回放。" },
-  { title: "固定当前时刻", description: "主时钟继续运行；也可查看已到达的历史时刻。" },
+  { title: "固定当前时刻", description: "固定查看时刻；主时钟可暂停或继续，也可查看已到达的历史。" },
   { title: "提问并核查证据", description: "可指定历史日期/时段提问，图表同步；也可固定当前查看证据。" },
   { title: "查看方案与预计效果", description: "比较建议、调整参数，退出分析后返回当前。" },
 ];
@@ -57,7 +57,7 @@ function WorkspaceIllustration() {
     </div>
     <div className="ain-home-v2-preview-clock">
       <span><i aria-hidden="true" />历史数据回放</span>
-      <small>主时钟持续运行 · 历史查看 · 倍速 · 循环</small>
+      <small>暂停 / 继续 · 历史查看 · 倍速 · 循环</small>
     </div>
     <div className="ain-home-v2-preview-ai">
       <div className="ain-home-v2-preview-ai-heading"><strong>AI 交互</strong><span>固定时刻分析</span></div>
@@ -120,14 +120,14 @@ export default function HomePage() {
     </section>
 
     <section className="ain-home-v2-flow" id="ain-home-v2-flow" aria-labelledby="ain-home-v2-flow-title">
-      <div className="ain-home-v2-section-heading"><h2 id="ain-home-v2-flow-title">如何开始</h2><p>固定AI与数据查看时刻，主时钟继续运行；退出后同步当前</p></div>
+      <div className="ain-home-v2-section-heading"><h2 id="ain-home-v2-flow-title">如何开始</h2><p>固定AI与数据查看时刻；主时钟支持暂停与继续，退出后同步当前</p></div>
       <ol className="ain-home-v2-steps">{workflow.map(step => <li key={step.title}><h3>{step.title}</h3><p>{step.description}</p></li>)}</ol>
     </section>
 
     <section className="ain-home-v2-status" aria-labelledby="ain-home-v2-status-title">
       <div className="ain-home-v2-status-title"><h2 id="ain-home-v2-status-title">当前功能状态</h2><span>以现有接口返回为准</span></div>
       <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已具备</span><p><strong>历史回放与AI研判</strong>支持{REPLAY_SPEEDS.join(" / ")}倍速和循环；默认近{REPLAY_CONFIG.historyMinutes}分钟参考，可调整时长或自定义开始时间；仅使用截至查看时刻的采样。</p></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge is-pending">待接入</span><p><strong>未来预测与预警</strong>入口已预留，将与现存问题共用AI交互；当前尚未提供未来预测结果。</p></div>
+      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已接入入口</span><p><strong>未来预测与预警</strong>可打开预测弹窗或直接提问未来时段，选择30分钟至24小时范围；可跟随主时钟更新。预测方法、数据是否充足及可信边界以实际返回和页面说明为准。</p></div>
       <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge is-limited">临时记录</span><p><strong>工作台内查询摘要</strong>保留最近6次提问摘要及分析截止时间，离开页面或刷新后不保留；独立分析记录页尚未接入保存功能。</p></div>
       <p className="ain-home-v2-boundary">本阶段通过历史数据回放观察网络，处理方案用于参数讨论与预计效果比较，不下发真实网络配置。</p>
     </section>

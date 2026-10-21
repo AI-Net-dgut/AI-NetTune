@@ -10,7 +10,7 @@ import { REPLAY_CONFIG } from "../../replay/config";
 import { formatReplayTime, viewScope, replayContextKey, viewTime } from "../../replay/replayState";
 import type { ReplayAction } from "../../replay/replayState";
 import { buildReplayDashboard, loadReplayRecords } from "../../replay/replayData";
-import { captureAnalysis, needsFutureForecast } from "../../replay/analysisSnapshot";
+import { captureAnalysis } from "../../replay/analysisSnapshot";
 import type { AnalysisSnapshot } from "../../replay/analysisSnapshot";
 import useReplay from "../../replay/useReplay";
 import useScopedSpatial from "../../replay/useScopedSpatial";
@@ -21,8 +21,10 @@ import type { ReplayConfig } from "../../replay/config";
 import useForecastPreview from "../../forecast/useForecastPreview";
 import ForecastDialog from "../../forecast/ForecastDialog";
 import ForecastReview from "../../forecast/ForecastReview";
-import { FORECAST_CONFIG } from "../../forecast/config";
+import { FORECAST_CONFIG, FORECAST_LIMITS } from "../../forecast/config";
 import type { ForecastHandoff } from "../../forecast/types";
+import { resolveForecastQuestion } from '../../forecast/questionTime';
+import { minuteForecastRequest } from '../../forecast/main4Adapter';
 import "./WorkbenchPage.css";
 import "./BackendIntegration.css";
 
@@ -105,9 +107,28 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
 
   async function submitAnalysis(message: string, preserveDiagnosis = false, retry = false) {
     let current = latest.current;
-    if (current.locked || !message.trim() || source.status !== "ready" || needsFutureForecast(message)) return;
+    if (current.locked || !message.trim() || source.status !== "ready") return;
     const sentMasterTime = formatReplayTime(current.currentMs);
     if (!preserveDiagnosis && !retry) {
+      const future = resolveForecastQuestion(message, {
+        baseTime: FORECAST_CONFIG.responseProfile === "main4"
+          ? minuteForecastRequest(viewScope(config, current), forecast.horizonMinutes).baseTime : viewScope(config, current).end,
+        defaultHorizonMinutes: forecast.horizonMinutes, maxHorizonMinutes: FORECAST_LIMITS.maxHorizonMinutes,
+      });
+      if (future.kind === 'error') {
+        setAnalysisNotice({ key: replayContextKey(current), text: `${future.message} 本次未发送，查看范围未改变。` }); return;
+      }
+      if (future.kind === 'forecast') {
+        if (current.viewMode === 'history') {
+          setAnalysisNotice({ key: replayContextKey(current), text: '历史回顾期间不提供未来预测，请返回当前后再提问。' }); return;
+        }
+        if (current.viewMode === 'live') act({ type: 'freeze' });
+        current = readClock();
+        clearContext(replayContextKey(current));
+        setAnalysisNotice({ key: replayContextKey(current), text: `已固定查看时刻并打开预测预警，预测未来${future.horizonMinutes}分钟。${future.targetWindow ? `关注：${future.targetWindow.start} — ${future.targetWindow.end}。` : ''}主时钟保持原播放状态。` });
+        forecast.open({ horizonMinutes: future.horizonMinutes, targetWindow: future.targetWindow, question: message, follow: false });
+        return;
+      }
       const resolved = resolveHistoryQuestion(message, { scenario: config.scenario, masterTime: sentMasterTime, dataStart: config.start, dataEnd: config.end });
       if (resolved.kind === "error") {
         setAnalysisNotice({ key: replayContextKey(current), text: `${resolved.message} 本次问题未发送，查看范围未改变。` }); return;
@@ -165,13 +186,13 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
 
   return <main className="ain-workbench">
     <div className="ain-workbench-title"><div><h1>网络分析与管理</h1>
-      <p>主时钟持续运行，固定查看时刻研判原因与处理方案。</p></div>
+      <p>主时钟支持暂停与继续，固定查看时刻研判原因与处理方案。</p></div>
       <span className="ain-source-badge">历史数据回放</span></div>
 
     <ReplayControls state={clock} act={act} loading={loading} onReload={reloadSource} config={config} />
 
     <QueryPanel analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
-      onOpenForecast={forecast.open} forecastDisabled={source.status !== "ready" || clock.locked}
+      onOpenForecast={() => forecast.open()} forecastDisabled={source.status !== "ready" || clock.locked}
       forecastLabel={forecast.lastResult?.status === "ready" ? `${forecast.lastResult.source === "demo" ? "示例·" : "最近查看·"}${forecast.lastResult.alerts.length}项` : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测"}
       forecastReview={forecastTransfer?.key === contextKey ? <ForecastReview key={`${forecastTransfer.key}-${forecastTransfer.handoff.result.id}`} handoff={forecastTransfer.handoff} /> : undefined}
       disabled={!data?.metrics.length || loading || Boolean(source.error)} data={data}
@@ -201,7 +222,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
           <details className="ain-data-meta-details"><summary>范围与采样详情</summary>
             <dl><div><dt>数据来源</dt><dd>CSV 仿真历史数据</dd></div>
               <div><dt>分析范围</dt><dd>{scopeLabel(scope)}</dd></div>
-              <div><dt>主时钟</dt><dd>{currentTime} · {clock.playing ? "持续运行" : "已到末尾"}</dd></div>
+              <div><dt>主时钟</dt><dd>{currentTime} · {clock.playing ? "持续运行" : clock.currentMs >= clock.endMs ? "已到末尾" : "已暂停"}</dd></div>
               <div><dt>最近有效采样</dt><dd>{data?.metrics.at(-1)?.backendTime ?? "暂无"}</dd></div></dl>
             <p>设备数为截至查看时刻的已知设备；主图默认窗口主连接与平均位置，采样信号使用最近有效帧，可切换最新帧实际连接。时间均为北京时间。</p>
           </details>
@@ -222,6 +243,8 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     </section>
     {forecast.session && <ForecastDialog request={forecast.session.request} result={forecast.result} pending={forecast.pending}
       error={forecast.error} onClose={forecast.close} onRefresh={forecast.refresh} onAnalyze={reviewForecast}
-      canAnalyze={!clock.locked && clock.viewMode !== "history" && source.status === "ready"} fixedView={clock.viewMode === "analysis"} />}
+      canAnalyze={!clock.locked && clock.viewMode !== "history" && source.status === "ready"} fixedView={clock.viewMode === "analysis"}
+      follow={forecast.follow} onToggleFollow={forecast.toggleFollow} followStepMinutes={forecast.followStepMinutes}
+      onHorizonChange={forecast.setHorizonMinutes} currentTime={currentTime} />}
   </main>;
 }

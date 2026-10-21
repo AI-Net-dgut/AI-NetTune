@@ -10,7 +10,7 @@ export default function ReplayControls({ state, act, loading, onReload, config }
 }) {
   const disabled = state.locked || loading || !state.ready;
   const status = loading ? "正在读取历史数据" : !state.ready ? "等待数据" : state.locked
-    ? "分析时刻已锁定 · 主时钟继续运行" : state.playing ? "主时钟运行中" : "主时钟已到末尾";
+    ? `分析时刻已锁定 · 主时钟${state.playing ? '继续运行' : '已暂停'}` : state.playing ? "主时钟运行中" : state.currentMs >= state.endMs ? "主时钟已到末尾" : "主时钟已暂停";
   return <section className="ain-replay-controls" aria-label="历史数据回放控制">
     <div className="ain-replay-main">
       <div className="ain-replay-clock"><span>历史数据回放 · 主时钟</span>
@@ -18,6 +18,8 @@ export default function ReplayControls({ state, act, loading, onReload, config }
           {formatReplayTime(state.currentMs)}</time><small>北京时间</small></strong></div>
       <span className="ain-replay-status" data-playing={state.playing} role="status">{status}</span>
       <div className="ain-replay-actions">
+        <button className="ain-button" type="button" disabled={loading || !state.ready}
+          onClick={() => act({ type: state.playing ? 'pause' : 'play' })}>{state.playing ? '暂停回放' : '继续回放'}</button>
         <label>倍速<select aria-label="回放倍速" value={state.speed} disabled={loading || !state.ready}
           onChange={event => act({ type: "speed", value: Number(event.target.value) })}>
           {REPLAY_SPEEDS.map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select></label>

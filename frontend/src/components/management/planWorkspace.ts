@@ -1,6 +1,6 @@
 import type { Candidate, Diagnosis, QueryScope } from '../../types/backend';
 import type { PlanParameter, TreatmentPlan } from '../../types/plan';
-import { sameQueryScope } from '../../chat/diagnosisReply';
+import { sameQueryScope } from '../../chat/diagnosisModel';
 export function initialParameterValues(plan: TreatmentPlan): Record<string, string> {
   return Object.fromEntries(plan.parameters.map(p => [p.id, p.suggestedValue === null ? '' : String(p.suggestedValue)]));
 }

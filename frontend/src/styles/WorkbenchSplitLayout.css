@@ -42,13 +42,10 @@
 .ain-app.ain-shell .ain-workbench .ain-time-guide,
 .ain-app.ain-shell .ain-workbench .ain-reference-hint,
 .ain-app.ain-shell .ain-workbench .ain-query-input-meta > span:first-child,
-.ain-app.ain-shell .ain-workbench .ain-ai-note:not([role]),
 .ain-app.ain-shell .ain-workbench .ain-map-explanation,
 .ain-app.ain-shell .ain-workbench .ain-observation-map .ain-slot-heading p,
-.ain-app.ain-shell .ain-workbench .ain-observation-map .ain-spatial-footer,
 .ain-app.ain-shell .ain-workbench .ain-observation-note,
 .ain-app.ain-shell .ain-workbench .ain-feature-heading .ain-module-title p,
-.ain-app.ain-shell .ain-workbench .ain-ai-replay-scope > span:not(.ain-ai-view-mode),
 .ain-app.ain-shell .ain-workbench .ain-ai-scope:not(.ain-ai-replay-scope) { display: none; }
 
 /* 历史入口进入标题栏的正常布局，取消原先覆盖信息栏的绝对定位。 */
@@ -148,3 +145,8 @@
   .ain-app.ain-shell .ain-workbench .ain-data-meta-count { margin-left: 0; }
   .ain-app.ain-shell .ain-workbench .ain-observation-object-controls p { display: none; }
 }
+
+/* 时间依据、频谱说明与地图图例属于判读信息，紧凑布局也保留。 */
+.ain-app.ain-shell .ain-workbench .ain-ai-replay-scope { flex-wrap: wrap; gap: 5px 9px; }
+.ain-app.ain-shell .ain-workbench .ain-ai-replay-scope > span { overflow-wrap: anywhere; }
+.ain-app.ain-shell .ain-workbench .ain-spatial-footer { flex-wrap: wrap; font-size: 10px; }

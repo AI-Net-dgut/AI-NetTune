@@ -8,7 +8,7 @@ import type { ManagementHandle } from "../components/management/preparePlan";
 import DiagnosisReply, { ReplyText } from "./DiagnosisAnswer";
 import DiagnosisCharts from "./DiagnosisCharts";
 import type { EvidenceSelection } from "./DiagnosisCharts";
-import { sameQueryScope } from "./diagnosisReply";
+import { sameQueryScope } from "./diagnosisModel";
 import { hasHistoryTimeHint } from "../replay/historyQuestion";
 import { needsFutureForecast } from "../replay/analysisSnapshot";
 import TimeSelectionGuide from "../replay/TimeSelectionGuide";
@@ -20,7 +20,7 @@ const EXAMPLES = [
   { label: "弱覆盖", question: "分析弱覆盖异常的区域及原因，提出方案并比较预计覆盖效果" },
   { label: "AP 拥塞", question: "分析 AP 拥塞异常及原因，提出方案并比较预计负载变化" },
   { label: "连接分配", question: "分析用户连接分配异常及原因，提出调整方案并比较预计用户体验" },
-  { label: "未来风险", question: "预测未来30分钟可能出现的网络风险，说明依据并给出预防方案" },
+  { label: "未来风险", question: "预测未来120分钟可能出现的网络风险，说明依据并给出预防方案" },
 ];
 
 export default function QueryPanel({ query, scenario, window: scopeWindow, disabled, data,
@@ -56,16 +56,17 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   const status = dataStatus || (query.pending ? "正在分析" : currentEmpty ? "当前窗口暂无采样" : followingLive ? "实时跟随" : query.error ? "请求失败" : result ? "已返回" : historical ? "历史回顾，可提问" : replay ? "已固定，可提问" : "等待提问");
   const diagnosisQuestion = query.diagnosisQuestion || (result === analysis ? query.question : "");
 
-  const questionTime = Boolean(replay?.canAnalyzeQuestionTime && hasHistoryTimeHint(draft) && !needsFutureForecast(draft));
+  const questionTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(draft) || needsFutureForecast(draft)));
   const sendBlocked = (disabled && !questionTime) || dataLoading || Boolean(dataError) || query.pending || (followingLive && !questionTime);
   function send(message = draft, preserveDiagnosis = false, retry = false) {
-    const explicitTime = Boolean(replay?.canAnalyzeQuestionTime && hasHistoryTimeHint(message) && !preserveDiagnosis && !retry);
+    const explicitTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(message) || needsFutureForecast(message)) && !preserveDiagnosis && !retry);
     if ((disabled && !explicitTime) || dataLoading || dataError || query.pending || (followingLive && !explicitTime) || !message.trim()) return;
     if (currentEmpty && !explicitTime && !preserveDiagnosis && !retry) {
       setSendNotice("当前统计窗口暂无采样，暂不能发起新分析；旧分析的证据和重试仍对应原截止时间。"); return;
     }
-    if (needsFutureForecast(message)) {
-      setSendNotice(historical ? "历史查看期间不提供未来预测；可以回顾该时刻的异常原因、处理方案和预计效果。" : onOpenForecast ? "未来风险请点击上方“预测预警”查看，再将所选预警交给AI详细研判；自由描述未来时间的查询尚未接入。" : "未来预测接口待接入，暂不能分析未来风险；当前可以分析已到达数据的异常原因、处理方案和方案比较。");
+    // 未来问题走预测预览接口，显式传入时间与时长；历史回顾保持既有禁用规则。
+    if (historical && needsFutureForecast(message)) {
+      setSendNotice("历史回顾期间不提供未来预测；请先「退出分析，返回当前」并固定时刻后再问未来趋势。");
       return;
     }
     setSendNotice(""); setEvidenceSelection(null);
@@ -101,7 +102,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
     <div className="ain-query-examples" aria-label="问题示例">
       {EXAMPLES.map(item => <button className="ain-query-example" key={item.label} type="button" disabled={query.pending || (historical && needsFutureForecast(item.question))}
         onClick={() => { setSendNotice(""); setDraft(`${scenario}：${item.question}`); inputRef.current?.focus(); }}>
-        <strong>{item.label}</strong><span>{item.question}{needsFutureForecast(item.question) && <small className="ain-example-pending">{historical ? "历史不可用" : onOpenForecast ? "上方查看预警" : "接口待接入"}</small>}</span></button>)}
+        <strong>{item.label}</strong><span>{item.question}{historical && needsFutureForecast(item.question) && <small className="ain-example-pending">历史不可用</small>}</span></button>)}
     </div>
     <form className="ain-query-form" onSubmit={event => { event.preventDefault(); send(); }}>
       <label className="ain-input-label" htmlFor="ain-question">输入你的网络问题</label>
@@ -113,7 +114,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           }
         }} /><button type="submit" className="ain-button ain-primary" disabled={sendBlocked || (currentEmpty && !questionTime) || !draft.trim()}>
           {query.pending ? "分析中…" : followingLive && !questionTime ? "先固定时刻" : "发送"}</button></div>
-      <div className="ain-query-input-meta"><span>{followingLive ? (replay?.canAnalyzeQuestionTime ? "明确历史时间可直接发送；普通问题先固定当前时刻。" : "可先编辑问题；固定当前时刻后发送，主时钟继续运行。") : "点击示例填入问题，编辑后发送 · Ctrl / Cmd + Enter"}</span><span>{draft.length}/500</span></div>
+      <div className="ain-query-input-meta"><span>{followingLive ? (replay?.canAnalyzeQuestionTime ? "历史时间或未来预测可直接发送；未来问题会固定查看时刻并打开预测。" : "可先编辑问题；固定当前时刻后发送，主时钟播放状态不变。") : "未来问题进入预测预警；点击示例填入后可编辑 · Ctrl / Cmd + Enter"}</span><span>{draft.length}/500</span></div>
     </form>
     {sendNotice && <p className="ain-ai-warning" role="status">{sendNotice}</p>}
     {currentEmpty && !disabled && !query.pending && <p className="ain-ai-note" role="status">当前窗口暂无采样，暂不能发起新分析；仍可查看及重试原截止时刻的分析。</p>}

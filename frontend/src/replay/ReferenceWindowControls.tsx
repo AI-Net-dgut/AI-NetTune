@@ -46,6 +46,6 @@ export default function ReferenceWindowControls({ state, act, scope, disabled, i
       <span>结束固定为 {scope.end}</span><button type="submit" className="ain-button" disabled={blocked}>更新参考范围</button>
     </form>}
     {error && <p className="ain-reference-error" role="alert">{error}</p>}
-    <p className="ain-reference-hint">{state.viewMode === "live" ? "先固定当前时刻，或在数据区用双滑块选择历史范围。" : "快捷时长按选定结束时间向前计算开始；拖动开始滑块会切换为自定义范围。调整会清除当前研判，需重新提问。"} 两处参考设置同步，主时钟继续运行。</p>
+    <p className="ain-reference-hint">{state.viewMode === "live" ? "先固定当前时刻，或在数据区用双滑块选择历史范围。" : "快捷时长按选定结束时间向前计算开始；拖动开始滑块会切换为自定义范围。调整会清除当前研判，需重新提问。"} 两处参考设置同步，主时钟{state.playing ? '运行中' : '已暂停'}。</p>
   </div>;
 }

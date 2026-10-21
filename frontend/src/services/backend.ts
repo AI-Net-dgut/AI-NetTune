@@ -107,7 +107,7 @@ async function request(path: string, signal?: AbortSignal, body?: unknown, fetch
       if (signal?.aborted) throw new DOMException("请求已取消", "AbortError");
       throw new Error("请求超时，请检查后端及模型调用状态", { cause: error });
     }
-    if (error instanceof TypeError) throw new Error("无法连接后端，请保持 8000 端口服务运行", { cause: error });
+    if (error instanceof TypeError) throw new Error("无法连接后端，请检查API服务及代理配置", { cause: error });
     throw error;
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }

@@ -1,6 +1,7 @@
 import { toEpoch } from "../services/backend";
-import { FORECAST_CONFIG } from "./config";
+import { FORECAST_CONFIG, FORECAST_LIMITS } from "./config";
 import { createForecastDemo } from "./demo";
+import { completeMain4, normalizeMain4 } from "./main4Adapter";
 import type { ForecastAnalysis, ForecastConfig, ForecastRequest, ForecastResult, SpectrumForecast, ImpactForecast, SpectrumViews, SpectrumView } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -44,14 +45,15 @@ export function parseForecast(raw: unknown, request: ForecastRequest): ForecastR
     if (!bands.length) throw new Error("频谱缺少频段"); unique(bands);
     const frames = (rows: unknown, begin: string, end: string) => {
       let previous = begin;
-      const list = array(rows, 1000).map(rawFrame => {
+      const list = array(rows, FORECAST_LIMITS.maxFrames).map(rawFrame => {
         const f = object(rawFrame), frame = range(f);
         if (frame.start < begin || frame.end > end || frame.start < previous || frame.start === frame.end) throw new Error("频谱帧时间越界或重叠"); previous = frame.end;
         const values = array(f.values, 128).map(nullableNumber);
-        if (values.length !== bands.length || values.some(n => n !== null && s.metric === "occupancy" && (n < 0 || n > 100))) throw new Error("频谱帧数值或长度无效");
+        if (values.length !== bands.length) throw new Error("频谱帧数值个数与频段不一致");
+        if (values.some(n => n !== null && s.metric === "occupancy" && (n < 0 || n > 100))) throw new Error("后端返回的占用率超出0%—100%，请检查预测输出");
         return { ...frame, values };
       });
-      if (list.length * bands.length > 40_000) throw new Error("频谱网格过大，请后端汇总");
+      if (list.length * bands.length > FORECAST_LIMITS.maxValuesPerSpectrumPeriod) throw new Error("频谱网格过大，请后端汇总");
       return list;
     };
     return { id: text(s.id), observationLabel: text(s.observationLabel), ...(s.observationId === undefined ? {} : { observationId: text(s.observationId) }), metric: s.metric as SpectrumForecast["metric"], unit: s.unit as SpectrumForecast["unit"],
@@ -90,7 +92,9 @@ export function parseForecast(raw: unknown, request: ForecastRequest): ForecastR
   if (v.status !== "ready" && (alerts.length || spectra.length || impacts.length)) throw new Error("不可用状态不应附带预测结论");
   return { id: text(v.id), scenario: request.scenario, baseTime: request.baseTime, history, forecast, generatedAt: time(v.generatedAt),
     source: v.source, status: v.status as ForecastResult["status"], message: typeof v.message === "string" ? v.message : "",
-    alerts: [...new Map(alerts.map(a => [a.id, a])).values()], spectra, impacts, ...(overviewViews ? { spectrumViews: overviewViews } : {}) };
+    alerts: [...new Map(alerts.map(a => [a.id, a])).values()], spectra, impacts, ...(overviewViews ? { spectrumViews: overviewViews } : {}),
+    ...(v.method === undefined ? {} : { method: text(v.method) }),
+    ...(v.limitations === undefined ? {} : { limitations: array(v.limitations, 30).map(text) }) };
 }
 
 async function post(path: string, body: unknown, signal: AbortSignal | undefined, config: ForecastConfig, fetcher: typeof fetch) {
@@ -114,17 +118,26 @@ async function post(path: string, body: unknown, signal: AbortSignal | undefined
 export async function loadForecast(request: ForecastRequest, signal?: AbortSignal, config = FORECAST_CONFIG, fetcher: typeof fetch = fetch): Promise<ForecastResult> {
   if (signal?.aborted) throw new DOMException("请求已取消", "AbortError");
   if (request.history.end !== request.baseTime || toEpoch(request.history.start) > toEpoch(request.baseTime)
-    || !request.scenario.trim() || !Number.isFinite(request.horizonMinutes) || request.horizonMinutes <= 0 || request.horizonMinutes > 1440) throw new Error("预测请求范围无效");
+    || !request.scenario.trim() || !Number.isInteger(request.horizonMinutes) || request.horizonMinutes <= 0 || request.horizonMinutes > FORECAST_LIMITS.maxHorizonMinutes) throw new Error("预测请求范围无效");
+  if (request.targetWindow) {
+    const start = toEpoch(request.targetWindow.start), end = toEpoch(request.targetWindow.end), base = toEpoch(request.baseTime);
+    if (start < base || end < start || end > base + request.horizonMinutes * 60_000) throw new Error("关注时段必须位于本轮预测范围内");
+  }
   if (config.mode === "demo") return createForecastDemo(request);
-  return parseForecast(await post(config.previewPath, request, signal, config, fetcher), request);
+  const raw = await post(config.previewPath, request, signal, config, fetcher);
+  const result = parseForecast(config.responseProfile === "main4" ? normalizeMain4(raw) : raw, request);
+  return config.responseProfile === "main4" ? completeMain4(result) : result;
 }
-export async function analyzeForecast(result: ForecastResult, alertId: string | null, signal?: AbortSignal, config = FORECAST_CONFIG, fetcher: typeof fetch = fetch): Promise<ForecastAnalysis> {
+export async function analyzeForecast(result: ForecastResult, alertId: string | null, signal?: AbortSignal, config = FORECAST_CONFIG, fetcher: typeof fetch = fetch,
+  context?: Pick<ForecastRequest, 'question' | 'targetWindow'>): Promise<ForecastAnalysis> {
   if (signal?.aborted) throw new DOMException("请求已取消", "AbortError");
   if (result.status !== "ready" || (alertId && !result.alerts.some(a => a.id === alertId))) throw new Error("当前预测不能发起研判");
   if (result.source === "demo") return { forecastId: result.id, baseTime: result.baseTime, alertId, source: "demo",
     reply: "这是界面示例，未调用大模型。\n\n正式接入后，助手将在这里解释所选预警的可能原因、支持与反对证据、影响范围，以及预防方案和预计效果。占用率升高本身不能直接证明干扰，需要结合SINR、业务需求和连接状态综合判断。" };
   const raw = object(await post(config.analysisPath, { forecastId: result.id, scenario: result.scenario, baseTime: result.baseTime,
-    alertId, history: result.history, forecast: result.forecast }, signal, config, fetcher));
+    alertId, history: result.history, forecast: result.forecast,
+    ...(context?.question ? { question: context.question } : {}), ...(context?.targetWindow ? { targetWindow: context.targetWindow } : {}),
+  }, signal, config, fetcher));
   if (raw.forecastId !== result.id || raw.baseTime !== result.baseTime || raw.alertId !== alertId) throw new Error("预测研判返回与本次预测不一致");
   if (raw.source !== "llm" && raw.source !== "rule") throw new Error("研判结果来源无效");
   return { forecastId: result.id, baseTime: result.baseTime, alertId, source: raw.source, reply: text(raw.reply) };

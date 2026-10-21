@@ -16,7 +16,7 @@ export interface ApiOptions {
   baseUrl?: string;
 }
 
-// 目前保持 mock。真实接口和返回结构确认后再改为 api。
+// 旧版示例适配器，当前App没有引用。正式工作台使用services/backend.ts；请勿将此模块当作真实接口入口。
 export const API_CONFIG: Required<ApiOptions> = {
   mode: "mock",
   baseUrl: "",
