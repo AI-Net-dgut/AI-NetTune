@@ -74,11 +74,17 @@ export interface ChatResult {
 }
 export type ForecastMetric = "rsrp" | "sinr" | "throughput";
 export interface ForecastSeriesItem {
-  true_mean: number | null; pred_mean: number | null; mape: number | null;
+  true_mean: number | null; pred_mean: number | null;
+  /** 有量纲的误差指标（dBm / dB / Mbps），对外展示以这两个为主 */
+  mae: number | null; rmse: number | null;
+  /** 逐点 MAPE；对 dBm 这类负值大绝对值的指标意义有限，仅作参考 */
+  mape: number | null;
   bins: string[]; true: number[]; predicted: number[];
 }
 export interface ForecastResult {
   scenario: string; window_start: string; window_end: string; method: string;
   bin_size_min: number; metrics: ForecastMetric[]; ues: string[];
   series: Record<string, Record<ForecastMetric, ForecastSeriesItem>>;
+  /** 降级原因等限制说明（如 Prophet 超时改用移动平均） */
+  limitations?: string[];
 }

@@ -4,6 +4,7 @@ import type useNetworkQuery from "../hooks/useNetworkQuery";
 import type { DashboardData, QueryScope, SpatialMapData } from "../types/backend";
 import { scopeLabel, exportReport } from "../services/backend";
 import ManagementModule from "../components/management/ManagementModule";
+import ForecastComparePanel from "../components/charts/ForecastComparePanel";
 import type { ManagementHandle } from "../components/management/preparePlan";
 import DiagnosisReply, { ReplyText } from "./DiagnosisAnswer";
 import DiagnosisCharts from "./DiagnosisCharts";
@@ -169,6 +170,9 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         {diagnosis?.state === "anomaly" && diagnosis.suggestion.trim() && <button type="button" className="ain-ai-adopt-link"
           disabled={busy || analysisMismatch || !data} onClick={() => managementRef.current?.prepare({ source: "chat", result: diagnosis, candidate: diagnosis.candidates[0] || null })}>
           根据此研判准备方案 →</button>}
+        {/* key 让范围变化时重建面板，从而丢弃旧的回测结果 */}
+        <ForecastComparePanel key={scope ? `${scope.scenario}|${scope.start}|${scope.end}` : "none"}
+          scope={scope ?? null} disabled={disabled} />
       </section>
       {data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
         diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans}

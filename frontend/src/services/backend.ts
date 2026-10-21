@@ -323,6 +323,8 @@ export async function fetchForecast(scope: QueryScope, signal?: AbortSignal): Pr
       series[ue][m as ForecastMetric] = {
         true_mean: item.true_mean == null ? null : numeric(item.true_mean),
         pred_mean: item.pred_mean == null ? null : numeric(item.pred_mean),
+        mae: item.mae == null ? null : numeric(item.mae),
+        rmse: item.rmse == null ? null : numeric(item.rmse),
         mape: item.mape == null ? null : numeric(item.mape),
         bins: Array.isArray(item.bins) ? item.bins.map(String) : [],
         true: Array.isArray(item.true) ? item.true.map(v => numeric(v)) : [],
@@ -334,5 +336,6 @@ export async function fetchForecast(scope: QueryScope, signal?: AbortSignal): Pr
     scenario: str(data.scenario), window_start: str(data.window_start), window_end: str(data.window_end),
     method: str(data.method), bin_size_min: numeric(data.bin_size_min) || 10,
     metrics: metrics as ForecastMetric[], ues, series,
+    limitations: strings(data.limitations),
   };
 }

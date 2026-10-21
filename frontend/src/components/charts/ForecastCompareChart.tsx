@@ -109,27 +109,25 @@ const hasValidForecast = Boolean(
                     ),
                   );
 
-                  const errors = forecast.ues
-                    .map((ue) =>
-                      finiteValue(
-                        forecast.series[ue]?.[metric.key]?.mape,
-                      ),
-                    )
-                    .filter(
-                      (value): value is number => value !== null,
-                    );
+                  // 对外展示用有量纲的 MAE/RMSE：MAPE 对 dBm（负值、绝对值大）没有意义，
+                  // 吞吐量等指标的分母很小还会炸到几百个百分点，容易误导。
+                  const pick = (field: "mae" | "rmse") =>
+                    forecast.ues
+                      .map((ue) => finiteValue(forecast.series[ue]?.[metric.key]?.[field]))
+                      .filter((value): value is number => value !== null);
 
-                  const average = errors.length
-                    ? errors.reduce(
-                        (sum, value) =>
-                          sum + value / errors.length,
-                        0,
-                      )
-                    : null;
+                  const mean = (values: number[]) =>
+                    values.length ? values.reduce((sum, value) => sum + value / values.length, 0) : null;
+
+                  const maeValues = pick("mae"), rmseValues = pick("rmse");
+                  const maeAvg = mean(maeValues), rmseAvg = mean(rmseValues);
+                  const degraded = forecast.method !== "prophet";
 
                   const description =
-                    average !== null && Number.isFinite(average)
-                      ? `UE 均值对比 · 平均 MAPE ${average.toFixed(1)}%`
+                    maeAvg !== null && Number.isFinite(maeAvg)
+                      ? `UE 均值对比 · 平均 MAE ${maeAvg.toFixed(2)} ${metric.unit}`
+                        + (rmseAvg !== null ? ` · RMSE ${rmseAvg.toFixed(2)} ${metric.unit}` : "")
+                        + (degraded ? " · 降级模式（移动平均）" : " · Prophet 回测")
                       : "UE 均值对比 · 误差未返回";
 
                   const option: EChartsOption = {

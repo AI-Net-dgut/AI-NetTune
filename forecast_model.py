@@ -10,6 +10,7 @@
 import logging
 import os
 import threading
+import time
 from datetime import datetime
 
 import numpy as np
@@ -26,6 +27,9 @@ FORECAST_HORIZON = 24      # 未来延伸 24 小时（1 天）
 # 实测 400+ 秒无响应；前端 45 秒就超时。超时后本进程改用 moving_average。
 PROPHET_TIMEOUT_SEC = float(os.getenv("NETTUNE_PROPHET_TIMEOUT", "20"))
 _prophet_state = {"disabled": False, "reason": ""}
+# 预热状态：warming=True 期间到达的请求直接用移动平均，避免和预热线程抢着等超时
+_warm_state = {"warming": False, "done": False, "ok": None}
+_warm_lock = threading.Lock()
 
 # Prophet 拟合失败时禁止输出优化日志刷屏
 # 【Windows 修复】prophet 依赖 cmdstanpy，其 Windows 路径会执行 where.exe tbb.dll 探测；
@@ -104,6 +108,9 @@ def _ma_fallback(vals: list[float], horizon: int, reason: str = "") -> dict:
         "true_mean": round(true_c, 2),
         "pred_mean": round(pred_c, 2),
         **metrics,
+        # 测试段的常数预测：前端"真实 vs 预测"对比图需要它画预测线，
+        # 缺了这条线图上就只剩实测，看不到对比（此前降级路径漏了这个字段）。
+        "predicted": [round(pred_c, 2)] * len(test),
         "forecast": [round(pred_c, 2)] * horizon,
         "lower": [round(pred_c, 2)] * horizon,
         "upper": [round(pred_c, 2)] * horizon,
@@ -183,6 +190,9 @@ def prophet_series(bins: list[str], vals: list[float], horizon: int) -> dict:
     # 否则每个 UE×指标都要再等一次超时，接口 10 会变成"永远很慢"。
     if _prophet_state["disabled"]:
         return _ma_fallback(vals, horizon, _prophet_state["reason"])
+    # 启动预热正在进行：本次先给移动平均，避免用户和预热线程一起等超时
+    if _warm_state["warming"]:
+        return _ma_fallback(vals, horizon, "模型预热中，本次先用移动平均")
 
     def fit_and_predict():
         m = Prophet(
@@ -239,7 +249,8 @@ def build_series(rows: list[dict], metrics: list[str] | None = None,
         for m, (bins, vals) in by_metric.items():
             r = prophet_series(bins, vals, horizon)
             if r is None:
-                series[ue][m] = {"method": "none", "true_mean": None, "pred_mean": None, "mape": None,
+                series[ue][m] = {"method": "none", "true_mean": None, "pred_mean": None,
+                                 "mae": None, "rmse": None, "mape": None,
                                  "bins": [], "true": [], "predicted": [],
                                  "forecast_bins": [], "forecast": [], "lower": [], "upper": []}
                 continue
@@ -257,3 +268,51 @@ def make_future_bins(last_bin: str, horizon: int) -> list[str]:
     """未来桶时间标签（供 forecast_bins 使用）"""
     dt = pd.to_datetime(last_bin)
     return [(dt + pd.Timedelta(hours=h + 1)).strftime("%Y-%m-%d %H:%M") for h in range(horizon)]
+
+
+def warm_up() -> None:
+    """启动时在后台预热一次 Prophet，把首次拟合的开销从"用户请求"挪到"服务启动"。
+
+    背景：Windows 上 Prophet 首次拟合会卡在建 Stan 模型阶段（实测 400+ 秒无响应）。
+    若不预热，用户第一次打开"预测对比"要干等一个超时周期；预热失败则本进程永久
+    降级为 moving_average，之后的请求都是毫秒级。
+
+    预热期间到达的请求会直接走移动平均（见 prophet_series 里的 _warm_state 判断），
+    不会和预热线程抢着等超时。
+    """
+    if not _HAS_PROPHET:
+        print("[forecast] 未安装 prophet：接口10 始终使用 moving_average")
+        _warm_state["done"] = True
+        return
+
+    def run():
+        with _warm_lock:
+            _warm_state["warming"] = True
+        started = time.time()
+        try:
+            ds = pd.date_range("2026-01-01", periods=48, freq="h")
+            y = 10.0 + np.sin(np.arange(48) / 5.0)
+            frame = pd.DataFrame({"ds": ds, "y": y})
+
+            def fit_once():
+                model = Prophet(daily_seasonality=True, weekly_seasonality=False,
+                                yearly_seasonality=False)
+                model.fit(frame)
+                model.predict(frame.tail(2))
+
+            _run_with_timeout(fit_once, PROPHET_TIMEOUT_SEC)
+            _warm_state["ok"] = True
+            print(f"[forecast] Prophet 预热成功（{time.time() - started:.1f}s），接口10 使用 prophet")
+        except Exception as exc:      # noqa: BLE001 - 任何失败都只降级，不影响启动
+            _prophet_state["disabled"] = True
+            _prophet_state["reason"] = f"启动预热失败：{exc}"
+            _warm_state["ok"] = False
+            print(f"[forecast] Prophet 预热未通过（{time.time() - started:.1f}s）：{exc}")
+            print("[forecast] 本进程内接口10 直接使用 moving_average；"
+                  "如需再试可调大 NETTUNE_PROPHET_TIMEOUT 后重启")
+        finally:
+            with _warm_lock:
+                _warm_state["warming"] = False
+                _warm_state["done"] = True
+
+    threading.Thread(target=run, name="prophet-warmup", daemon=True).start()
