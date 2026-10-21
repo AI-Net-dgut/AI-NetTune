@@ -519,6 +519,7 @@ def analyze_anomaly(req: AnomalyRequest):
         findings.sort(key=lambda f: sev_rank.get(f["level"], 9))
         m = findings[0]
         is_anomaly, anomaly_type, level = True, m["anomaly_type"], m["level"]
+        anomaly_scope = "window"        # 整窗指标本身就异常
         evidence, cause, suggestion = m["evidence"], m["cause"], m["suggestion"]
         nstatus, affected_aps = m["network_status"], [f["ap_id"] for f in findings]
         candidates = m.get("candidates", [])
@@ -526,19 +527,25 @@ def analyze_anomaly(req: AnomalyRequest):
         confidence = round(min(0.99, 0.6 + 0.08 * len(evidence) + (0.1 if len(findings) > 1 else 0)), 2)
     elif hour_findings_all:
         # 整窗均值被正常时段稀释判"正常"，但存在时段性异常（小时级）
-        # → 主结果升级为最严重的小时异常，避免"有告警却说正常"的矛盾
+        # → 主结果升级为最严重的小时异常，避免"有告警却说正常"的矛盾。
+        # 但必须如实标注这是"时段性异常"而不是整窗异常（原实现只加 0.1 置信度、
+        # 对外文案与整窗异常完全无法区分，容易被质疑"被 1 个小时带偏整窗结论"）。
         hour_findings_all.sort(key=lambda f: sev_rank.get(f["level"], 9))
         m = hour_findings_all[0]
         is_anomaly, anomaly_type, level = True, m["anomaly_type"], m["level"]
+        anomaly_scope = "hour"          # 仅个别小时越阈，整窗均值正常
         evidence, cause, suggestion = m["evidence"], m["cause"], m["suggestion"]
+        cause = (f"时段性异常：仅个别小时越阈，整窗均值仍在正常范围。以下为最严重时段的表现——{cause}")
         nstatus, affected_aps = m["network_status"], [m["ap_id"]]
         candidates = m.get("candidates", [])
         ap_candidates = [{"ap_id": f["ap_id"], "candidates": f["candidates"]} for f in hour_findings_all]
-        confidence = round(min(0.99, 0.6 + 0.08 * len(evidence) + 0.1), 2)
+        # 时段性异常的证据只覆盖个别小时，置信度不应高于整窗异常
+        confidence = round(min(0.75, 0.5 + 0.08 * len(evidence)), 2)
     else:
         rsrp_avg = avg(rows, "rsrp"); sinr_avg = avg(rows, "sinr")
         thr_avg = avg(rows, "throughput"); prb_avg = avg(rows, "prb_usage")
         is_anomaly, anomaly_type, level = False, "正常", "低"
+        anomaly_scope = "none"
         evidence = []
         cause = (f"各AP的RSRP均值{rsrp_avg:.1f}dBm、SINR均值{sinr_avg:.1f}dB、PRB利用率{prb_avg:.1f}%、"
                  f"吞吐量均值{thr_avg:.1f}Mbps，各项指标均在正常范围")
@@ -594,6 +601,9 @@ def analyze_anomaly(req: AnomalyRequest):
         "message": "success",
         "data": {
             "is_anomaly": is_anomaly,
+            # anomaly_scope: window=整窗异常 / hour=仅个别小时异常（整窗均值正常）/ none=正常
+            # 前端据此区分展示，避免把"某一小时越阈"讲成"整窗故障"
+            "anomaly_scope": anomaly_scope,
             "anomaly_type": anomaly_type,
             "level": level,
             "confidence": confidence,
@@ -993,12 +1003,55 @@ def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | No
             "query_ref": {"scenario": scenario, "end_time": win_end}}
 
 # ---- Function Calling 工具注册表：意图名 → 工具函数（新增工具在这里登记即可） ----
+def tool_chat(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:
+    """闲聊 / 能力询问。
+
+    原实现把任何未命中关键词、LLM 也认不出的问题静默回退成 query_kpi，
+    于是用户说"你好"会得到一段 RSRP/SINR 均值汇报（审查报告 B-9）。
+    现在明确走这条分支：不编造任何数据，只说明能做什么。
+    """
+    return {
+        "reply": (
+            "你好，我是 AI-NetTune 网络运维助手。\n\n"
+            "我可以帮你做这些事：\n"
+            "1. 故障研判：例如「分析一下 AP-02 在 2026-01-01 10:00 到 12:00 的情况」\n"
+            "2. 指标查询：例如「看看当前各 AP 的 RSRP 和吞吐量」\n"
+            "3. 空间视图：例如「画一下这个时间窗的热力图」「显示网络拓扑」\n"
+            "4. 趋势预测：例如「预测下一个小时的功率变化」\n"
+            "5. 报告导出：研判完成后可导出 Markdown / HTML 报告\n\n"
+            "你想先看哪一部分？"
+        ),
+        "intent": "chat",
+        "chart": None,
+        "diagnosis": None,
+        "plans": [],
+    }
+
+
+# 判断"这句话是不是在问数据"。用于把闲聊和数据查询分开：
+# 关键词规则未命中时，不能一律当闲聊（"当前各AP的RSRP"没有指令词但明显是数据问题），
+# 也不能一律当 KPI 查询（"你好"会得到一段 RSRP 均值汇报）。
+_DATA_HINTS = (
+    "rsrp", "sinr", "rsrq", "吞吐", "throughput", "prb", "功率", "占用", "干扰",
+    "热力", "拓扑", "链路", "节点", "研判", "诊断", "故障", "弱覆盖", "拥塞", "异常",
+    "预测", "趋势", "预警", "报告", "导出", "指标", "统计", "采样", "频段", "频谱",
+    "ap", "ue", "用户", "基站", "场景", "校园", "商场", "体育馆", "分析", "对比", "评估",
+)
+
+
+def _looks_like_data_query(message: str) -> bool:
+    """粗判是否为数据类问题（宁可判成数据问题，也不要漏掉真实查询）。"""
+    text = (message or "").strip().lower()
+    return any(hint in text for hint in _DATA_HINTS)
+
+
 TOOLS = {
     "query_kpi": tool_query_kpi,
     "fault_diagnosis": tool_fault_diagnosis,
     "get_heatmap": tool_heatmap,
     "get_topology": tool_topology,
     "forecast": tool_forecast,
+    "chat": tool_chat,
 }
 
 
@@ -1023,9 +1076,15 @@ def agent_chat(req: ChatRequest):
             # get_intent 已内部降级到 rule_intent，此处仅做最终兜底，不抛出错误
             pass
 
-    # 3. 第三层：最终兜底，任何非法/未知意图全部回退KPI查询
+    # 3. 第三层：最终兜底。
+    #    关键词未命中且没有 LLM 可用时，只有"明显不是数据问题"的才走闲聊；
+    #    像"当前各AP的RSRP"这种没有指令词但明显在问数据的，仍按 KPI 查询处理。
+    #    原实现把一切都回退 query_kpi，于是"你好"会得到一段 RSRP 均值汇报（审查报告 B-9）；
+    #    但也不能反过来把数据问题当闲聊，所以用 _looks_like_data_query 分流。
+    if not hit and not ENABLE_LLM and not _looks_like_data_query(req.message):
+        intent = "chat"
     if intent not in TOOLS:
-        intent = "query_kpi"
+        intent = "chat"                 # 未知意图一律走闲聊，而不是 query_kpi
 
     # 4. 执行工具：窗口跟随前端（未传则用动态最近 24h，贴近当前，回放漏传不穿帮）
     scenario = resolve_scenario(params.get("scenario"), req.scenario)
@@ -1040,7 +1099,7 @@ def agent_chat(req: ChatRequest):
         # 4.2 仍缺窗口 → 动态最近 24h
         if not req.window_start or not req.window_end:
             req.window_start, req.window_end = _default_window(scenario)
-    handler = TOOLS.get(intent, TOOLS["query_kpi"])
+    handler = TOOLS[intent]
     if intent == "forecast":
         data = handler(scenario, req.window_start, req.window_end, req.message)
     else:
