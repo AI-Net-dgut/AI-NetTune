@@ -197,12 +197,18 @@ POST /api/export/report
 ```json
 {
   "scenario": "校园",
-  "start_time": "2026-09-28 00:00:00",
-  "end_time": "2026-09-28 23:59:59",
-  "format": "md",
+  "start_time": "2026-01-01 10:00:00",
+  "end_time": "2026-01-01 11:59:59",
+  "format": "html",
   "include_chart": true
 }
 ```
+
+|字段|必填|说明|
+|---|---|---|
+|scenario / start_time / end_time|是|分析范围；`start_time` 不得晚于 `end_time`|
+|format|否|`md` / `markdown` / `html`，默认 `md`；其它值返回 40002|
+|include_chart|否|默认 `true`：Markdown 输出文本条形图，HTML 输出内联 SVG（不依赖外部图片）|
 
 响应:
 
@@ -211,11 +217,43 @@ POST /api/export/report
   "code": 0,
   "message": "success",
   "data": {
-    "report_id": "RPT_20260928_01",
-    "file_url": "/download/reports/RPT_20260928_01.md"
+    "report_id": "RPT_20260101_101500",
+    "file_url": "/api/download/reports/RPT_20260101_101500.html",
+    "format": "html",
+    "include_chart": true,
+    "sample_count": 360,
+    "bytes": 6893
   }
 }
 ```
+
+### 报告内容（v2）
+
+旧实现只写 4 行均值，且 `format=html` 时仅把扩展名改成 `.html`、内容仍是 Markdown（打开是纯文本）。
+现在正文由 `report_model.py` 生成，两种格式各自渲染：
+
+|章节|内容|
+|---|---|
+|一、数据概览|采样条数 + RSRP/SINR/吞吐/PRB/丢包/时延均值|
+|二、研判结论|结论、受影响 AP、判断依据、处置建议；**证据链**表；**候选原因**（含支持/反证/待核查）|
+|三、分 AP 对比|每 AP 的 RSRP/SINR/吞吐/PRB/弱覆盖占比/拥塞占比/研判|
+|四、小时趋势|按小时的指标与研判 + 可选图表|
+|五、告警历史|最近 10 条（时刻/AP/类型/程度/原因）|
+|六、处理方案与预计效果|方案名、参数建议、仿真结论（复用接口 14 口径）|
+|附：口径与限制|数据为仿真、研判为规则引擎、置信度不代表概率、报告不含预测预警|
+
+> 研判部分直接复用接口 2 的结果，保证"报告口径 = 页面口径"。
+> 该窗口没有采样时**不生成报告**，返回 40002 并说明原因（不产出 0 均值的假报告）。
+
+### 下载路径变更（v2）
+
+挂载点从 `/download/reports` 改为 **`/api/download/reports`**：
+vite dev 的代理只代理 `/api` 前缀，旧路径在开发模式下会 404（前端此前也从未调用过该接口）。
+
+### 报告目录
+
+默认 `<项目根>/reports`，可用环境变量 `NETTUNE_REPORTS_DIR` 指到别处
+（安装在 Program Files 或只读容器时必需）。目录不可写时返回 50001 并带上目标路径，不抛 500 堆栈。
 
 ## 接口 5：信号热力图数据（含空间估计）
 

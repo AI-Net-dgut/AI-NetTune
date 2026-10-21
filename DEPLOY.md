@@ -214,6 +214,7 @@ npm run preview        # 注意：preview 不读 vite.config.ts 的 proxy，仍�
 | `NETTUNE_DATA_DIR` | 后端 | `<项目根>/data` | 数据目录整体换位置 |
 | `NETWORK_DATA_PATH` | 后端 | 自动探测 | 网络表文件，优先级最高 |
 | `SPECTRUM_DATA_PATH` | 后端 | 自动探测 | 频谱表文件，优先级最高 |
+| `NETTUNE_REPORTS_DIR` | 后端 | `<项目根>/reports` | 报告输出目录；装在 Program Files 或只读容器时必需 |
 | `LLM_API_KEY` | 后端 | 空 | 空 → 意图解析与研判降级为规则模板 |
 | `LLM_URL` | 后端 | `https://api.deepseek.com/chat/completions` | OpenAI 兼容接口均可 |
 | `LLM_MODEL` | 后端 | `deepseek-chat` | 模型名 |

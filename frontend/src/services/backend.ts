@@ -269,6 +269,21 @@ export async function simulatePlan(scope: QueryScope, plan: TreatmentPlan, value
   });
   return parseSimulation(data, scope);
 }
+/** 生成分析报告（接口4）。返回可直接打开的下载地址与报告编号。 */
+export async function exportReport(scope: QueryScope, format: "md" | "html" = "html",
+  signal?: AbortSignal): Promise<{ url: string; reportId: string; format: string; bytes: number }> {
+  validateScope(scope);
+  const data = await request("/export/report", signal, {
+    scenario: scope.scenario, start_time: scope.start, end_time: scope.end,
+    format, include_chart: true,
+  });
+  const path = requiredString(data.file_url, "file_url");
+  return {
+    // file_url 形如 /api/download/reports/xxx，与 API_BASE 拼接后开发/生产都可用
+    url: `${API_BASE}${path}`, reportId: str(data.report_id) || "report",
+    format: str(data.format) || format, bytes: numeric(data.bytes) || 0,
+  };
+}
 export async function chatNetwork(message: string, scenario: string, window?: QueryScope, signal?: AbortSignal, currentTime?: string): Promise<ChatResult> {
   const data = await request("/agent/chat", signal, {
     message, scenario, session_id: "frontend-p0",

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useRef, useState } from "react";
 import type useNetworkQuery from "../hooks/useNetworkQuery";
 import type { DashboardData, QueryScope, SpatialMapData } from "../types/backend";
-import { scopeLabel } from "../services/backend";
+import { scopeLabel, exportReport } from "../services/backend";
 import ManagementModule from "../components/management/ManagementModule";
 import type { ManagementHandle } from "../components/management/preparePlan";
 import DiagnosisReply, { ReplyText } from "./DiagnosisAnswer";
@@ -38,6 +38,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
 }) {
   const [draft, setDraft] = useState("");
   const [sendNotice, setSendNotice] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState("");
   const [evidenceSelection, setEvidenceSelection] = useState<(EvidenceSelection & { diagnosisId: number; requestId: number }) | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const managementRef = useRef<ManagementHandle>(null);
@@ -58,6 +60,28 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
 
   const questionTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(draft) || needsFutureForecast(draft)));
   const sendBlocked = (disabled && !questionTime) || dataLoading || Boolean(dataError) || query.pending || (followingLive && !questionTime);
+
+  /** 生成并打开/下载分析报告（接口4）。报告口径与当前展示范围一致。 */
+  async function runExport(format: "md" | "html") {
+    if (!scope || exporting) return;
+    setExporting(true); setExportNotice("");
+    try {
+      const { url, reportId, bytes } = await exportReport(scope, format);
+      if (format === "html") {
+        globalThis.open(url, "_blank", "noopener");
+        setExportNotice(`报告 ${reportId} 已生成（${Math.round(bytes / 1024)} KB），已在新标签打开。`);
+      } else {
+        const a = document.createElement("a");
+        a.href = url; a.download = `${reportId}.md`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setExportNotice(`报告 ${reportId} 已下载（${Math.round(bytes / 1024)} KB）。`);
+      }
+    } catch (error) {
+      setExportNotice(error instanceof Error ? `报告生成失败：${error.message}` : "报告生成失败");
+    } finally {
+      setExporting(false);
+    }
+  }
   function send(message = draft, preserveDiagnosis = false, retry = false) {
     const explicitTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(message) || needsFutureForecast(message)) && !preserveDiagnosis && !retry);
     if ((disabled && !explicitTime) || dataLoading || dataError || query.pending || (followingLive && !explicitTime) || !message.trim()) return;
@@ -159,6 +183,16 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         {query.history.map(entry => <article key={entry.id} className={`ain-query-record${entry.failed ? " is-error" : ""}`}>
           <div className="ain-query-record-meta"><strong>{entry.question}</strong><time>{new Date(entry.createdAt).toLocaleTimeString("zh-CN", { hour12: false })}</time></div>
           <ReplyText text={entry.answer} /><p className="ain-ai-note">{entry.analysisMode === "history" ? "历史回顾" : "固定时刻分析"} · 分析截至：{entry.analysisTime ?? "未记录"}（北京时间）</p><p className="ain-ai-note">{entry.scope}（北京时间）</p></article>)}</div>
-    </details><button type="button" className="ain-ai-text-button" disabled={query.pending || !query.history.length} onClick={query.clearHistory}>清空记录</button></div>
+    </details>
+      <span className="ain-report-actions">
+        <button type="button" className="ain-ai-text-button" disabled={!scope || exporting}
+          title="按当前展示范围生成报告：研判结论、证据链、候选原因、分 AP 对比、小时趋势与处理方案"
+          onClick={() => runExport("html")}>{exporting ? "生成中…" : "导出分析报告"}</button>
+        <button type="button" className="ain-ai-text-button" disabled={!scope || exporting}
+          onClick={() => runExport("md")}>下载 Markdown</button>
+      </span>
+      <button type="button" className="ain-ai-text-button" disabled={query.pending || !query.history.length} onClick={query.clearHistory}>清空记录</button>
+    </div>
+    {exportNotice && <p className="ain-ai-note" role="status">{exportNotice}</p>}
   </section>;
 }

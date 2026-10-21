@@ -12,6 +12,7 @@ import statistics
 import re
 import math
 import os
+from pathlib import Path
 from datetime import datetime, timedelta
 import llm_agent
 from llm_agent import get_intent, rule_intent, extract_time_range, call_llm_chat
@@ -20,6 +21,7 @@ from forecast_model import build_series, DEFAULT_METRICS
 import spatial_model as _sm
 from spatial_model import build_spatial
 import plan_model
+import report_model
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
@@ -33,8 +35,11 @@ from data_layout import (
 )
 
 # 项目根目录由 data_layout 统一定义：所有运行时路径都以它为准。
-# 不用相对路径，否则启动时 cwd 不同会导致“数据读不到 / 报告写到别处 / 下载 404”。
-REPORTS_DIR = BASE_DIR / "reports"
+# 不用相对路径，否则启动时 cwd 不同会导致"数据读不到 / 报告写到别处 / 下载 404"。
+# NETTUNE_REPORTS_DIR 可把报告目录指到别处：装在 Program Files 或只读容器里时必需。
+REPORTS_DIR = Path(os.getenv("NETTUNE_REPORTS_DIR") or (BASE_DIR / "reports")).expanduser()
+if not REPORTS_DIR.is_absolute():
+    REPORTS_DIR = BASE_DIR / REPORTS_DIR
 
 # 开关：是否启用 LLM 增强。
 # 默认"配了密钥才开启"——没有密钥时每次提问都会先发一次无密钥请求，
@@ -85,7 +90,8 @@ app = FastAPI()
 # 自动创建reports目录，避免不存在报错（用绝对路径，与导出时写入的目录一致）
 os.makedirs(REPORTS_DIR, exist_ok=True)
 # 挂载静态目录，路径和返回的file_url前缀保持一致
-app.mount("/download/reports", StaticFiles(directory=str(REPORTS_DIR)), name="download_reports")
+# 挂载路径放在 /api 下：否则 vite dev 的代理（只代理 /api）转发不到，报告链接会 404。
+app.mount("/api/download/reports", StaticFiles(directory=str(REPORTS_DIR)), name="download_reports")
 # ==================================
 
 # 全局参数校验异常处理：统一返回格式
@@ -1046,40 +1052,58 @@ class ReportRequest(BaseModel):
     format: str = "md"
     include_chart: bool = True
 
-@app.post("/api/export/report")
+@app.post("/api/export/report", summary="接口4：导出分析报告（真实研判内容）")
 def export_report(req: ReportRequest):
-    # 第一周：只生成报告编号与下载路径；第3周接入真实报告生成
-        # ===== 新增：参数合法性校验 =====
+    """生成一份包含研判结论、证据链、候选原因、分 AP 对比、趋势与处理方案的报告。
+
+    旧实现只写 4 行均值，且 format=html 时仅把扩展名改成 .html、内容仍是 Markdown。
+    现在报告正文由 report_model 生成：md 与 html 各自渲染，include_chart 生效。
+    """
     if not req.scenario or not req.scenario.strip():
         return error_response(ERROR_CODE["PARAM_MISSING"], "场景参数不能为空")
     if not req.start_time or not req.end_time:
         return error_response(ERROR_CODE["PARAM_MISSING"], "时间参数不能为空")
-    # ==============================
-    report_id = "RPT_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-    ext = "md" if req.format in ("md", "markdown") else "html"
+    if req.start_time > req.end_time:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "起始时间不能晚于结束时间")
+    if req.format not in ("md", "markdown", "html"):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "format 仅支持 md / markdown / html")
+
+    rows = filter_rows(req.scenario, req.start_time, req.end_time)
+    if not rows:
+        # 没有数据就不要产出"0 均值"的报告，明确告知
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            f"场景「{req.scenario}」在 {req.start_time} ~ {req.end_time} 没有采样，无法生成报告")
+
+    # 复用接口2的研判，保证"报告口径 = 页面口径"
+    diagnosis = analyze_anomaly(AnomalyRequest(
+        scenario=req.scenario, window_start=req.start_time, window_end=req.end_time))["data"]
+
+    now = datetime.now()
+    report_id = "RPT_" + now.strftime("%Y%m%d_%H%M%S")
+    ctx = {
+        "report_id": report_id,
+        "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "scenario": req.scenario,
+        "start": req.start_time,
+        "end": req.end_time,
+        "sample_count": len(rows),
+        "source_note": "仿真数据集（CSV），非现网实测",
+        "means": {k: avg(rows, k) for k in
+                  ("rsrp", "sinr", "throughput", "prb_usage", "packet_loss", "latency")},
+        "diagnosis": diagnosis,
+        "hourly_trend": diagnosis.get("hourly_trend") or [],
+        "ap_comparison": diagnosis.get("ap_comparison") or [],
+        "alarm_history": diagnosis.get("alarm_history") or [],
+        "plans": diagnosis.get("plans") or [],
+    }
+
+    ext, content = report_model.build_report(ctx, req.format, req.include_chart)
     filename = f"{report_id}.{ext}"
     file_path = REPORTS_DIR / filename
 
-    # ===== 新增：生成真实报告内容并写入文件 =====
-    # 1. 拉取对应范围的数据
-    rows = filter_rows(req.scenario, req.start_time, req.end_time)
-
-    # 2. 组装md报告内容
-    content = f"""# 网络分析报告
-    - 报告ID：{report_id}
-    - 场景：{req.scenario}
-    - 时间范围：{req.start_time} 至 {req.end_time}
-
-    ## 数据概览
-    - 总采样条数：{len(rows)}
-    - 平均RSRP：{avg(rows, 'rsrp'):.1f} dBm
-    - 平均SINR：{avg(rows, 'sinr'):.1f} dB
-    - 平均吞吐量：{avg(rows, 'throughput'):.1f} Mbps
-    """
-
-    # 3. 写入文件
-    #    目录不可写（只读容器、Program Files、权限受限等）时不要抛 500 堆栈，
-    #    直接把"写到哪个路径、为什么失败"返回给调用方，便于现场定位。
+    # 目录不可写（只读容器、Program Files、权限受限等）时不要抛 500 堆栈，
+    # 直接把"写到哪个路径、为什么失败"返回给调用方，便于现场定位。
     try:
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
@@ -1089,11 +1113,14 @@ def export_report(req: ReportRequest):
             ERROR_CODE["INTERNAL_ERROR"],
             f"报告写入失败：{exc}（目标路径 {file_path}，请确认进程对该目录有写权限）",
         )
-    # ============================================
 
     return success_response({
         "report_id": report_id,
-        "file_url": f"/download/reports/{filename}"
+        "file_url": f"/api/download/reports/{filename}",
+        "format": ext,
+        "include_chart": req.include_chart,
+        "sample_count": len(rows),
+        "bytes": len(content.encode("utf-8")),
     })
 
 # ========== 热力图数据接口 ==========
