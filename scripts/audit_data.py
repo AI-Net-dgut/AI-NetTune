@@ -135,13 +135,20 @@ def main() -> int:
                 pre = rsrp[j:i]
                 below = int((pre < -105).sum())
                 drop = float(pre.mean() - rsrp[i])
-                item = (apid, str(ts[i])[:19], seg_len, float(pre.mean()), float(rsrp[i]), drop, below)
-                (ramps if below >= 3 else steps).append(item)
+                # 渐变判据（v2.8 修订）：只看"低于 −105 的样本数"会漏掉缓坡——
+                # 20 分钟渐变的后段才穿过 −105，前 25 分钟里可能只有 1~2 个样本低于它，
+                # 但落差有 14~17 dB，这显然不是一分钟阶跃。
+                # 因此补一条趋势判据：前 5 分钟均值 − 后 5 分钟均值 ≥ 3 dB 也算渐变。
+                early_drop = float(pre[:5].mean() - pre[-5:].mean()) if len(pre) >= 10 else 0.0
+                is_ramp = below >= 3 or early_drop >= 3.0
+                item = (apid, str(ts[i])[:19], seg_len, float(pre.mean()), float(rsrp[i]),
+                        drop, below, early_drop)
+                (ramps if is_ramp else steps).append(item)
 
         def show(item):
-            apid, when, seg, pre_mean, now, drop, below = item
+            apid, when, seg, pre_mean, now, drop, below, early = item
             return (f"{apid} {when}：切入前连续 {seg} 分钟 normal，均值 {pre_mean:.1f} → {now:.1f} dBm"
-                    f"（落差 {drop:.1f}），其中 < −105 的样本 {below}/{seg}")
+                    f"（落差 {drop:.1f}，前段-后段 {early:.1f}），其中 < −105 的样本 {below}/{seg}")
 
         note(f"normal→weak 切点分类：渐变型 {len(ramps)} 个，阶跃型 {len(steps)} 个"
              f"（已排除段长 < 8 分钟的闪烁型）")
@@ -205,7 +212,8 @@ def main() -> int:
         import pandas as pd
         spec = pd.read_csv(DATA_DIR / "spectrum_7d.csv", encoding="utf-8-sig",
                            usecols=["timestamp", "observation_id", "band_id",
-                                    "lower_mhz", "upper_mhz", "power_dbm", "occupancy_pct"])
+                                    "lower_mhz", "upper_mhz", "power_dbm", "occupancy_pct",
+                                    "network_status"])
         need9 = {"timestamp", "observation_id", "band_id", "lower_mhz", "upper_mhz",
                  "power_dbm", "occupancy_pct", "network_status", "scenario"}
         head = set(pd.read_csv(DATA_DIR / "spectrum_7d.csv", encoding="utf-8-sig", nrows=0).columns)
@@ -221,14 +229,28 @@ def main() -> int:
             bad(f"占用率越界 {occ_bad} 行")
         else:
             ok("占用率全部在 0–100%")
-        # 占用率与功率的语义一致性（文档定义：占用率 = 帧内 power≥−95 的时间比）
-        busy = spec["power_dbm"] >= -95
-        note(f"power ≥ −95 的行占比 {busy.mean() * 100:.1f}%，"
-             f"其占用率均值 {spec.loc[busy, 'occupancy_pct'].mean():.1f}%"
-             if busy.any() else "没有 power ≥ −95 的行")
-        if busy.mean() > 0.5 and spec.loc[busy, "occupancy_pct"].mean() < 80:
-            bad("占用率与功率语义不一致：大多数帧功率都 ≥ −95 dBm，按文档定义占用率应接近 100%，"
-                "实测却只有 20–55%（审查报告 D-5）")
+        # 占用率语义（v2.8 更正后的定义，见 docs/api.md 第三节）：
+        # occupancy_pct 是"资源占用比例（业务负载指标）"，与 power_dbm（信号强度指标）
+        # 不是同一物理量，因此不能用"power≥−95 的时间比"去反推。
+        # 旧检查按旧定义做，会永远报不符；现在改为校验"三态排序是否物理合理"：
+        #   拥塞（负载高）> 正常 > 弱覆盖（用户少、业务退避）
+        occ_by_status = {
+            st: spec.loc[spec["network_status"] == st, "occupancy_pct"]
+            for st in ("congestion", "normal", "weak_coverage")
+        }
+        present = {st: s for st, s in occ_by_status.items() if len(s)}
+        if len(present) >= 2:
+            summary = "，".join(
+                f"{st} {s.mean():.1f}%（中位 {s.median():.1f}%）" for st, s in present.items())
+            note(f"占用率按状态均值：{summary}")
+        cong, norm, weak = occ_by_status["congestion"], occ_by_status["normal"], occ_by_status["weak_coverage"]
+        if len(cong) and len(norm) and len(weak):
+            if cong.mean() > norm.mean() > weak.mean():
+                ok(f"占用率三态排序合理：拥塞 {cong.mean():.1f}% > 正常 {norm.mean():.1f}% "
+                   f"> 弱覆盖 {weak.mean():.1f}%（负载指标，与功率非同一物理量）")
+            else:
+                bad(f"占用率三态排序不合理：拥塞 {cong.mean():.1f}% / 正常 {norm.mean():.1f}% "
+                    f"/ 弱覆盖 {weak.mean():.1f}%，应满足 拥塞 > 正常 > 弱覆盖")
 
     # ---------- 汇总 ----------
     print("\n" + "=" * 78)
