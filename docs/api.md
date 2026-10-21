@@ -716,15 +716,15 @@ POST /api/forecast/analyze
 |lower_mhz / upper_mhz|number|频段上下边界 MHz|
 |power_dbm|number|观测点在频段内的接收功率 dBm（非功率谱密度）|
 |occupancy_pct|number|频段在 1 分钟帧内被占用时间比例 %|
-|network_status|string|normal / weak_coverage / congestion；与 network_data_7d_events.csv 逐分钟逐 AP 对齐（含 EV 事件与背景异常标签）|
+|network_status|string|normal / weak_coverage / congestion；与 network_data_7d_events.csv 逐分钟逐 AP 对齐（含 EV 事件与背景异常标签）。UE→AP 汇总规则：同一 (分钟,AP) 下任一 UE 异常即该 AP 异常；多类型并存时频段级混合标注（前 25 段 congestion、后 25 段 weak_coverage），单类型全段一致|
 |scenario|string|业务场景，如 校园|
 
 ### 四条锁定口径
 
 1. **频段固定网格**：5G n78 3300—3800 MHz，10 MHz/段，共 50 段，升序不重叠（首版 ≤128 段上限）。
 2. **history 帧按前端传入窗口**：接口按 `history.start/end`（约 60 分钟）裁剪历史帧，不按 7 天全量返回；单侧帧数 × 频段数 ≤ 40000。
-3. **统计方式**：`power_dbm` 为观测点（AP）在频段内的接收功率，由中心 3550 MHz 高斯包络 + 帧内随机波动生成，**非功率谱密度**（若采用 dBm/Hz 需另行扩展单位和语义）；`occupancy_pct` 占用判定阈值为接收功率 ≥ −95 dBm 视为忙，分母为帧内采样次数（1 分钟 = 60 次 1s 采样）；正常帧 20–55%，拥塞故障帧 85–95%，弱覆盖故障帧 10–30%；约 2% 帧存在背景干扰（数值突降/突升，状态仍为 normal）。
+3. **统计方式**：`power_dbm` 为观测点（AP）在频段内的接收功率，由中心 3550 MHz 高斯包络 + 帧内随机波动生成，**非功率谱密度**（若采用 dBm/Hz 需另行扩展单位和语义）；`occupancy_pct` 占用判定阈值为接收功率 ≥ −95 dBm 视为忙，分母为帧内采样次数（1 分钟 = 60 次 1s 采样）；正常帧 20–55%，拥塞故障帧 85–95%，弱覆盖故障帧 10–30%；**弱覆盖帧功率对齐后端高亮阈值，全段 < −95 dBm**（正常包络基础上再降约 41 dB，中心段约 −101、边缘段约 −113）；约 2% 帧存在背景干扰（数值突降/突升，状态仍为 normal，仅 3/30 天非 events 版生成，7 天 events 版背景异常直接来自网络表标签）。
 4. **防未来口径**：模型与预警只用 `baseTime` 及以前的数据，不读取 7 天 CSV 的未来真值或未来异常标签。
 
-> 事件对齐说明（v2.6）：频谱 `network_status` 由生成器 `--events data/network_data_7d_events.csv` 模式逐分钟逐 AP 取自网络事件表（含非整点事件段如 09:44 起），保证预测预警与数据展示故障研判使用同一份事件定义。
+> 事件对齐说明（v2.7）：频谱 `network_status` 由生成器 `--events data/network_data_7d_events.csv` 模式逐分钟逐 AP 全量取自网络事件表（含 EV 事件与背景异常标签、非整点事件段如 09:44 起）。聚合口径：同一 (时间,AP) 多 UE 多类型全部保留并按频段混合标注，保证按「分钟+AP+异常类型」去重后两表差异为 0（v2.6 曾因只取首个非 normal 导致 86 组类型缺失，v2.7 已修复）。
 > 数据文件按 `.gitignore` 不入仓库，由数据侧另行转交。

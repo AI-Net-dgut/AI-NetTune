@@ -31,13 +31,20 @@ v2.5 扩展（唐苗，频谱维度，配合前端预测预警 v2 契约）：
    - 背景干扰：约 2% 帧随机频段功率突降/占用突升，network_status 仍为 normal（模拟未标注干扰）；
    - 频谱帧同样遵守防未来口径：数据文件只含真实生成的历史序列，接口侧预测只用 baseTime 以前。
 4. 与 network_data 同时间轴（1 分钟一帧 × 3 观测点 × 50 频段 = 150 行/帧）
-v2.6 扩展（唐苗，事件表对齐，修复前端《预测预警问题同步》问题1）：
-1. 新增 --events <events_csv> 参数：频谱 network_status 逐分钟逐 AP 取自网络 events 表
-   （network_data_7d_events.csv），含 EV 事件与背景异常标签，彻底消除双源不一致；
-   未传 --events 时保持 v2.5 的 FAULT_SCHEDULE 注入（3/30 天版）。
-2. 事件段分钟精度跟随网络表（如 09:44 起非整点）；数值联动沿用 v2.5 口径：
-   weak→功率降 15dB + 占用 10-30%；congestion→占用 85-95%（中心加权）+ 功率正常；
-   背景干扰（2%）只叠加在 normal 帧上，避免双重异常。
+v2.7 扩展（唐苗，全量事件对齐 + 功率阈值对齐，修复前端《预测预警问题状态与责任分工》数据口径）：
+1. --events 模式下，频谱 network_status 逐分钟逐 AP 全量取自网络 events 表：
+   - 聚合规则：同一 (时间, AP) 下任一 UE 标注异常即 AP 异常；多 UE 多类型全部保留
+     （含 EV 事件与网络表背景异常标签），消除 v2.6 只取"首个非 normal"导致的类型缺失
+     （前端复算 86 组"网络表有、频谱表无"差异）。
+   - 同一 (时间, AP) 同时存在 weak_coverage + congestion 时，频段级混合标注：
+     前 25 段 congestion、后 25 段 weak_coverage（50 段按序切分），保证
+     (分钟+AP+异常类型) 去重口径下两表完全一致（差异=0）。
+2. 弱覆盖功率对齐后端高亮阈值：weak 帧功率在正常包络基础上再降
+   SPECTRUM_DROP_K+33 dB（中心段约 -101 dBm、边缘段约 -113 dBm，全段 < -95 dBm），
+   修复"功率最低 -92.05、选不到弱覆盖高亮频段"问题。
+3. events 模式下不再独立注入背景干扰（网络表背景异常已通过对齐表达），
+   避免与网络表随机标签错位；v2.5 非 events 模式（3/30 天版）行为保持不变。
+未传 --events 时保持 v2.5 的 FAULT_SCHEDULE 注入（3/30 天版）。
 扩展说明：
 - 核心字段15个，保持接口契约不变
 - 末尾追加3个辅助字段，用于故障原因深度分析
@@ -382,45 +389,61 @@ def generate_spectrum_dataset(total_days: int, fault_schedule: list, events_df=N
     total_slots = total_days * 24 * 60  # 1 分钟一帧
     start = datetime.strptime(START_TIME, "%Y-%m-%d %H:%M:%S")
 
-    # v2.6：预构建 (timestamp, ap_id) → 异常状态 映射（故障优先，首个非 normal）
+    # v2.7：预构建 (timestamp, ap_id) → 异常类型集合（聚合同一 AP 下所有 UE 的标注，
+    # 含 EV 事件与背景异常；多 UE 多类型全部保留，用于频段级混合标注）
     status_map = {}
     if events_df is not None:
         for ts, ap, st in events_df[["timestamp", "ap_id", "network_status"]].itertuples(index=False):
-            if st != "normal" and (ts, ap) not in status_map:
-                status_map[(ts, ap)] = st
-        print(f"[v2.6] 已加载网络事件表：异常 (时间,AP) 键 {len(status_map)} 个")
+            if st != "normal":
+                status_map.setdefault((ts, ap), set()).add(st)
+        print(f"[v2.7] 已加载网络事件表：异常 (时间,AP) 键 {len(status_map)} 个")
 
     records = []
     for i in range(total_slots):
         ts_str = (start + timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S")
         fault_ap, fault_type, fault_strength = get_active_fault(ts_str)
-        # 背景干扰：约 2% 帧随机 AP × 连续频段（模拟未标注干扰，status 保持 normal）
-        noise_ap_idx = np.random.randint(0, n_aps) if np.random.rand() < SPECTRUM_NOISE_RATIO else None
-        noise_start = np.random.randint(0, n_bands - SPECTRUM_NOISE_BANDS[1])
-        noise_len = np.random.randint(*SPECTRUM_NOISE_BANDS)
+        # 背景干扰仅 v2.5（非 events 模式）保留：约 2% 帧随机 AP × 连续频段
+        noise_ap_idx = None
+        noise_start = noise_len = None
+        if events_df is None and np.random.rand() < SPECTRUM_NOISE_RATIO:
+            noise_ap_idx = np.random.randint(0, n_aps)
+            noise_start = np.random.randint(0, n_bands - SPECTRUM_NOISE_BANDS[1])
+            noise_len = np.random.randint(*SPECTRUM_NOISE_BANDS)
         for ap_idx, ap_id in enumerate(aps):
+            # v2.7：状态源二选一 —— events 表（精确对齐）或 FAULT_SCHEDULE（默认）
+            if events_df is not None:
+                type_set = status_map.get((ts_str, ap_id), set())
+            else:
+                type_set = set()
+                if fault_ap == ap_id:
+                    type_set.add(fault_type)
+            # 频段级状态数组：混合异常按段序切分（拥塞在前、弱覆盖在后；单类型则全段一致）
+            statuses = ["normal"] * n_bands
+            if "congestion" in type_set and "weak_coverage" in type_set:
+                half = n_bands // 2
+                statuses[:half] = ["congestion"] * half
+                statuses[half:] = ["weak_coverage"] * (n_bands - half)
+            elif "congestion" in type_set:
+                statuses = ["congestion"] * n_bands
+            elif "weak_coverage" in type_set:
+                statuses = ["weak_coverage"] * n_bands
             power_row = envelope + np.random.normal(0, SPECTRUM_POWER_FLUCT_DB, n_bands)
             occ_row = np.random.uniform(*OCC_NORMAL_RANGE, n_bands)
-            # v2.6：状态源二选一 —— events 表（精确对齐）或 FAULT_SCHEDULE（默认）
-            if events_df is not None:
-                status = status_map.get((ts_str, ap_id), "normal")
-            else:
-                status = "normal"
-                if fault_ap == ap_id:
-                    if fault_type == "weak_coverage":
-                        status = "weak_coverage"
-                    elif fault_type == "congestion":
-                        status = "congestion"
+            weak_mask = np.array([s == "weak_coverage" for s in statuses])
+            cong_mask = np.array([s == "congestion" for s in statuses])
+            normal_mask = ~(weak_mask | cong_mask)
             # 数值联动（两种状态源共用同一口径）
-            if status == "weak_coverage":
-                power_row -= SPECTRUM_DROP_K + 7.0  # 弱覆盖功率整体下降（约15dB，与网络表弱覆盖深度一致）
-                occ_row = np.random.uniform(*OCC_WEAK_RANGE, n_bands)
-            elif status == "congestion":
-                occ_row = np.random.uniform(*OCC_CONGEST_RANGE, n_bands)
-                occ_row = occ_row - np.abs(band_centers - SPECTRUM_CENTER_MHZ) / 500.0 * 15.0
-                occ_row = np.clip(occ_row, 85.0, 95.0)
-            # 背景干扰只叠加在 normal 帧，避免双重异常（占用率冲顶 100%）难以解释
-            if noise_ap_idx == ap_idx and status == "normal":
+            if weak_mask.any():
+                # 弱覆盖：功率整体压深至全段 < -95 dBm（对齐后端弱覆盖高亮阈值），占用 10-30%
+                power_row[weak_mask] -= SPECTRUM_DROP_K + 33.0
+                occ_row[weak_mask] = np.random.uniform(*OCC_WEAK_RANGE, int(weak_mask.sum()))
+            if cong_mask.any():
+                # 拥塞：占用 85-95%（中心加权），仅对拥塞段生效
+                occ_row[cong_mask] = np.random.uniform(*OCC_CONGEST_RANGE, int(cong_mask.sum()))
+                occ_row[cong_mask] -= np.abs(band_centers[cong_mask] - SPECTRUM_CENTER_MHZ) / 500.0 * 15.0
+                occ_row[cong_mask] = np.clip(occ_row[cong_mask], 85.0, 95.0)
+            # v2.5 背景干扰（仅非 events 模式）：只叠加在 normal 段，避免双重异常
+            if noise_ap_idx == ap_idx and noise_len is not None and normal_mask.any():
                 power_row[noise_start:noise_start + noise_len] -= SPECTRUM_POWER_DROP_DB
                 occ_row[noise_start:noise_start + noise_len] += SPECTRUM_OCC_RISE
                 occ_row = np.clip(occ_row, 0.0, 100.0)
@@ -433,7 +456,7 @@ def generate_spectrum_dataset(total_days: int, fault_schedule: list, events_df=N
                     "upper_mhz": b["upper_mhz"],
                     "power_dbm": round(float(power_row[b_idx]), 2),
                     "occupancy_pct": round(float(occ_row[b_idx]), 2),
-                    "network_status": status,
+                    "network_status": statuses[b_idx],
                     "scenario": SCENE_NAME,
                 })
     return pd.DataFrame(records)
