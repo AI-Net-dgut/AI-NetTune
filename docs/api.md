@@ -728,3 +728,13 @@ POST /api/forecast/analyze
 
 > 事件对齐说明（v2.7）：频谱 `network_status` 由生成器 `--events data/network_data_7d_events.csv` 模式逐分钟逐 AP 全量取自网络事件表（含 EV 事件与背景异常标签、非整点事件段如 09:44 起）。聚合口径：同一 (时间,AP) 多 UE 多类型全部保留并按频段混合标注，保证按「分钟+AP+异常类型」去重后两表差异为 0（v2.6 曾因只取首个非 normal 导致 86 组类型缺失，v2.7 已修复）。
 > 数据文件按 `.gitignore` 不入仓库，由数据侧另行转交。
+
+### 网络表事件口径（7 天 events 版，事件源表）
+
+`network_data_7d_events.csv` 为事件源表（UE 维度，30240 行 = 3 UE × 7 天 × 1440 分钟），事件定义见 `data/fault_events.csv`（EV-001~004）：
+
+- **渐变事件（EV-001/002/003，has_evolution=yes）**：事件前后存在渐入/渐出期（约各 15–25 分钟），RSRP 平滑下降/回升；**仅当跌破 RSRP 弱覆盖阈值（< −110 dBm）才标注 `weak_coverage`**（拥塞以 PRB ≥ 85% 判定），渐入/渐出期数值已明显偏离正常基线但未达阈值时标签仍为 `normal`——这是设计语义（可预测的渐变征兆），不是数据缺失。
+- **瞬时事件（EV-004，has_evolution=no）**：事件段内逐分钟完整标注，无渐变。
+- **渐变征兆与提前预警**：渐变期 RSRP 下降趋势是可预测特征，预测模型应利用 `baseTime` 前历史窗口内的指标趋势判断风险，而不是仅依赖"已出现异常标签"做事后提示。
+- **背景异常标签**：约 2% 分钟随机注入（AP 分散、类型 weak_coverage/congestion），与频谱表已全量对齐。
+- **数值自洽校验**：weak_coverage 行 RSRP ≤ −110 dBm，normal 行 > −110 dBm；频谱表与网络表按「分钟+AP+异常类型」去重差异 = 0。
