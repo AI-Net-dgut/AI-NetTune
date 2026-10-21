@@ -10,6 +10,7 @@ import datetime
 import csv as _csv
 import statistics
 import re
+import math
 import os
 from datetime import datetime, timedelta
 import llm_agent
@@ -34,9 +35,17 @@ from data_layout import (
 # 不用相对路径，否则启动时 cwd 不同会导致“数据读不到 / 报告写到别处 / 下载 404”。
 REPORTS_DIR = BASE_DIR / "reports"
 
-# 开关：是否启用 LLM 增强（LLM 故障或没有密钥时设为 0 即可纯规则运行）。
-# 环境变量 NETTUNE_ENABLE_LLM=0 也可关闭，方便部署时用环境变量控制、不必改代码。
-ENABLE_LLM = os.getenv("NETTUNE_ENABLE_LLM", "1").strip().lower() not in ("0", "false", "off", "no")
+# 开关：是否启用 LLM 增强。
+# 默认"配了密钥才开启"——没有密钥时每次提问都会先发一次无密钥请求，
+# 网络不通就要白等 call_llm 的 30 秒超时才降级到规则意图，严重影响演示。
+# 需要强制开启/关闭时用环境变量覆盖：NETTUNE_ENABLE_LLM=1 / 0。
+_LLM_FLAG = os.getenv("NETTUNE_ENABLE_LLM", "").strip().lower()
+if _LLM_FLAG in ("0", "false", "off", "no"):
+    ENABLE_LLM = False
+elif _LLM_FLAG in ("1", "true", "on", "yes"):
+    ENABLE_LLM = True
+else:
+    ENABLE_LLM = bool(llm_agent.LLM_API_KEY)
 
 # ======================
 # 统一错误码定义（与api.md文档严格对齐）
@@ -1098,7 +1107,9 @@ def get_basic_topology(
 
     # 2. 拓扑节点/链路基于整个监测窗口聚合（不再按单时刻过滤）：
     #    窗口内出现过的全部 AP 与 UE 都展示，链路为该 AP-UE 连接在整个窗口的均值指标
-    if not timestamp:
+    #    注意：timestamp 未传时必须是 None（不能直接判真假——FastAPI 的 Query 默认对象是真值，
+    #    直接 `if not timestamp` 会把默认对象原样回吐到响应里）。
+    if timestamp is None:
         timestamp = rows[0]["timestamp"]
 
     # 节点：AP 取场景内全部固定基站（不随窗口消失），UE 取窗口内出现过的终端
@@ -1345,6 +1356,86 @@ def _parse_ts(value: str):
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
 
 
+# ============ 预测外推：阻尼趋势（替代原来的"均值±1 方波"） ============
+# 原实现：预测帧 = 历史末 10 分钟各频段均值 ±1 交替；指标预测 = 末值恒定 → 方波与水平线。
+# 直接改成线性外推同样不行：故障是阶跃注入，30 分钟窗口拟合出的斜率可达 -2 dBm/分钟，
+# 外推 120 分钟会得到 -350 dBm（实测），物理上不存在。
+# 因此用「阻尼外推」：前几分钟体现趋势，之后按 1-e^(-k/tau) 指数饱和，
+# 再把总偏移夹在 ±max_drift 与指标物理范围内，保证任何 horizon 都落在可信区间。
+FORECAST_TREND_WINDOW = 30        # 用最近多少分钟拟合斜率
+FORECAST_DAMPING_TAU_MIN = 15.0   # 趋势饱和时间常数（分钟）
+FORECAST_PROFILES = {
+    # 每个指标：物理范围 + 允许的最大偏移（None 表示按末值 25% 动态算）
+    "power":      {"bounds": (-140.0, -40.0), "max_drift": 10.0},
+    "occupancy":  {"bounds": (0.0, 100.0),    "max_drift": 20.0},
+    "sinr":       {"bounds": (-20.0, 40.0),   "max_drift": 6.0},
+    "throughput": {"bounds": (0.0, 300.0),    "max_drift": None},
+}
+
+
+def _linear_trend(values):
+    """对等间隔序列做最小二乘（可含 None，自动跳过）。
+
+    返回 (slope_per_step, intercept, residual_std, last_value)。
+    有效点少于 5 个时 slope=0、residual_std=0，即退化为"末值持平"。
+    """
+    pts = [(i, float(v)) for i, v in enumerate(values) if v is not None]
+    if not pts:
+        return 0.0, 0.0, 0.0, None
+    last_value = values[-1]
+    last_value = float(last_value) if last_value is not None else pts[-1][1]
+    if len(pts) < 5:
+        return 0.0, last_value, 0.0, last_value
+
+    n = len(pts)
+    sx = sum(p[0] for p in pts)
+    sy = sum(p[1] for p in pts)
+    sxx = sum(p[0] * p[0] for p in pts)
+    sxy = sum(p[0] * p[1] for p in pts)
+    denom = n * sxx - sx * sx
+    if abs(denom) < 1e-9:
+        return 0.0, last_value, 0.0, last_value
+
+    slope = (n * sxy - sx * sy) / denom
+    intercept = (sy - slope * sx) / n
+    resid = [p[1] - (intercept + slope * p[0]) for p in pts]
+    resid_std = (sum(r * r for r in resid) / max(1, n - 2)) ** 0.5
+    return slope, intercept, resid_std, last_value
+
+
+def _damped_predict(last_value, slope_per_minute, minutes_ahead, max_drift, bounds):
+    """阻尼外推：offset = slope × tau × (1 − e^(−k/tau))，夹到 ±max_drift 与物理范围。"""
+    if last_value is None:
+        return None
+    drift = slope_per_minute * FORECAST_DAMPING_TAU_MIN * (
+        1.0 - math.exp(-max(0.0, minutes_ahead) / FORECAST_DAMPING_TAU_MIN))
+    drift = max(-max_drift, min(max_drift, drift))
+    low, high = bounds
+    return round(max(low, min(high, last_value + drift)), 2)
+
+
+def _gated_slope(slope, resid_std, point_count):
+    """趋势显著性门限：信噪比不足时把斜率归零。
+
+    分钟级 KPI 抖动本身就大，30 个点拟合出的细小斜率很可能只是噪声；
+    如果照它外推，会把"没有趋势"的时段也画成一条斜线。
+    规则：整段趋势的累计变化量小于 0.8×残差标准差时，认为没有趋势。
+    """
+    if point_count < 5:
+        return 0.0
+    if abs(slope) * point_count < 0.8 * max(resid_std, 1e-6):
+        return 0.0
+    return slope
+
+
+def _profile_drift(metric, last_value):
+    """取该指标允许的最大偏移；None 表示按末值 25% 动态计算。"""
+    profile = FORECAST_PROFILES[metric]
+    if profile["max_drift"] is not None:
+        return profile["max_drift"]
+    return max(2.0, abs(last_value or 0.0) * 0.25)
+
+
 @app.post("/api/forecast/preview", summary="预测预警 v2：预测预览（真实频谱数据）")
 def forecast_preview(req: ForecastPreviewRequest):
     """真读 spectrum_7d.csv：按 baseTime 返回历史频谱帧 + 未来外推 + 风险预警。
@@ -1395,7 +1486,7 @@ def forecast_preview(req: ForecastPreviewRequest):
             hist_by_ts[ts] = (dict(zip(grp.band_id, grp.power_dbm)),
                               dict(zip(grp.band_id, grp.occupancy_pct)))
 
-        # 未来外推：历史窗口最后 10 分钟各频段均值
+        # 未来外推的频段选取参照（仍用末 10 分钟均值，仅供 alerts 挑 bandIds 用）
         recent = hist_sub.sort_values("timestamp").tail(10 * len(bands))
         def _avg_by_band(col):
             out = {}
@@ -1407,9 +1498,30 @@ def forecast_preview(req: ForecastPreviewRequest):
         avg_power = _avg_by_band("power_dbm")
         avg_occ = _avg_by_band("occupancy_pct")
 
+        # 逐频段趋势：按分钟顺序整理该 AP 的历史序列（一次遍历，避免 50×2 次布尔筛选）
+        ts_list = sorted(hist_by_ts.keys())
+        series = {"power": {b["band_id"]: [] for b in bands},
+                  "occupancy": {b["band_id"]: [] for b in bands}}
+        for ts in ts_list:
+            pmap, omap = hist_by_ts[ts]
+            for b in bands:
+                bid = b["band_id"]
+                series["power"][bid].append(pmap.get(bid))
+                series["occupancy"][bid].append(omap.get(bid))
+
+        band_trend = {}
+        for metric in ("power", "occupancy"):
+            band_trend[metric] = {}
+            for b in bands:
+                bid = b["band_id"]
+                window = series[metric][bid][-FORECAST_TREND_WINDOW:]
+                slope, _intercept, resid_std, last = _linear_trend(window)
+                slope = _gated_slope(slope, resid_std, len(window))
+                band_trend[metric][bid] = (slope, last)   # 历史为每分钟一帧，斜率即"每分钟"
+
         def build_hist(metric):
             frames = []
-            for ts in sorted(hist_by_ts.keys()):
+            for ts in ts_list:
                 pmap, omap = hist_by_ts[ts]
                 mp = pmap if metric == "power" else omap
                 frames.append({
@@ -1420,18 +1532,21 @@ def forecast_preview(req: ForecastPreviewRequest):
             return frames
 
         def build_pred(metric):
-            ref = avg_power if metric == "power" else avg_occ
             frames = []
             t = base_dt
-            for minute_idx in range(int(req.horizonMinutes)):
-                # 确定性分钟级微扰±1dB：同分钟值稳定不抖，避免预测区呈现纯色块
-                jitter = 1.0 if minute_idx % 2 == 0 else -1.0
-                frames.append({
-                    "start": fmt(t), "end": fmt(t + timedelta(minutes=1)),
-                    "values": [round((ref[b["band_id"]] or 0) + jitter, 2)
-                               if ref[b["band_id"]] is not None else None
-                               for b in bands],
-                })
+            for step in range(int(req.horizonMinutes)):
+                values = []
+                for b in bands:
+                    slope, last = band_trend[metric][b["band_id"]]
+                    if last is None:
+                        values.append(None)
+                        continue
+                    values.append(_damped_predict(
+                        last, slope, step,
+                        _profile_drift(metric, last),
+                        FORECAST_PROFILES[metric]["bounds"]))
+                frames.append({"start": fmt(t), "end": fmt(t + timedelta(minutes=1)),
+                               "values": values})
                 t += timedelta(minutes=1)
             return frames
 
@@ -1480,7 +1595,7 @@ def forecast_preview(req: ForecastPreviewRequest):
                                 if avg_power.get(b["band_id"]) is not None and avg_power[b["band_id"]] < -95][:5],
                 })
 
-    # impacts：SINR/吞吐从主网络数据按分钟聚合，预测=末值±10%
+    # impacts：SINR/吞吐从主网络数据按分钟聚合，用同一套阻尼趋势外推
     impacts = []
     try:
         rows = filter_rows(req.scenario, req.history.start, req.history.end)
@@ -1491,19 +1606,44 @@ def forecast_preview(req: ForecastPreviewRequest):
                 v = r.get(key)
                 if v not in (None, ""):
                     by_ts.setdefault(r["timestamp"], []).append(float(v))
-            hist_pts = [{"time": ts, "value": round(sum(vs) / len(vs), 2)}
-                        for ts, vs in sorted(by_ts.items())]
-            if len(hist_pts) > 60:
-                hist_pts = hist_pts[::max(1, len(hist_pts) // 60)]
-            if not hist_pts:
+            raw_pts = [{"time": ts, "value": round(sum(vs) / len(vs), 2)}
+                       for ts, vs in sorted(by_ts.items())]
+            if not raw_pts:
                 continue  # 网络表无此指标数据，跳过，不填0值预测
+            # 点太多时均匀降采样（原实现同口径），但必须记住步长，否则斜率不是"每分钟"
+            stride = max(1, len(raw_pts) // 60)
+            hist_pts = raw_pts[::stride]
+            step_minutes = float(stride)
+            if not hist_pts:
+                continue
+
             last_val = hist_pts[-1]["value"]
+            window_points = max(4, int(round(FORECAST_TREND_WINDOW / step_minutes)))
+            window_values = [p["value"] for p in hist_pts[-window_points:]]
+            slope_per_point, _intercept, resid_std, _last = _linear_trend(window_values)
+            slope_per_point = _gated_slope(slope_per_point, resid_std, len(window_values))
+            slope_per_minute = slope_per_point / step_minutes
+
+            profile = FORECAST_PROFILES[key]
+            max_drift = _profile_drift(key, last_val)
+            # 经验区间：以拟合残差为基准（约 1.96σ≈95%），但设相对上限。
+            # 只用残差会把"故障窗口内状态来回切换"造成的巨大方差也算进去，
+            # 得到 0~75 Mbps 这种没有信息量的区间；因此再按末值 25% 封顶。
+            half_width = max(1.96 * resid_std, abs(last_val) * 0.02, 0.3)
+            half_width = min(half_width, max(2.0, abs(last_val) * 0.25))
+            low, high = profile["bounds"]
+
             pred_pts = []
             t = base_dt
-            for _ in range(max(1, int(req.horizonMinutes // 5))):
-                pred_pts.append({"time": fmt(t), "value": round(last_val, 2),
-                                 "lower": round(last_val * 0.9, 2),
-                                 "upper": round(last_val * 1.1, 2)})
+            for step in range(max(1, int(req.horizonMinutes // 5))):
+                minutes_ahead = step * 5          # 预测点每 5 分钟一个，趋势按分钟拟合
+                value = _damped_predict(last_val, slope_per_minute, minutes_ahead,
+                                        max_drift, profile["bounds"])
+                pred_pts.append({
+                    "time": fmt(t), "value": value,
+                    "lower": round(max(low, value - half_width), 2),
+                    "upper": round(min(high, value + half_width), 2),
+                })
                 t += timedelta(minutes=5)
             impacts.append({"id": sid, "targetLabel": "全网", "label": label, "unit": unit,
                             "history": hist_pts, "predicted": pred_pts})

@@ -31,9 +31,21 @@ export function normalizeMain4(raw: unknown): unknown {
 }
 
 export function completeMain4(result: ForecastResult): ForecastResult {
-  const notice = result.method
-    ? `预测方法：${result.method}。${result.limitations?.join('；') ?? ''}`
-    : "当前为简化预测：频谱按历史末段10分钟均值交替加减1，网络指标按末值延续；固定±10%不作为可信区间。预警主要表示已有异常的持续风险，尚未验证提前预警能力。";
+  // 免责说明必须始终出现：原先只要后端返回 method 就把说明换掉，
+  // 而 normalizeMain4 仍在剥离固定 ±10% 的假区间，于是出现
+  // "数据处理过、但用户看不到任何说明"的披露缺口。
+  // 后端已改为"阻尼趋势外推 + 残差估计区间"，因此这里按实际情况描述方法：
+  // 有区间就说明区间来源，没有就如实说明没有。
+  const hasInterval = result.impacts.some(i => i.predicted.some(p => p.lower != null && p.upper != null));
+  const methodText = result.method
+    ? `预测方法：${result.method}。`
+    : "当前为简化外推：按历史末段线性趋势做阻尼外推（趋势不显著时保持末值）。";
+  const limitations = result.limitations?.length ? `限制：${result.limitations.join('；')}。` : "";
+  const disclaimer = (hasInterval
+    ? "预测区间由历史拟合残差估计，是经验范围而非统计置信区间；"
+    : "本次未返回预测区间；")
+    + "预警为趋势与阈值判断的结果，尚未验证提前预警能力。";
+  const notice = `${methodText}${limitations}${disclaimer}`;
   if (result.status !== "ready") return { ...result, integrationNotice: notice };
   const observed = result.spectra.some(s => s.history.some(f => f.values.some(v => v !== null)));
   if (!observed) return { ...result, status: "insufficient_data", message: "当前参考窗口没有有效频谱观测，请调整时刻或检查频谱文件。", alerts: [], spectra: [], impacts: [], spectrumViews: undefined, integrationNotice: notice };

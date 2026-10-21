@@ -56,17 +56,17 @@ export default function ForecastDialog({ request, result, pending, error, onClos
         <div className="ain-forecast-title-row"><h2 id="ain-forecast-title">预测预警</h2><span className="ain-forecast-count">{pending ? "生成中" : error ? "更新失败" : result?.status === "ready" ? `${demo ? "示例 · " : ""}${scopedAlerts.length} 项需关注` : "暂不能预测"}</span></div></div>
         <div className="ain-forecast-dialog-actions">
           {onToggleFollow && !fixedView && <button type="button" aria-pressed={follow} onClick={onToggleFollow}
-            title={`开启后每 ${followStepMinutes} 分钟按主时钟自动重新预测；关闭则固定在当前基准`}>{follow ? "⏱ 跟随主时钟" : "已固定时刻"}</button>}
+            title={`开启后，在主时钟播放中每 ${followStepMinutes} 分钟自动重新预测；暂停或关闭时固定在当前基准，需手动刷新`}>{follow ? "⏱ 跟随主时钟" : "已固定时刻"}</button>}
           <button type="button" disabled={pending} onClick={onRefresh}>↻ 刷新预测</button>
           <button type="button" aria-label="关闭预测预警" onClick={onClose}>×</button>
         </div></header>
       <div className="ain-forecast-dialog-body" aria-busy={pending}>
-        <div className="ain-forecast-context" id="ain-forecast-context"><div><strong>当前结果基准：{shownBaseTime}</strong><span>北京时间 · {fixedView ? "沿用固定分析时刻" : follow ? `每 ${followStepMinutes} 分钟按主时钟自动刷新` : "结果固定，需手动刷新"}</span></div>
+        <div className="ain-forecast-context" id="ain-forecast-context"><div><strong>当前结果基准：{shownBaseTime}</strong><span>北京时间 · {fixedView ? "沿用固定分析时刻，需手动刷新" : follow ? `主时钟播放中每 ${followStepMinutes} 分钟自动刷新；暂停时不刷新` : "结果固定，需手动刷新"}</span></div>
           <p>参考历史：{shownHistory.start} — {shownHistory.end}</p>
           <p>预测范围：{result ? `${result.forecast.start} — ${result.forecast.end}` : `${request.baseTime}之后${request.horizonMinutes}分钟`}</p>
           {request.question && <p>本次未来提问：{request.question}</p>}
           {request.targetWindow && <p>关注时段：{request.targetWindow.start} — {request.targetWindow.end}；下方风险仅显示与关注时段相交的项目。</p>}
-          {ageMinutes > 0 && <p>结果基准距主时钟 {ageMinutes} 分钟{fixedView ? '，当前为固定查看。' : follow ? '，按刷新步长更新。' : '，可刷新获取最新结果。'}</p>}
+          {ageMinutes > 0 && <p>结果基准距主时钟 {ageMinutes} 分钟{fixedView ? '，当前为固定查看，需手动刷新。' : follow ? '，主时钟播放中会自动更新；暂停时不刷新。' : '，可刷新获取最新结果。'}</p>}
           {onHorizonChange && <label className="ain-forecast-horizon">预测时长
             <select aria-label="预测时长" value={request.horizonMinutes} disabled={pending} onChange={event => onHorizonChange(Number(event.target.value))}>
               {horizons.map(minutes => <option key={minutes} value={minutes}>未来{minutes}分钟{minutes === 1440 ? '（24小时）' : ''}</option>)}

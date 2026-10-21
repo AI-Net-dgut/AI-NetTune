@@ -126,8 +126,8 @@ export default function HomePage() {
 
     <section className="ain-home-v2-status" aria-labelledby="ain-home-v2-status-title">
       <div className="ain-home-v2-status-title"><h2 id="ain-home-v2-status-title">当前功能状态</h2><span>以现有接口返回为准</span></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已具备</span><p><strong>历史回放与AI研判</strong>支持{REPLAY_SPEEDS.join(" / ")}倍速和循环；默认近{REPLAY_CONFIG.historyMinutes}分钟参考，可调整时长或自定义开始时间；仅使用截至查看时刻的采样。</p></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已接入入口</span><p><strong>未来预测与预警</strong>可打开预测弹窗或直接提问未来时段，选择30分钟至24小时范围；可跟随主时钟更新。预测方法、数据是否充足及可信边界以实际返回和页面说明为准。</p></div>
+      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已具备</span><p><strong>历史回放与AI研判</strong>以仿真实时数据流（历史 CSV 回放）驱动，支持{REPLAY_SPEEDS.join(" / ")}倍速和循环；默认近{REPLAY_CONFIG.historyMinutes}分钟参考，可调整时长或自定义开始时间；仅使用截至查看时刻的采样。</p></div>
+      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已接入</span><p><strong>未来预测与预警</strong>可打开预测弹窗或直接提问未来时段，范围30分钟至24小时；实时跟随且主时钟播放中时按5分钟自动更新。当前为简化外推，预测方法、数据是否充足及可信边界以实际返回和弹窗说明为准。</p></div>
       <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge is-limited">临时记录</span><p><strong>工作台内查询摘要</strong>保留最近6次提问摘要及分析截止时间，离开页面或刷新后不保留；独立分析记录页尚未接入保存功能。</p></div>
       <p className="ain-home-v2-boundary">本阶段通过历史数据回放观察网络，处理方案用于参数讨论与预计效果比较，不下发真实网络配置。</p>
     </section>

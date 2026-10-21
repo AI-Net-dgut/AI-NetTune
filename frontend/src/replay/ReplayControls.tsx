@@ -29,6 +29,6 @@ export default function ReplayControls({ state, act, loading, onReload, config }
         <button className="ain-button" type="button" disabled={loading || state.locked} onClick={onReload}>重载数据</button>
       </div>
     </div>
-    <p className="ain-replay-note">仿真实时数据流 · 1×时现实{config.realSecondsPerMinute}秒推进模拟1分钟 · 初始播放：{config.playbackStart ?? config.start} · 参考范围可在AI区调整 · 循环后返回演示起点</p>
+    <p className="ain-replay-note">数据来源：仿真实时数据流（历史 CSV 回放）· 1×时现实{config.realSecondsPerMinute}秒推进模拟1分钟 · 初始播放：{config.playbackStart ?? config.start} · 参考范围可在AI区调整 · 循环后返回演示起点</p>
   </section>;
 }

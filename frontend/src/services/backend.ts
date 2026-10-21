@@ -158,10 +158,14 @@ export async function loadDashboard(scope: QueryScope, signal?: AbortSignal, fet
   const metrics = await fetchRecords(scope, signal, fetcher);
   if (!metrics.length) return null;
   const latest = metrics.at(-1)!;
-  const params = new URLSearchParams({ scenario: scope.scenario, start_time: scope.start, end_time: scope.end, timestamp: latest.backendTime });
+  // 不传 timestamp：后端对 /network/topology/basic 是按整个窗口聚合的
+  // （窗口内主服务 AP + 连接均值），传单帧时刻并不会改变返回结果。
+  // 原实现还额外校验"拓扑时刻必须等于最新采样时刻"，一旦不一致就整体 throw，
+  // 使 AP 静态部署直接失败、真实原因又被上层吞成一句提示。
+  const params = new URLSearchParams({ scenario: scope.scenario, start_time: scope.start, end_time: scope.end });
   // 空间估计由 fetchSpatialMap 独立加载，避免阻塞基础数据和拓扑。
   const topology = await request(`/network/topology/basic?${params}`, signal, undefined, fetcher);
-  if (topology.timestamp !== latest.backendTime || !Array.isArray(topology.nodes) || !Array.isArray(topology.links)) throw new Error("拓扑时刻或返回结构与当前采样不一致");
+  if (!Array.isArray(topology.nodes) || !Array.isArray(topology.links)) throw new Error("拓扑接口返回结构无效（缺少 nodes 或 links 数组）");
   
     // 1. 获取当前查询窗口内每个 UE 的最新位置
   const latestUePosition = new Map<

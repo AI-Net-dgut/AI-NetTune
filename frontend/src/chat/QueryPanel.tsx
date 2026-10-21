@@ -26,7 +26,7 @@ const EXAMPLES = [
 export default function QueryPanel({ query, scenario, window: scopeWindow, disabled, data,
   spatial = null, spatialPending = false, spatialError = "", onSpatialRetry = () => {}, focusedApId = null,
   dataLoading = false, dataError = "", replay, onSubmitAnalysis, referenceControls, analysisNotice = "",
-  onOpenForecast, forecastDisabled = false, forecastLabel = "待接入", forecastReview,
+  onOpenForecast, forecastDisabled = false, forecastLabel = "查看未来风险", forecastReview,
 }: {
   query: ReturnType<typeof useNetworkQuery>; scenario: string; window?: QueryScope; disabled: boolean;
   data: DashboardData | null; spatial?: SpatialMapData | null; spatialPending?: boolean; spatialError?: string;

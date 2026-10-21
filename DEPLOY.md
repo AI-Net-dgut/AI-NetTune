@@ -138,16 +138,25 @@ npm run dev
 - 改后端端口：复制 `.env.example` 为 `.env.local`，设置 `VITE_PROXY_TARGET=http://127.0.0.1:8001`。
 - `server.host: true` 已开启，局域网设备可用 `http://<你的内网IP>:5173` 访问。
 
-### 跨域（CORS）：局域网访问时必须改
+### 跨域（CORS）：默认不需要改
 
-`main.py` 的允许来源是写死的：
+`main.py` 里有一份写死的允许来源：
 
 ```python
 allow_origins=["http://localhost:5173", "http://10.63.118.174:5173"]
 ```
 
-用别的机器/别的 IP 访问前端时，**把这台机器的地址加进去**，否则浏览器会报 CORS 错误。
-（答辩机器固定的话，提前改好并提交。）
+**绝大多数情况用不到它。** 走 `npm run dev` 时前端请求的是相对路径 `/api/...`，
+浏览器把它当作同源请求，再由 vite dev server 在服务端转发给 8000 —— 同源请求不触发 CORS，
+所以无论用 `localhost:5173` 还是内网 IP `192.168.x.x:5173` 打开前端，都不需要动这份清单。
+
+只有**浏览器直接跨源访问后端**时才需要加来源，也就是：
+
+- 前后端分开部署，用 `VITE_API_BASE` 指向另一个主机/端口（见第 6 节方案 B）；
+- 或前端产物放在别的端口、又靠 `VITE_API_BASE` 直连后端。
+
+这时把**前端的访问地址**（协议 + 主机 + 端口，如 `http://192.168.1.10:8080`）加进 `allow_origins` 并重启后端。
+若按第 6 节方案 A 用 nginx 同源反代，则永远不需要改。
 
 ---
 
@@ -241,7 +250,7 @@ python scripts/doctor.py --quick    # 跳过频谱表深度统计（更快）
 | 服务起来了，但接口返回 `total: 0`、`records: []` | `data/` 没有网络表，或文件名不匹配 | 跑 `python scripts/doctor.py`；按第 2 节放文件 |
 | 预测弹窗显示"暂不能预测 / 数据不足" | 频谱表缺失，或 `baseTime` 超出频谱范围 | 频谱只到 `2026-01-07 23:59`；演示请把回放范围控制在 01-01~01-07（前端 `replay/config.ts` 默认就是这段） |
 | 浏览器里所有接口 404 | 用了 `npm run build` 的产物但没配反向代理 | 见第 6 节方案 A 或 B |
-| 浏览器报 CORS 错误 | `main.py` 的 `allow_origins` 没包含当前访问地址 | 把该地址加进 `allow_origins` 后重启后端 |
+| 浏览器报 CORS 错误 | 只有在浏览器**直接跨源**访问后端时才会出现（见第 5 节）；`allow_origins` 没包含前端地址 | 把前端访问地址（协议+主机+端口）加进 `allow_origins` 后重启；或改用同源反向代理 |
 | 对话回复"未找到场景「XX」" | 数据只有「校园」一个场景 | 前端场景只选「校园」；或补生成商场/体育馆数据 |
 | 对话/研判迟迟不返回（约 30 秒） | 配了 `LLM_API_KEY` 但网络不通 | 检查外网；或 `setx NETTUNE_ENABLE_LLM 0` 走纯规则 |
 | `/api/data/heatmap` 返回 `method=grid_mean` | 未装 PyKrige，或采样点 < 30 | 正常降级；需要 Kriging 就装 PyKrige |
@@ -259,5 +268,5 @@ python scripts/doctor.py --quick    # 跳过频谱表深度统计（更快）
 - [ ] `GET /docs` 能看到 13 个接口
 - [ ] 前端 `npm run dev` 打开后，工作台能出图、AI 区能问答
 - [ ] 预测弹窗能打开且 `status=ready`
-- [ ] `main.py` 的 `allow_origins` 包含答辩机器的访问地址
+- [ ] 若前后端分开部署（`VITE_API_BASE` 直连后端），`main.py` 的 `allow_origins` 已包含前端访问地址
 - [ ] `LLM_API_KEY` 已配置（或明确接受降级）

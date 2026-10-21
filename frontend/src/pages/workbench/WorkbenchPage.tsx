@@ -220,7 +220,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
             {data && <span className="ain-data-meta-count">{data.metrics.length} 条 · {data.nodes.filter(node => node.type === "ap").length} AP / {data.nodes.filter(node => node.type === "ue").length} UE</span>}
           </div>
           <details className="ain-data-meta-details"><summary>范围与采样详情</summary>
-            <dl><div><dt>数据来源</dt><dd>CSV 仿真历史数据</dd></div>
+            <dl><div><dt>数据来源</dt><dd>仿真实时数据流（历史 CSV 回放）</dd></div>
               <div><dt>分析范围</dt><dd>{scopeLabel(scope)}</dd></div>
               <div><dt>主时钟</dt><dd>{currentTime} · {clock.playing ? "持续运行" : clock.currentMs >= clock.endMs ? "已到末尾" : "已暂停"}</dd></div>
               <div><dt>最近有效采样</dt><dd>{data?.metrics.at(-1)?.backendTime ?? "暂无"}</dd></div></dl>

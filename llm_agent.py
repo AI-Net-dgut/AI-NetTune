@@ -52,6 +52,10 @@ def build_unified_prompt(message: str) -> str:
 
 def call_llm(message: str) -> str:
     """调用大模型，返回原始文本。超时/网络错误会抛异常，由上层降级。"""
+    # 没有密钥就直接失败，不要发出一次注定失败的请求：
+    # 否则网络不通时每次提问都要白等 30 秒超时才降级到规则意图。
+    if not LLM_API_KEY:
+        raise RuntimeError("LLM_API_KEY 未配置")
     resp = requests.post(
         LLM_URL,
         json={
