@@ -8,6 +8,8 @@
 #   - 容错：序列过短或 Prophet 失败 → 自动降级 moving_average，保证接口永不崩
 # 答辩口径：预测模块统一表述为"区域信号/频谱态势预测"，页面标注"未来预测"
 import logging
+import os
+import threading
 from datetime import datetime
 
 import numpy as np
@@ -19,6 +21,11 @@ logger.setLevel(logging.ERROR)
 DEFAULT_METRICS = ["rsrp", "sinr", "throughput"]
 TRAIN_RATIO = 0.8          # 前 80% 训练
 FORECAST_HORIZON = 24      # 未来延伸 24 小时（1 天）
+
+# Prophet 单次拟合的时间上限（秒）。Windows 上首次拟合会卡在建 Stan 模型阶段，
+# 实测 400+ 秒无响应；前端 45 秒就超时。超时后本进程改用 moving_average。
+PROPHET_TIMEOUT_SEC = float(os.getenv("NETTUNE_PROPHET_TIMEOUT", "20"))
+_prophet_state = {"disabled": False, "reason": ""}
 
 # Prophet 拟合失败时禁止输出优化日志刷屏
 # 【Windows 修复】prophet 依赖 cmdstanpy，其 Windows 路径会执行 where.exe tbb.dll 探测；
@@ -76,8 +83,12 @@ def aggregate_hourly(rows: list[dict], metrics: list[str]) -> dict:
     return out
 
 
-def _ma_fallback(vals: list[float], horizon: int) -> dict:
-    """降级：移动平均(win=3) 预测测试段均值 + 未来恒定预测，返回契约结构"""
+def _ma_fallback(vals: list[float], horizon: int, reason: str = "") -> dict:
+    """降级：移动平均(win=3) 预测测试段均值 + 未来恒定预测，返回契约结构。
+
+    reason 用于如实说明"为什么没用 Prophet"（超时/拟合失败/未安装），
+    由接口 10 的 limitations 透出，避免"降级了却看不出原因"。
+    """
     n = len(vals)
     if n < 4:
         return None
@@ -86,21 +97,77 @@ def _ma_fallback(vals: list[float], horizon: int) -> dict:
     ma = train[-3:] if len(train) >= 3 else train
     pred_c = sum(ma) / len(ma)
     true_c = sum(test) / len(test)
-    mape = abs(true_c - pred_c) / max(abs(true_c), 1e-6) * 100
+    # 降级时也给出同一套误差指标：预测是常数，MAE/RMSE 就是测试段相对该常数的离散度
+    metrics = _error_metrics(test, [pred_c] * len(test))
     return {
         "method": "moving_average",
         "true_mean": round(true_c, 2),
         "pred_mean": round(pred_c, 2),
-        "mape": round(min(mape, 999.0), 2),
+        **metrics,
         "forecast": [round(pred_c, 2)] * horizon,
         "lower": [round(pred_c, 2)] * horizon,
         "upper": [round(pred_c, 2)] * horizon,
+        "degrade_reason": reason,
     }
+
+
+def _error_metrics(y_true, y_pred) -> dict:
+    """测试段上的真实误差指标。
+
+    * MAE / RMSE 有量纲（dBm / dB / Mbps），是对外展示的主指标；
+    * MAPE 对 dBm 这类"负值且绝对值大"的指标基本没有意义（分母 -90 会让百分比极小），
+      所以只在真值远离 0 时计算，并在文档里注明它不是主要依据。
+
+    历史问题：旧实现把 method 里的 mape 算成"测试段均值差 ÷ 均值"，
+    那是"两个均值的相对差"，不是逐点误差，却被前端标注为 MAPE 展示。
+    """
+    t = np.asarray(y_true, dtype=float)
+    p = np.asarray(y_pred, dtype=float)
+    n = min(len(t), len(p))
+    if n == 0:
+        return {"mae": None, "rmse": None, "mape": None}
+    t, p = t[:n], p[:n]
+    diff = t - p
+    mae = float(np.mean(np.abs(diff)))
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    mask = np.abs(t) > 1e-6
+    mape = float(np.mean(np.abs(diff[mask] / t[mask])) * 100) if mask.any() else None
+    return {
+        "mae": round(mae, 2),
+        "rmse": round(rmse, 2),
+        "mape": round(min(mape, 999.0), 2) if mape is not None else None,
+    }
+
+
+def _run_with_timeout(fn, timeout_sec: float):
+    """在可丢弃的守护线程里执行 fn，超过 timeout 就放弃。
+
+    Prophet 底层是 Stan（C++），Python 侧无法中断；但请求不能无限等——
+    Windows 上首次拟合会卡在建模型阶段（实测 400+ 秒无响应），
+    而前端 45 秒就超时了。这里超时即放弃等待，并让上层降级。
+    被放弃的线程是 daemon，不会阻止进程退出。
+    """
+    box: dict = {}
+
+    def runner():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:      # noqa: BLE001 - 原样抛回调用方
+            box["error"] = exc
+
+    th = threading.Thread(target=runner, name="prophet-fit", daemon=True)
+    th.start()
+    th.join(timeout_sec)
+    if th.is_alive():
+        raise TimeoutError(f"Prophet 拟合超过 {timeout_sec:.0f} 秒仍未返回")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 def prophet_series(bins: list[str], vals: list[float], horizon: int) -> dict:
     """单个 UE × 指标序列的 Prophet 预测。
-    返回 {true_mean, pred_mean, mape, predicted(测试段), forecast, lower, upper} 或 None"""
+    返回 {true_mean, pred_mean, mae, rmse, mape, predicted(测试段), forecast, lower, upper}"""
     n = len(vals)
     if n < 24:  # 至少 24 个点（1 天）才训练
         return _ma_fallback(vals, horizon)
@@ -112,7 +179,12 @@ def prophet_series(bins: list[str], vals: list[float], horizon: int) -> dict:
     if not _HAS_PROPHET or len(train_df) < 12:
         return _ma_fallback(vals, horizon)
 
-    try:
+    # 一旦本进程内某次拟合超时，后续全部直接降级：
+    # 否则每个 UE×指标都要再等一次超时，接口 10 会变成"永远很慢"。
+    if _prophet_state["disabled"]:
+        return _ma_fallback(vals, horizon, _prophet_state["reason"])
+
+    def fit_and_predict():
         m = Prophet(
             seasonality_mode="additive",
             daily_seasonality=True,
@@ -124,29 +196,34 @@ def prophet_series(bins: list[str], vals: list[float], horizon: int) -> dict:
         # 未来延伸：从最后一个训练点起 +horizon 小时
         future = m.make_future_dataframe(periods=len(test_df) + horizon, freq="h")
         ffull = m.predict(future)
-        f_future = ffull.iloc[-(horizon):]
+        return pred, ffull.iloc[-horizon:]
+
+    try:
+        pred, f_future = _run_with_timeout(fit_and_predict, PROPHET_TIMEOUT_SEC)
 
         y_true = np.array(vals[split:])
         y_pred = pred["yhat"].to_numpy()
-        true_mean = float(np.mean(y_true))
-        pred_mean = float(np.mean(y_pred))
-        denom = max(abs(true_mean), 1e-6)
-        mape = abs(true_mean - pred_mean) / denom * 100
+        metrics = _error_metrics(y_true, y_pred)
 
         return {
             "method": "prophet",
-            "true_mean": round(true_mean, 2),
-            "pred_mean": round(pred_mean, 2),
-            "mape": round(min(mape, 999.0), 2),
+            "true_mean": round(float(np.mean(y_true)), 2),
+            "pred_mean": round(float(np.mean(y_pred)), 2),
+            **metrics,
             "predicted": [round(float(v), 2) for v in y_pred],
             "forecast": [round(float(v), 2) for v in f_future["yhat"]],
             "lower": [round(float(v), 2) for v in f_future["yhat_lower"]],
             "upper": [round(float(v), 2) for v in f_future["yhat_upper"]],
         }
+    except TimeoutError as e:
+        _prophet_state["disabled"] = True
+        _prophet_state["reason"] = str(e)
+        logger.error("%s；本进程后续请求将直接使用 moving_average", e)
+        return _ma_fallback(vals, horizon, str(e))
     except Exception as e:
         import traceback
         logger.error("prophet fit failed: %s\n%s", e, traceback.format_exc())
-        return _ma_fallback(vals, horizon)
+        return _ma_fallback(vals, horizon, f"Prophet 拟合失败：{e}")
 
 
 def build_series(rows: list[dict], metrics: list[str] | None = None,

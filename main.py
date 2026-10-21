@@ -1359,6 +1359,15 @@ def analyze_forecast(req: ForecastRequest):
         top_method = "moving_average"
     else:
         top_method = "mixed"
+    # 降级原因如实透出：前端可据此说明"为什么不是机器学习模型"，而不是只看到一个 method
+    reasons = sorted({s.get("degrade_reason") for ue in built["series"].values()
+                      for s in ue.values() if s.get("degrade_reason")})
+    limitations = []
+    if top_method in ("moving_average", "mixed"):
+        limitations.append(
+            "Prophet 不可用或拟合超时，已降级为移动平均（常数预测），"
+            "MAE/RMSE 为测试段相对该常数的离散度")
+    limitations.extend(reasons)
     return success_response({
         "scenario": req.scenario,
         "window_start": req.window_start,
@@ -1367,7 +1376,8 @@ def analyze_forecast(req: ForecastRequest):
         "bin_size_min": built["bin_size_min"],
         "metrics": built["metrics"],
         "ues": built["ues"],
-        "series": built["series"]
+        "series": built["series"],
+        "limitations": limitations,
     })
 
 
