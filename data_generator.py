@@ -533,8 +533,21 @@ def generate_spectrum_dataset(total_days: int, fault_schedule: list, events_df=N
             #   events 模式用网络表算出的严重度（渐变期 0~1 连续），
             #   非 events 模式直接 0/1（保持 v2.5 行为）。
             if events_df is not None:
-                sev_w = weak_sev.get((ts_str, ap_id), 0.0)
-                sev_c = cong_sev.get((ts_str, ap_id), 0.0)
+                # 严重度取 3 分钟滑动平均：单分钟取"最差 UE"会被阴影衰落（σ≈8–10 dB）主导，
+                # 频谱功率逐分钟剧烈抖动（实测 -59.6/-71.9/-59.7/-89.2…），
+                # 预测模型看不出趋势，提前预警也就失效了。
+                def _smoothed(registry, ts: str, ap: str) -> float:
+                    vals = []
+                    for back in range(3):
+                        key = (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                               - timedelta(minutes=back)).strftime("%Y-%m-%d %H:%M:%S")
+                        v = registry.get((key, ap))
+                        if v is not None:
+                            vals.append(v)
+                    return sum(vals) / len(vals) if vals else 0.0
+
+                sev_w = _smoothed(weak_sev, ts_str, ap_id)
+                sev_c = _smoothed(cong_sev, ts_str, ap_id)
             else:
                 sev_w = 1.0 if (fault_type == "weak_coverage" and fault_ap == ap_id) else 0.0
                 sev_c = 1.0 if (fault_type == "congestion" and fault_ap == ap_id) else 0.0
