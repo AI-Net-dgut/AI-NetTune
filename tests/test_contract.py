@@ -194,6 +194,21 @@ def test_chat_routes_tools():
 
 
 # ---------------------------------------------------------------- 报告
+def test_fault_events_endpoint():
+    """接口15：事件清单来自 fault_events.csv，是"案例起点"的唯一事实来源。"""
+    d = _data(main.data_events(scenario=None))
+    assert d["count"] >= 4, f"事件数过少：{d['count']}"
+    first = d["events"][0]
+    for key in ("event_id", "scenario", "ap_id", "fault_type",
+                "start_time", "end_time", "ramp_minutes", "strength"):
+        assert key in first, f"事件缺字段 {key}"
+    assert first["ap_id"].startswith("AP-")
+    assert first["fault_type"] in ("weak_coverage", "congestion")
+    assert first["start_time"] < first["end_time"]
+    # 按场景过滤：不存在的场景应返回 0 条而不是报错
+    assert _data(main.data_events(scenario="商场"))["count"] == 0
+
+
 def test_report_export():
     """导出接口返回 {report_id, file_url, format, include_chart, sample_count, bytes}。"""
     def _report(include_chart: bool):

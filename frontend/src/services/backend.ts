@@ -20,10 +20,11 @@ type Obj = Record<string, unknown>;
 type Fetcher = typeof fetch;
 const MAX_ROWS = 1000;
 
-export const DATASET_BOUNDS = {
-  min: "2026-01-01T00:00:00",
-  max: "2026-01-30T23:59:59",
-};
+// DATASET_BOUNDS / CASE_WINDOWS 已删除（审查报告 B-4）：
+//   - DATASET_BOUNDS 是写死的时间范围，与实际加载的数据无关，且 0 引用；
+//   - CASE_WINDOWS 是三个手写的"案例起点"时间戳，0 引用（案例按钮从未上线），
+//     改数据即失效。现在改为由后端 GET /api/data/events 读取 data/fault_events.csv，
+//     事件清单是单一事实来源，见 fetchFaultEvents()。
 
 export const DEFAULT_SCOPE: QueryScope = {
   scenario: "校园",
@@ -31,23 +32,44 @@ export const DEFAULT_SCOPE: QueryScope = {
   end: "2026-01-01 11:59:59",
 };
 
-export const CASE_WINDOWS = [
-  {
-    label: "覆盖案例",
-    start: "2026-01-01 10:00:00",
-    end: "2026-01-01 11:59:59",
-  },
-  {
-    label: "拥塞案例",
-    start: "2026-01-01 20:00:00",
-    end: "2026-01-01 21:59:59",
-  },
-  {
-    label: "边缘案例",
-    start: "2026-01-20 01:00:00",
-    end: "2026-01-20 02:59:59",
-  },
-];
+/** 故障事件（来自 data/fault_events.csv，单一事实来源） */
+export interface FaultEvent {
+  eventId: string;
+  scenario: string;
+  apId: string;
+  faultType: string;
+  start: string;
+  end: string;
+  rampMinutes: number;
+  strength: number;
+  labeledFromExpect: string;
+}
+
+/**
+ * 读取故障事件清单。
+ *
+ * 为什么不在前端写死案例窗口：审查报告 B-4 指出 CASE_WINDOWS 是手写时间戳，
+ * 数据一换就失效；而 data_generator.py 每次运行都会同步输出 fault_events.csv，
+ * 由后端读它、前端消费它，"事件"才有唯一来源。
+ */
+export async function fetchFaultEvents(scenario?: string, signal?: AbortSignal): Promise<FaultEvent[]> {
+  const data = await request("/data/events", signal, scenario ? { scenario } : undefined);
+  const list = Array.isArray(data.events) ? data.events : [];
+  return list.map((v) => {
+    const e = obj(v);
+    return {
+      eventId: str(e.event_id),
+      scenario: str(e.scenario),
+      apId: str(e.ap_id),
+      faultType: str(e.fault_type),
+      start: str(e.start_time),
+      end: str(e.end_time),
+      rampMinutes: numeric(e.ramp_minutes),
+      strength: numeric(e.strength),
+      labeledFromExpect: str(e.labeled_from_expect),
+    };
+  });
+}
 
 const obj = (v: unknown): Obj => {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("接口数据结构不正确");

@@ -1110,6 +1110,35 @@ def agent_chat(req: ChatRequest):
     return {"code": 0, "message": "success", "data": data}
 
 
+@app.get("/api/data/events", summary="接口15：故障事件清单（来自 data/fault_events.csv）")
+def data_events(scenario: str | None = Query(None, description="按场景过滤，不传返回全部")):
+    """返回数据生成器同步输出的故障事件清单。
+
+    为什么需要它（审查报告 B-4 / D-2）：前端此前的"案例起点"是手写的三个时间戳，
+    数据一换就失效，而且交接文档提到的 fault_events.csv 从未被生成过。
+    现在生成器每次运行都输出该表，前端读这个接口即可拿到事件起止时间，
+    "事件"只有一份事实来源。
+
+    文件缺失时返回空列表（而不是 500）：事件表缺失不应让工作台打不开。
+    """
+    path = DATA_DIR / "fault_events.csv"
+    if not path.exists():
+        return success_response({"events": [], "count": 0,
+                                 "note": f"未找到 {path.name}，请用 data_generator.py 重新生成数据"})
+    import csv as _csv
+    rows = list(_csv.DictReader(path.open(encoding="utf-8-sig")))
+    if scenario:
+        rows = [r for r in rows if r.get("scenario") == scenario]
+    events = rows
+    for item in events:
+        for key in ("ramp_minutes", "strength"):
+            try:
+                item[key] = float(item[key])
+            except (TypeError, ValueError):
+                item[key] = None
+    return success_response({"events": events, "count": len(events)})
+
+
 # ============ 接口4：导出分析报告 ============
 class ReportRequest(BaseModel):
     scenario: str
