@@ -726,9 +726,24 @@ def tool_topology(scenario: str, win_start: str | None = None, win_end: str | No
             "query_ref": {"scenario": scenario, "start_time": win_start, "end_time": win_end}}
 
 # ---- 工具5：未来预测（复用 forecast_preview，把预警拼成自然语言） ----
-def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:
+def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | None = None, message: str = "") -> dict:
     """AI对话问"未来会怎样"时调用：以对话窗口末尾为基准时刻，跑一次预测，把预警拼成人话。"""
+    import re
     win_end = win_end or TOOL_WINDOW_END
+    # 从用户消息提取预测时长（如"未来120分钟""未来2小时""接下来半小时"），默认30分钟
+    horizon = 30
+    m = re.search(r'未来\s*(\d+)\s*(分钟|分)', message)
+    if m:
+        horizon = int(m.group(1))
+    else:
+        m = re.search(r'未来\s*(\d+)\s*小时', message)
+        if m:
+            horizon = int(m.group(1)) * 60
+        elif '半小时' in message:
+            horizon = 30
+        elif '两小时' in message or '2小时' in message or '120分钟' in message:
+            horizon = 120
+    horizon = max(5, min(horizon, 120))  # 夹到5~120分钟
     try:
         base_dt = datetime.strptime(win_end, "%Y-%m-%d %H:%M:%S")
     except Exception:
@@ -746,7 +761,7 @@ def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | No
         req = ForecastPreviewRequest(
             scenario=scenario, baseTime=win_end,
             history=_TimeRange(start=hist_start, end=win_end),
-            horizonMinutes=30,
+            horizonMinutes=horizon,
         )
         resp = forecast_preview(req)
         data = resp.get("data", {})
@@ -762,11 +777,11 @@ def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | No
 
     alerts = data.get("alerts", [])
     if not alerts:
-        reply = (f"以 {win_end} 为基准，未来30分钟内未发现明显网络风险，"
+        reply = (f"以 {win_end} 为基准，未来{horizon}分钟内未发现明显网络风险，"
                  f"各AP负载与覆盖处于正常区间。如需查看详细频谱，可打开右上角「预测预警」面板。")
     else:
         sev_text = {"high": "高风险", "medium": "中风险", "low": "低风险"}
-        lines = [f"以 {win_end} 为基准，未来30分钟内发现 {len(alerts)} 项风险："]
+        lines = [f"以 {win_end} 为基准，未来{horizon}分钟内发现 {len(alerts)} 项风险："]
         for i, a in enumerate(alerts, 1):
             lines.append(f"  {i}. [{sev_text.get(a['severity'], a['severity'])}] {a['title']}：{a['summary']}")
         lines.append("建议打开「预测预警」面板查看频谱热力图，并点击「交给AI详细研判」获取处置方案。")
@@ -827,7 +842,10 @@ def agent_chat(req: ChatRequest):
         if not req.window_start or not req.window_end:
             req.window_start, req.window_end = _default_window(scenario)
     handler = TOOLS.get(intent, TOOLS["query_kpi"])
-    data = handler(scenario, req.window_start, req.window_end)
+    if intent == "forecast":
+        data = handler(scenario, req.window_start, req.window_end, req.message)
+    else:
+        data = handler(scenario, req.window_start, req.window_end)
     return {"code": 0, "message": "success", "data": data}
 
 
@@ -1372,7 +1390,9 @@ def forecast_preview(req: ForecastPreviewRequest):
                         for ts, vs in sorted(by_ts.items())]
             if len(hist_pts) > 60:
                 hist_pts = hist_pts[::max(1, len(hist_pts) // 60)]
-            last_val = hist_pts[-1]["value"] if hist_pts else 0.0
+            if not hist_pts:
+                continue  # 网络表无此指标数据，跳过，不填0值预测
+            last_val = hist_pts[-1]["value"]
             pred_pts = []
             t = base_dt
             for _ in range(max(1, int(req.horizonMinutes // 5))):
