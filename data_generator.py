@@ -243,6 +243,13 @@ def generate_dataset() -> pd.DataFrame:
                 shadow = np.random.normal(0, SHADOW_STD)
                 ap_rsrp_map[ap_id] = path_loss + shadow
 
+            # D-7 修正①：RSRP 物理上限。原实现近距离 UE 会算出 -22.77 dBm，
+            # 而 5G RSRP 高于 -60 dBm 不合物理（data_dict 声明范围 -140~-60）。
+            # 用 -60.5 往下抖动，避免一堆行死死贴在 -60 形成水平带。
+            for _aid in ap_rsrp_map:
+                if ap_rsrp_map[_aid] > -60.5:
+                    ap_rsrp_map[_aid] = -60.5 - random.uniform(0.0, 2.5)
+
             # 故障注入：弱覆盖时段，对该AP信号额外衰减（制造覆盖空洞）
             # v2.8：衰减量按 ramp 渐入/渐出，事件前 20 分钟会出现"逐渐变差"的可预测征兆
             if fault_type == "weak_coverage":
@@ -264,8 +271,12 @@ def generate_dataset() -> pd.DataFrame:
                     unattenuated = forced_rsrp + fault_strength * fault_ramp
                     serving_rsrp = (serving_rsrp + (unattenuated - serving_rsrp) * fault_ramp
                                     - fault_strength * fault_ramp)
-                else:
+                elif fault_type == "weak_coverage":
                     serving_rsrp = forced_rsrp
+                # D-7 修正②：拥塞是**负载**问题，不是覆盖问题。
+                # 样本仍算到故障 AP 头上（保证该 AP 有足够采样），但信号质量保持
+                # 用户实际所在位置的水平——否则拥塞行的 SINR 会被压到 -10 dB，
+                # 看起来像覆盖故障，judge_ap 先判覆盖就会把拥塞误判成覆盖。
                 serving_ap = fault_ap
 
             # 计算干扰功率（所有非服务AP + 底噪）
@@ -274,11 +285,19 @@ def generate_dataset() -> pd.DataFrame:
                 if ap_id != serving_ap:
                     interference_mw += dbm_to_mw(rsrp)
             sinr_dbm = mw_to_dbm(dbm_to_mw(serving_rsrp) / interference_mw)
-            sinr_dbm = clamp(sinr_dbm, -10.0, 30.0)   # v2.3: SINR 限幅，修复异常峰值
+            # D-7 修正③：限幅从 [-10, 30] 放宽到 [-25, 30]。
+            # 原范围导致 7.31% 的行压在边界上（7,164 行恰好 -10.0、2,314 行恰好 30.0），
+            # 弱覆盖行 95% 的 SINR 全等于 -10，信息被压平。
+            sinr_dbm = clamp(sinr_dbm, -25.0, 30.0)
 
             # 计算吞吐量（香农公式简化）
             sinr_linear = dbm_to_mw(sinr_dbm)
-            throughput = min(MAX_USER_THROUGHPUT, 20.0 * np.log2(1 + sinr_linear))
+            # D-7 修正④：封顶不再产生"永远 150"的水平带。
+            # 原实现 5.28% 的行恰好等于 150.0；这里对触顶的行按 0.93~1.00 比例抖动，
+            # 既保留"上限"语义，又不让图表出现一条死平线。
+            throughput = 20.0 * np.log2(1 + sinr_linear)
+            if throughput >= MAX_USER_THROUGHPUT:
+                throughput = MAX_USER_THROUGHPUT * random.uniform(0.93, 0.995)
             throughput = round(throughput, 2)
 
             # 计算时延：信号越差、负载越高，时延越大
@@ -291,14 +310,20 @@ def generate_dataset() -> pd.DataFrame:
             packet_loss = round(clamp(packet_loss, 0.1, 22.0), 2)
 
             # 计算PRB资源占用率
-            prb_usage = 40.0 + load_factor * 55.0 + random.uniform(-3, 3)
-            prb_usage = round(clamp(prb_usage, 10.0, 98.0), 2)
+            # D-7 修正⑤：压低正常行的 PRB。原为 40 + load*55 + U(-3,3)，
+            # 正常行 p95 达 93.63%，而 main.py 的拥塞阈值是 >90% →
+            # 正常窗口里也有大量小时"按规则算拥塞"，造成系统性误报（B-7 的数据根因）。
+            # 改为 22 + load*48 ± 3 → 约 19~73%，p95 远低于 85%。
+            prb_usage = 22.0 + load_factor * 48.0 + random.uniform(-3, 3)
+            prb_usage = round(clamp(prb_usage, 8.0, 78.0), 2)
 
             # 故障注入：拥塞时段，抬升目标AP的PRB与丢包（制造容量拥塞）
             # v2.8：按 ramp 从自然值过渡到目标值，渐入期 PRB 会逐步越过 85% 阈值
             if fault_type == "congestion" and serving_ap == fault_ap:
                 target_prb = clamp(fault_strength + random.uniform(-2, 3), 85.0, 98.0)
-                target_loss = clamp(packet_loss + 3.0, 5.0, 12.0)
+                # 下限用 6.0 而不是 5.0：拥塞判定是 packet_loss > 5（严格大于），
+                # 取 5.0 会让大量行恰好等于 5 而丢掉 congestion 标签（实测掉到原来的 1/3）
+                target_loss = clamp(packet_loss + 3.0, 6.0, 12.0)
                 prb_usage = round(prb_usage + (target_prb - prb_usage) * fault_ramp, 2)
                 packet_loss = round(packet_loss + (target_loss - packet_loss) * fault_ramp, 2)
 

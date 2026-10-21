@@ -14,14 +14,14 @@
 | ue_x | UE 横坐标 | m | float | 20 ~ 480 | 用户实时位置 |
 | ue_y | UE 纵坐标 | m | float | 20 ~ 430 | 用户实时位置 |
 | rsrp | 参考信号接收功率 | dBm | float | -140 ~ -60 | 无线信号强度，数值越大信号越好 |
-| sinr | 信干噪比 | dB | float | -10 ~ 30 | 信号质量，越高越好（v2.3 起限幅） |
-| throughput | 吞吐量 | Mbps | float | 0 ~ 150 | 用户下行速率 |
-| latency | 时延 | ms | float | 8 ~ 80 | 端到端网络延迟 |
-| packet_loss | 丢包率 | % | float | 0.1 ~ 22 | 数据包丢失百分比 |
-| prb_usage | PRB利用率 | % | float | 10 ~ 98 | 无线资源块占用率 |
+| sinr | 信干噪比 | dB | float | -25 ~ 30 | 信号质量，越高越好（v2.8 起下限放宽到 -25，避免 7.31% 的行压在 -10 边界） |
+| throughput | 吞吐量 | Mbps | float | 0 ~ 150 | 用户下行速率（触顶行按 0.93~0.995 抖动，不再有"永远 150"的水平带） |
+| latency | 时延 | ms | float | 8 ~ 30 | 端到端网络延迟（实测 13.5~26.3；v2.8 更正旧文档的 8~80） |
+| packet_loss | 丢包率 | % | float | 0.1 ~ 12 | 数据包丢失百分比（实测 0.7~8.7；v2.8 更正旧文档的 0.1~22） |
+| prb_usage | PRB利用率 | % | float | 8 ~ 98 | 无线资源块占用率。正常行 ≤78（v2.8 压低，旧版 p95 达 93.6% 会与 >90% 的拥塞阈值冲突）；拥塞行 85~98 |
 | scenario | 场景标签 | - | str | 校园、商场、体育馆 | 物理部署地点场景（v2.3 起为中文，与后端白名单一致） |
 | network_status | 网络状态 | - | str | normal、congestion、weak_coverage | 网络运行健康状态：正常/拥塞/弱覆盖 |
-| retransmission_count | 重传次数 | 次 | int | 0 ~ 8 | 与丢包率、时延正相关（故障深度分析） |
+| retransmission_count | 重传次数 | 次 | int | 0 ~ 3 | 与丢包率、时延正相关（实测 0~3；v2.8 更正旧文档的 0~8） |
 | traffic_demand | 业务需求 | Mbps | float | ≥ throughput | 潜在业务需求，≥ 实际吞吐量 |
 | active_users | 活跃用户数 | 人 | int | 3 ~ 11 | 与 AP 负载正相关 |
 
