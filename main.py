@@ -1372,6 +1372,10 @@ FORECAST_PROFILES = {
     "throughput": {"bounds": (0.0, 300.0),    "max_drift": None},
 }
 
+# 预警阈值：与 docs/api.md、频谱数据转交说明保持同一口径
+ALERT_WEAK_POWER_DBM = -95.0        # 频段功率低于此值视为弱覆盖
+ALERT_CONGESTION_OCC_PCT = 85.0     # 频段占用率高于此值视为拥塞
+
 
 def _linear_trend(values):
     """对等间隔序列做最小二乘（可含 None，自动跳过）。
@@ -1486,18 +1490,6 @@ def forecast_preview(req: ForecastPreviewRequest):
             hist_by_ts[ts] = (dict(zip(grp.band_id, grp.power_dbm)),
                               dict(zip(grp.band_id, grp.occupancy_pct)))
 
-        # 未来外推的频段选取参照（仍用末 10 分钟均值，仅供 alerts 挑 bandIds 用）
-        recent = hist_sub.sort_values("timestamp").tail(10 * len(bands))
-        def _avg_by_band(col):
-            out = {}
-            for b in bands:
-                bid = b["band_id"]
-                vals = recent[recent.band_id == bid][col]
-                out[bid] = float(vals.mean()) if len(vals) else None
-            return out
-        avg_power = _avg_by_band("power_dbm")
-        avg_occ = _avg_by_band("occupancy_pct")
-
         # 逐频段趋势：按分钟顺序整理该 AP 的历史序列（一次遍历，避免 50×2 次布尔筛选）
         ts_list = sorted(hist_by_ts.keys())
         series = {"power": {b["band_id"]: [] for b in bands},
@@ -1550,6 +1542,10 @@ def forecast_preview(req: ForecastPreviewRequest):
                 t += timedelta(minutes=1)
             return frames
 
+        # 历史帧/预测帧各算一次，供 spectra 与 alerts 共用（避免重复计算）
+        hist_frames = {"power": build_hist("power"), "occupancy": build_hist("occupancy")}
+        pred_frames = {"power": build_pred("power"), "occupancy": build_pred("occupancy")}
+
         for metric, sid_suffix, unit, scale in [
             ("power", "power", "dBm", {"min": -110, "max": -40}),
             ("occupancy", "occupancy", "%", {"min": 0, "max": 100}),
@@ -1557,43 +1553,81 @@ def forecast_preview(req: ForecastPreviewRequest):
             spectra.append({
                 "id": f"{ap}-{sid_suffix}", "observationLabel": ap, "observationId": ap,
                 "metric": metric, "unit": unit, "scale": scale, "bands": band_list,
-                "history": build_hist(metric), "predicted": build_pred(metric),
+                "history": hist_frames[metric], "predicted": pred_frames[metric],
             })
 
-        # alerts：历史窗口最后 10 分钟状态统计 → 预测未来持续
-        status_sub = hist_sub[["timestamp", "network_status"]].drop_duplicates()
-        recent_st = status_sub[status_sub.timestamp >= hist_end - timedelta(minutes=10)]
-        n_recent = len(recent_st)
-        if n_recent:
-            n_cong = int((recent_st.network_status == "congestion").sum())
-            n_weak = int((recent_st.network_status == "weak_coverage").sum())
-            def _sev(n):
-                r = n / n_recent
-                return "high" if r >= 0.5 else ("medium" if r >= 0.2 else "low")
-            if n_cong >= max(2, n_recent * 0.1):
-                alerts.append({
-                    "id": f"ALT-{ap}-cong", "target": ap,
-                    "title": f"{ap} 预测拥塞持续",
-                    "summary": f"历史窗口末段 {n_cong}/{n_recent} 分钟处于拥塞（占用率85-95%），"
-                               f"预计未来{int(req.horizonMinutes)}分钟持续，吞吐下降、时延上升。",
-                    "severity": _sev(n_cong),
-                    "start": fmt(base_dt), "end": fmt(fore_end),
-                    "spectrumId": f"{ap}-occupancy", "impactId": None,
-                    "bandIds": [b["band_id"] for b in bands
-                                if avg_occ.get(b["band_id"]) is not None and avg_occ[b["band_id"]] > 85][:5],
-                })
-            if n_weak >= max(2, n_recent * 0.1):
-                alerts.append({
-                    "id": f"ALT-{ap}-weak", "target": ap,
-                    "title": f"{ap} 预测弱覆盖持续",
-                    "summary": f"历史窗口末段 {n_weak}/{n_recent} 分钟处于弱覆盖（功率偏低、占用率10-30%），"
-                               f"预计未来{int(req.horizonMinutes)}分钟覆盖改善有限。",
-                    "severity": _sev(n_weak),
-                    "start": fmt(base_dt), "end": fmt(fore_end),
-                    "spectrumId": f"{ap}-power", "impactId": None,
-                    "bandIds": [b["band_id"] for b in bands
-                                if avg_power.get(b["band_id"]) is not None and avg_power[b["band_id"]] < -95][:5],
-                })
+        # ---- 预警判据：看"预测帧"里第几分钟越过阈值，而不是统计已发生的历史标签 ----
+        # 阈值与 docs/api.md、频谱转交说明一致：功率 < −95 dBm 视为弱覆盖；占用率 > 85% 视为拥塞。
+        # 输出分两种语义，与《问题状态与责任分工》里"持续风险"和"提前预警"分别验收一致：
+        #   already=True  → 基准时刻已越阈，提示"已发生、预计持续"（持续风险）
+        #   already=False → 基准时刻未越阈，提示"预计 N 分钟后…"（提前预警，带提前量）
+        min_crossing_bands = max(3, len(bands) // 10)
+
+        def _bands_over(values, threshold, direction):
+            """返回越阈频段列表；按越阈幅度从最严重排起。"""
+            hits = [(v, b["band_id"]) for b, v in zip(bands, values)
+                    if v is not None and (v < threshold if direction == "below" else v > threshold)]
+            hits.sort(key=(lambda t: t[0]) if direction == "below" else (lambda t: -t[0]))
+            return [bid for _v, bid in hits]
+
+        for metric, threshold, direction, sid_suffix, label, verb in (
+            ("power", ALERT_WEAK_POWER_DBM, "below", "power", "功率", "跌破"),
+            ("occupancy", ALERT_CONGESTION_OCC_PCT, "above", "occupancy", "占用率", "超过"),
+        ):
+            frames = pred_frames[metric]
+            if not frames:
+                continue
+            crossing = [_bands_over(f["values"], threshold, direction) for f in frames]
+            hit_minutes = [i for i, ids in enumerate(crossing) if len(ids) >= min_crossing_bands]
+            if not hit_minutes:
+                continue
+
+            first_minute = hit_minutes[0]
+            last_minute = hit_minutes[-1]
+            hardest = crossing[first_minute]
+            ratio = len(hardest) / max(1, len(bands))
+            already = bool(hist_frames[metric]) and len(
+                _bands_over(hist_frames[metric][-1]["values"], threshold, direction)
+            ) >= min_crossing_bands
+
+            if already:
+                severity = "high" if ratio >= 0.5 else "medium"
+                unit_text = "dBm" if metric == "power" else "%"
+                if last_minute + 1 >= len(frames):
+                    duration_text = f"预测整个 {int(req.horizonMinutes)} 分钟内该状态维持"
+                else:
+                    duration_text = (f"预计持续到第 {last_minute + 1} 分钟"
+                                     f"（{frames[last_minute]['end'][11:16]}）后逐步恢复")
+                title = f"{ap} 已处于{'弱覆盖' if metric == 'power' else '拥塞'}，预计持续"
+                summary = (
+                    f"基准时刻（{req.baseTime}）已有 {len(hardest)}/{len(bands)} 个频段"
+                    f"{label}{verb} {threshold}{unit_text}；按当前趋势，{duration_text}。"
+                )
+            else:
+                severity = "high" if first_minute <= 10 else ("medium" if first_minute <= 30 else "low")
+                unit_text = "dBm" if metric == "power" else "%"
+                summary = (
+                    f"基准时刻（{req.baseTime}）尚未越阈；按当前趋势，"
+                    f"预计第 {first_minute} 分钟后开始有 {len(hardest)}/{len(bands)} 个频段"
+                    f"{label}{verb} {threshold}{unit_text}，提前量约 {first_minute} 分钟。"
+                )
+                title = f"{ap} 预计 {first_minute} 分钟后{label}{verb} {threshold}{unit_text}"
+
+            span_start = base_dt + timedelta(minutes=first_minute)
+            span_end = min(fore_end, base_dt + timedelta(minutes=last_minute + 1))
+            if span_end <= span_start:      # 单分钟命中：至少给 1 分钟窗口
+                span_end = min(fore_end, span_start + timedelta(minutes=1))
+
+            alerts.append({
+                "id": f"ALT-{ap}-{'weak' if metric == 'power' else 'cong'}",
+                "target": ap,
+                "title": title,
+                "summary": summary,
+                "severity": severity,
+                "start": fmt(span_start), "end": fmt(span_end),
+                "spectrumId": f"{ap}-{sid_suffix}", "impactId": None,
+                "bandIds": hardest[:5],
+            })
 
     # impacts：SINR/吞吐从主网络数据按分钟聚合，用同一套阻尼趋势外推
     impacts = []
