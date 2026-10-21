@@ -22,6 +22,7 @@ import spatial_model as _sm
 from spatial_model import build_spatial
 import plan_model
 import report_model
+import spectrum_frames as _sf
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
@@ -1756,15 +1757,24 @@ def forecast_preview(req: ForecastPreviewRequest):
             t = base_dt
             for step in range(int(req.horizonMinutes)):
                 values = []
-                for b in bands:
-                    slope, last = band_trend[metric][b["band_id"]]
+                # 按"场"推进而不是逐段独立外推：先把各频段斜率做跨频段平滑，
+                # 保留主导形态；场能量过小才判为静止。
+                slopes_field = _sf._smooth(
+                    [band_trend[metric][b["band_id"]][0] or 0.0 for b in bands])
+                if max((abs(x) for x in slopes_field), default=0.0) < _sf.ENERGY_EPS:
+                    slopes_field = [0.0] * len(bands)
+                for idx, b in enumerate(bands):
+                    _slope, last = band_trend[metric][b["band_id"]]
                     if last is None:
                         values.append(None)
                         continue
-                    values.append(_damped_predict(
-                        last, slope, step,
-                        _profile_drift(metric, last),
-                        FORECAST_PROFILES[metric]["bounds"]))
+                    # 饱和外推：v = last + d·τ·(1−e^(−t/τ))，保留各频段相对差异
+                    factor = _sf.TAU_MINUTES * (1.0 - math.exp(-step / _sf.TAU_MINUTES))
+                    value = last + slopes_field[idx] * factor
+                    drift = _profile_drift(metric, last)
+                    value = max(last - drift, min(last + drift, value))
+                    lo_b, hi_b = FORECAST_PROFILES[metric]["bounds"]
+                    values.append(round(max(lo_b, min(hi_b, value)), 2))
                 frames.append({"start": fmt(t), "end": fmt(t + timedelta(minutes=1)),
                                "values": values})
                 t += timedelta(minutes=1)
@@ -1924,14 +1934,20 @@ def forecast_preview(req: ForecastPreviewRequest):
 
             pred_pts = []
             t = base_dt
-            for step in range(max(1, int(req.horizonMinutes // 5))):
+            total_steps = max(1, int(req.horizonMinutes // 5))
+            for step in range(total_steps):
                 minutes_ahead = step * 5          # 预测点每 5 分钟一个，趋势按分钟拟合
                 value = _damped_predict(last_val, slope_per_minute, minutes_ahead,
                                         max_drift, profile["bounds"])
+                # 区间随预测步长扩大：原来 half_width 在循环外只算一次，
+                # 每个预测点的带宽完全相同，图上是等宽平带——但越往后越不确定，
+                # 等宽区间在统计上说不通（也是"预测看起来不对"的直接原因之一）。
+                # 用 √(1 + step/total) 增长：起步约 1 倍，末端约 1.41 倍。
+                growth = (1.0 + step / total_steps) ** 0.5
                 pred_pts.append({
                     "time": fmt(t), "value": value,
-                    "lower": round(max(low, value - half_width), 2),
-                    "upper": round(min(high, value + half_width), 2),
+                    "lower": round(max(low, value - half_width * growth), 2),
+                    "upper": round(min(high, value + half_width * growth), 2),
                 })
                 t += timedelta(minutes=5)
             impacts.append({"id": sid, "targetLabel": "全网", "label": label, "unit": unit,
