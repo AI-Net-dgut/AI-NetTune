@@ -17,6 +17,7 @@ import useScopedSpatial from "../../replay/useScopedSpatial";
 import ReplayControls from "../../replay/ReplayControls";
 import HistoryControls from "../../replay/HistoryControls";
 import ReferenceWindowControls from "../../replay/ReferenceWindowControls";
+import CaseEventButtons from "../../replay/CaseEventButtons";
 import type { ReplayConfig } from "../../replay/config";
 import useForecastPreview from "../../forecast/useForecastPreview";
 import ForecastDialog from "../../forecast/ForecastDialog";
@@ -212,6 +213,9 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
       </header>
       {clock.viewMode === "history" && <ReferenceWindowControls key={`history-${contextKey}`} idPrefix="ain-history-reference"
         state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />}
+      {/* 预置案例：事件来自后端 /api/data/events（data/fault_events.csv），非手写时间戳 */}
+      <CaseEventButtons key={`cases-${clock.viewMode}`} state={clock} act={act} scope={scope}
+        disabled={loading || Boolean(source.error)} />
       <section className="ain-filter-panel ain-replay-data-info" aria-label="回放数据来源与统计口径">
         <div className="ain-data-bar">
           <div className="ain-data-meta-summary">
