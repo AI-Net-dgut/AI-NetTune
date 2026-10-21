@@ -1,0 +1,13 @@
+# AI-NetTune 后端最小依赖（不锁 heavy 包）
+# 用途：评委/评审机器上 prophet、PyKrige 装不上时的兜底方案。
+# 装完后 /api/analyze/forecast 会如实返回 method=moving_average，
+# /api/data/heatmap 会如实返回 method=grid_mean，其余接口功能不受影响。
+# 安装：python -m pip install -r requirements-min.txt
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pandas>=2.2
+numpy>=1.26
+pydantic>=2.7
+requests>=2.32
+tzdata>=2024.1

@@ -13,6 +13,7 @@ import type {
   SpatialMapData,
 } from "../types/backend";
 import { parseSpatialMap } from "./spatialMap";
+import { API_BASE } from "./apiBase";
 
 type Obj = Record<string, unknown>;
 type Fetcher = typeof fetch;
@@ -91,7 +92,7 @@ async function request(path: string, signal?: AbortSignal, body?: unknown, fetch
   signal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(abort, 45_000);
   try {
-    const res = await fetcher(`/api${path}`, {
+    const res = await fetcher(`${API_BASE}/api${path}`, {
       method: body ? "POST" : "GET", signal: controller.signal,
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,

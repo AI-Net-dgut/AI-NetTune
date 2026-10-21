@@ -10,10 +10,13 @@ import datetime
 import csv as _csv
 import statistics
 import re
-from pathlib import Path
+import os
+from datetime import datetime, timedelta
 import llm_agent
 from llm_agent import get_intent, rule_intent, extract_time_range, call_llm_chat
+import forecast_model as _fm
 from forecast_model import build_series, DEFAULT_METRICS
+import spatial_model as _sm
 from spatial_model import build_spatial
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
 from fastapi import Request, status
@@ -22,6 +25,18 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from datetime import datetime, timedelta
 from fastapi.staticfiles import StaticFiles
+from data_layout import (
+    BASE_DIR, DATA_DIR, NETWORK_CANDIDATES, NETWORK_COLUMNS,
+    SPECTRUM_CANDIDATES, resolve_data_file,
+)
+
+# 项目根目录由 data_layout 统一定义：所有运行时路径都以它为准。
+# 不用相对路径，否则启动时 cwd 不同会导致“数据读不到 / 报告写到别处 / 下载 404”。
+REPORTS_DIR = BASE_DIR / "reports"
+
+# 开关：是否启用 LLM 增强（LLM 故障或没有密钥时设为 0 即可纯规则运行）。
+# 环境变量 NETTUNE_ENABLE_LLM=0 也可关闭，方便部署时用环境变量控制、不必改代码。
+ENABLE_LLM = os.getenv("NETTUNE_ENABLE_LLM", "1").strip().lower() not in ("0", "false", "off", "no")
 
 # ======================
 # 统一错误码定义（与api.md文档严格对齐）
@@ -57,11 +72,10 @@ def error_response(code: int, message: str, data=None):
 app = FastAPI()
 
 # ===== 新增：挂载报告下载静态目录 =====
-import os
-# 自动创建reports目录，避免不存在报错
-os.makedirs("reports", exist_ok=True)
+# 自动创建reports目录，避免不存在报错（用绝对路径，与导出时写入的目录一致）
+os.makedirs(REPORTS_DIR, exist_ok=True)
 # 挂载静态目录，路径和返回的file_url前缀保持一致
-app.mount("/download/reports", StaticFiles(directory="reports"), name="download_reports")
+app.mount("/download/reports", StaticFiles(directory=str(REPORTS_DIR)), name="download_reports")
 # ==================================
 
 # 全局参数校验异常处理：统一返回格式
@@ -114,32 +128,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============ 数据源：唐苗仿真数据集 ============
-# 默认 30d（129600条，18列，P1 预测训练数据量充足）；3d 版备份为 network_data_3d_bak.csv
-# 注意：表头首列带 BOM（\ufefftimestamp），必须用 utf-8-sig 读取
-DATA_PATH = Path(__file__).resolve().parent / "data" / "network_data_30d(1).csv"
+# ============ 数据源：仿真数据集（路径解析） ============
+# 规则（见 DEPLOY.md）：
+#   1) 环境变量 NETWORK_DATA_PATH / SPECTRUM_DATA_PATH 优先（相对路径按项目根目录解析）；
+#   2) 否则在 NETTUNE_DATA_DIR（默认 <项目根>/data）下按候选文件名探测；
+#   3) 探测顺序兼容浏览器重复下载产生的 "(1)" 副本，避免路径失配后静默返回空数据。
+# 候选名与解析函数统一定义在 data_layout.py（scripts/doctor.py 复用同一份）。
+# 注意：网络表表头首列带 BOM（\ufefftimestamp），必须用 utf-8-sig 读取。
+
+# 启动期收集到的问题（由 /api/health 与启动横幅统一输出，不静默吞掉）
+STARTUP_ISSUES = []
+
+DATA_PATH = resolve_data_file("NETWORK_DATA_PATH", NETWORK_CANDIDATES, "网络表", STARTUP_ISSUES)
+
 
 def load_data():
-    if not DATA_PATH.exists():
-        print("[WARN] 未找到 data/network_data.csv，接口将返回空数据")
+    if DATA_PATH is None:
+        print("[WARN] 网络表缺失：/api/data/*、研判、拓扑、回放相关接口将返回空数据")
         return []
     with open(DATA_PATH, encoding="utf-8-sig", newline="") as f:
         return list(_csv.DictReader(f))
 
+
 DF = load_data()
 
-# ============ 频谱数据（data/spectrum_7d.csv，预测预警 v2 真实数据源） ============
+# ============ 频谱数据（预测预警 v2 真实数据源） ============
 # 7天×1440分钟×3 AP×50频段 = 1,512,000 行；1分钟一帧，与网络数据同时间轴
 # 字段：timestamp/observation_id(AP-01..03)/band_id(band-0..49)/lower_mhz/upper_mhz
 #       /power_dbm/occupancy_pct/network_status(normal|weak_coverage|congestion)/scenario
 import pandas as _pd
-SPECTRUM_PATH = Path(__file__).resolve().parent / "data" / "spectrum_7d.csv"
+SPECTRUM_PATH = resolve_data_file("SPECTRUM_DATA_PATH", SPECTRUM_CANDIDATES, "频谱表", STARTUP_ISSUES)
 _SPEC = {"df": None, "max_ts": None, "bands": None}
 
 
 def load_spectrum():
-    if not SPECTRUM_PATH.exists():
-        print("[WARN] 未找到 data/spectrum_7d.csv，forecast preview 将降级 insufficient_data")
+    if SPECTRUM_PATH is None:
+        print("[WARN] 频谱表缺失：/api/forecast/preview 将降级 insufficient_data")
         return
     df = _pd.read_csv(SPECTRUM_PATH, encoding="utf-8-sig")
     df["timestamp"] = _pd.to_datetime(df["timestamp"], format="%Y-%m-%d %H:%M:%S")
@@ -148,16 +172,90 @@ def load_spectrum():
     bands = (df[["band_id", "lower_mhz", "upper_mhz"]].drop_duplicates()
              .sort_values("lower_mhz").to_dict("records"))
     _SPEC["bands"] = bands
-    print(f"[OK] spectrum_7d.csv 加载完成：{len(df)} 行，时间至 {_SPEC['max_ts']}, {len(bands)} 频段")
+    print(f"[OK] {SPECTRUM_PATH.name} 加载完成：{len(df)} 行，时间至 {_SPEC['max_ts']}, {len(bands)} 频段")
 
 
 load_spectrum()
 
+
+# ============ 启动自检（部署排查用，对应接口13 /api/health） ============
+def data_status():
+    """汇总数据/依赖/大模型的就绪状态，供 /api/health 与启动横幅使用。
+
+    设计原则：缺数据不抛异常、不静默，而是把"缺什么、该看哪份文档"直接返回给调用方，
+    避免出现"服务起来了但所有接口返回空数组"这种最难排查的状态。
+    """
+    net = {
+        "path": str(DATA_PATH) if DATA_PATH else None,
+        "exists": bool(DATA_PATH and DATA_PATH.is_file()),
+        "rows": len(DF),
+        "size_mb": round(DATA_PATH.stat().st_size / 1024 / 1024, 1) if DATA_PATH else None,
+    }
+    spec_df = _SPEC["df"]
+    spec = {
+        "path": str(SPECTRUM_PATH) if SPECTRUM_PATH else None,
+        "exists": bool(SPECTRUM_PATH and SPECTRUM_PATH.is_file()),
+        "rows": int(len(spec_df)) if spec_df is not None else 0,
+        "size_mb": round(SPECTRUM_PATH.stat().st_size / 1024 / 1024, 1) if SPECTRUM_PATH else None,
+        "max_timestamp": _SPEC["max_ts"].strftime("%Y-%m-%d %H:%M:%S") if _SPEC["max_ts"] is not None else None,
+        "band_count": len(_SPEC["bands"] or []),
+    }
+    return {
+        "ok": bool(net["rows"]) and bool(spec["rows"]),
+        "data_dir": str(DATA_DIR),
+        "network": net,
+        "spectrum": spec,
+        "capabilities": {
+            "prophet": bool(getattr(_fm, "_HAS_PROPHET", False)),
+            "kriging": bool(getattr(_sm, "_HAS_PYKRIGE", False)),
+            "llm_enabled": bool(ENABLE_LLM),
+            "llm_key_configured": bool(llm_agent.LLM_API_KEY),
+            "llm_model": llm_agent.LLM_MODEL,
+        },
+        "issues": list(STARTUP_ISSUES),
+        "hint": "数据文件缺失时请按 DEPLOY.md 第 2 节准备 data/ 目录；"
+                "也可用 NETWORK_DATA_PATH / SPECTRUM_DATA_PATH 直接指定文件。",
+    }
+
+
+def _print_startup_report():
+    st = data_status()
+    print("=" * 72)
+    print("[启动自检] AI-NetTune backend")
+    print(f"  数据目录 : {st['data_dir']}")
+    print(f"  网络表   : {(st['network']['path'] or '缺失')}"
+          f" ({st['network']['rows']} 行)")
+    print(f"  频谱表   : {(st['spectrum']['path'] or '缺失')}"
+          f" ({st['spectrum']['rows']} 行, 至 {st['spectrum']['max_timestamp']})")
+    cap = st["capabilities"]
+    print(f"  能力     : prophet={'on' if cap['prophet'] else 'off(降级 moving_average)'} "
+          f"kriging={'on' if cap['kriging'] else 'off(降级 grid_mean)'} "
+          f"llm={'on' if cap['llm_key_configured'] else 'off(降级规则意图)'}")
+    for issue in st["issues"]:
+        print(f"  [问题] {issue}")
+    if not st["ok"]:
+        print("  [提醒] 数据不完整，请按 DEPLOY.md 准备 data/ 目录后重启；GET /api/health 可复查。")
+    print("=" * 72)
+
+
+_print_startup_report()
+
+
+# ============ 接口13：部署自检（不依赖任何数据文件，永远可访问） ============
+@app.get("/api/health", summary="接口13：部署自检（数据/依赖/大模型就绪状态）")
+def health():
+    """给部署者和评委用的自检接口：返回数据文件是否到位、行数、时间范围，
+    以及 prophet / kriging / LLM 三项能力是否可用（不可用时后端会自动降级）。
+
+    注意：本接口始终返回 HTTP 200 + code 0，就绪与否看 data.ok 字段，
+    这样前端/脚本可以直接读字段判断，不需要区分 HTTP 状态码。
+    """
+    return success_response(data_status())
+
+
 # 完整 18 列：11 核心 KPI + AP/UE 坐标（4列）+ 故障深度分析辅助字段（3列）
-ALL_COLUMNS = ["timestamp", "ap_id", "ap_x", "ap_y", "user_id", "ue_x", "ue_y",
-               "rsrp", "sinr", "throughput", "latency", "packet_loss", "prb_usage",
-               "scenario", "network_status",
-               "retransmission_count", "traffic_demand", "active_users"]
+# 列名统一定义在 data_layout.NETWORK_COLUMNS（scripts/doctor.py 用它校验 CSV 表头）
+ALL_COLUMNS = list(NETWORK_COLUMNS)
 
 def filter_rows(scenario, start_time, end_time, ap_id=None, user_id=None):
     """按场景/时间/AP/用户过滤 CSV 数据，按时间升序返回"""
@@ -801,9 +899,7 @@ TOOLS = {
 }
 
 
-# 开关：可配置是否启用LLM增强，LLM故障时设为False即可纯规则运行
-
-ENABLE_LLM = True
+# 说明：ENABLE_LLM 已上移到文件顶部配置区（那里定义了环境变量 NETTUNE_ENABLE_LLM 开关）。
 
 
 @app.post("/api/agent/chat")
@@ -869,7 +965,7 @@ def export_report(req: ReportRequest):
     report_id = "RPT_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     ext = "md" if req.format in ("md", "markdown") else "html"
     filename = f"{report_id}.{ext}"
-    file_path = f"reports/{filename}"
+    file_path = REPORTS_DIR / filename
 
     # ===== 新增：生成真实报告内容并写入文件 =====
     # 1. 拉取对应范围的数据
@@ -889,8 +985,17 @@ def export_report(req: ReportRequest):
     """
 
     # 3. 写入文件
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    #    目录不可写（只读容器、Program Files、权限受限等）时不要抛 500 堆栈，
+    #    直接把"写到哪个路径、为什么失败"返回给调用方，便于现场定位。
+    try:
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as exc:
+        return error_response(
+            ERROR_CODE["INTERNAL_ERROR"],
+            f"报告写入失败：{exc}（目标路径 {file_path}，请确认进程对该目录有写权限）",
+        )
     # ============================================
 
     return success_response({

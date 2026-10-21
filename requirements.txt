@@ -1,0 +1,25 @@
+# AI-NetTune 后端运行依赖
+# 环境：Python 3.13（本项目实测 3.13.10 / Windows 11）
+# 安装：python -m pip install -r requirements.txt
+#
+# 说明：以下版本是 2026-10-21 在本项目演示机上实测跑通的版本。
+#       如果换机器后 pandas/numpy 安装失败，可先用 requirements-min.txt（不锁 prophet/pykrige）。
+
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+pandas==3.0.6
+numpy==2.4.4
+pydantic==2.13.5
+requests==2.34.2
+tzdata==2026.4
+
+# ---- 时序预测（接口10 /api/analyze/forecast）----
+# prophet 依赖 cmdstanpy；Windows 首次拟合需要编译 Stan 模型，可能耗时数分钟。
+# 缺失时 forecast_model.py 会自动降级为 moving_average，服务仍可启动。
+prophet==1.5.0
+cmdstanpy==1.3.0
+
+# ---- 空间估计（接口5 /api/data/heatmap 的 Kriging 插值）----
+# 缺失时 spatial_model.py 自动降级为“网格均值”，服务仍可启动。
+PyKrige==1.7.3
+scipy==1.18.1

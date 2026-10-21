@@ -19,6 +19,7 @@ Base URL: http://localhost:8000
 |10|POST|/api/analyze/forecast|区域信号/频谱态势预测（Prophet 时序模型）|
 |11|POST|/api/forecast/preview|预测预览（频谱预测预警 v2，baseTime 防未来）|
 |12|POST|/api/forecast/analyze|预测研判（基于同一轮预测的文字分析，v2）|
+|13|GET|/api/health|部署自检（数据文件/依赖/大模型就绪状态，不依赖数据文件、永远可访问）|
 
 ## 通用响应格式
 成功: {"code": 0, "message": "success", "data": {...}}
@@ -738,3 +739,72 @@ POST /api/forecast/analyze
 - **渐变征兆与提前预警**：渐变期 RSRP 下降趋势是可预测特征，预测模型应利用 `baseTime` 前历史窗口内的指标趋势判断风险，而不是仅依赖"已出现异常标签"做事后提示。
 - **背景异常标签**：约 2% 分钟随机注入（AP 分散、类型 weak_coverage/congestion），与频谱表已全量对齐。
 - **数值自洽校验**：weak_coverage 行 RSRP ≤ −110 dBm，normal 行 > −110 dBm；频谱表与网络表按「分钟+AP+异常类型」去重差异 = 0。
+
+## 接口 13：部署自检（GET /api/health）
+
+功能：给部署者/评委用的一键自检。返回数据文件是否到位、行数与时间范围、以及三项能力（prophet / kriging / LLM）是否可用。
+
+设计要点：**本接口不依赖任何数据文件，缺少数据时也能正常返回**，因此可以在排障时第一时间调用。响应恒为 HTTP 200 + `code=0`，是否就绪看 `data.ok` 字段。
+
+### 请求
+
+无参数。
+
+### 响应
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "ok": true,
+    "data_dir": "F:\\AI-NetTune\\AI-NetTune\\data",
+    "network": {
+      "path": "F:\\AI-NetTune\\AI-NetTune\\data\\network_data_30d.csv",
+      "exists": true,
+      "rows": 129600,
+      "size_mb": 14.6
+    },
+    "spectrum": {
+      "path": "F:\\AI-NetTune\\AI-NetTune\\data\\spectrum_7d.csv",
+      "exists": true,
+      "rows": 1512000,
+      "size_mb": 103.6,
+      "max_timestamp": "2026-01-07 23:59:00",
+      "band_count": 50
+    },
+    "capabilities": {
+      "prophet": true,
+      "kriging": true,
+      "llm_enabled": true,
+      "llm_key_configured": false,
+      "llm_model": "deepseek-chat"
+    },
+    "issues": [],
+    "hint": "数据文件缺失时请按 DEPLOY.md 第 2 节准备 data/ 目录；也可用 NETWORK_DATA_PATH / SPECTRUM_DATA_PATH 直接指定文件。"
+  }
+}
+```
+
+### 字段说明
+
+|字段|类型|说明|
+|---|---|---|
+|ok|bool|网络表与频谱表均已加载且行数 > 0|
+|data_dir|string|实际使用的数据目录（受 `NETTUNE_DATA_DIR` 影响）|
+|network.path|string\|null|实际命中的网络表绝对路径；未找到为 null|
+|network.rows|int|已加载行数（`0` 表示未加载）|
+|network.size_mb|float\|null|文件大小|
+|spectrum.max_timestamp|string\|null|频谱数据最后时刻；预测的 `baseTime` 超过它即返回 `insufficient_data`|
+|spectrum.band_count|int|频段数（当前 50）|
+|capabilities.prophet|bool|`false` 时接口 10 降级 `moving_average`|
+|capabilities.kriging|bool|`false` 时接口 5 降级 `grid_mean`|
+|capabilities.llm_*|bool/string|`llm_key_configured=false` 时意图解析与研判降级为规则模板（功能不中断）|
+|issues|string[]|启动期收集到的具体问题（缺哪个文件、环境变量指向了不存在的路径等）|
+|hint|string|修复建议|
+
+### 备注
+
+- 启动时后端还会打印一份等价的「启动自检」横幅到控制台。
+- 命令行自检（更详细，含逐文件 SHA256 与两表重叠检查）：`python scripts/doctor.py`。
+- 环境变量与数据交付方式见 `DEPLOY.md` 与 `data/README.md`。

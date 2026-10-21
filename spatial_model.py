@@ -4,7 +4,16 @@
 # 输出：全网格预测值 + 方差（方差 = 插值置信度，数值越小越可信）
 # 降级：采样点不足或 Kriging 拟合失败返回 None，调用方退回"网格均值"（原热力图逻辑），接口永不崩
 import numpy as np
-from pykrige.ok import OrdinaryKriging
+
+# 与 forecast_model.py 对 prophet 的处理保持一致：缺包或二进制不兼容时，
+# 只降级本模块（kriging_map 返回 None，调用方退回"网格均值"），
+# 绝不让 from spatial_model import build_spatial 把整个后端拖崩。
+try:
+    from pykrige.ok import OrdinaryKriging
+    _HAS_PYKRIGE = True
+except Exception:  # ImportError；以及 numpy/scipy ABI 不匹配等
+    OrdinaryKriging = None
+    _HAS_PYKRIGE = False
 
 # 与 main.py heatmap 口径保持一致
 X_MIN, X_MAX, Y_MIN, Y_MAX = 20.0, 480.0, 20.0, 430.0
@@ -32,6 +41,8 @@ def kriging_map(points, x_min=X_MIN, x_max=X_MAX, y_min=Y_MIN, y_max=Y_MAX,
       variances = [[cx, cy, var], ...]    同网格方差（置信度，越小越可信）
     失败返回 None（调用方降级 grid_mean）。
     """
+    if not _HAS_PYKRIGE:
+        return None
     if len(points) < min_samples:
         return None
     pts = np.asarray(points, dtype=float)

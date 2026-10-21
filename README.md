@@ -66,29 +66,55 @@
 
 ## 快速开始
 
-### 后端（当前已可运行）
+> **完整部署步骤、环境变量、反向代理配置与故障排查见 [DEPLOY.md](DEPLOY.md)。**
+> 数据文件不在仓库里（约 120 MB），**部署前必须先放数据**，见 [data/README.md](data/README.md)。
 
+### 0. 先放数据
+
+把 `network_data_30d.csv`（14.6 MB）与 `spectrum_7d.csv`（103.6 MB）放进 `data/`。
+然后一条命令自检：
+
+```powershell
+python scripts/doctor.py        # 退出码 0 = 可以启动
 ```
+
+如果拿到的是浏览器重复下载的 `network_data_30d(1).csv`，用 `python scripts/prepare_data.py --apply` 规范化文件名
+（不规范化也能启动，后端候选名兼容）。
+
+### 后端
+
+```powershell
 # 1. 安装依赖
-python -m pip install fastapi uvicorn pandas
+python -m pip install -r requirements.txt
+#    装不上 prophet / PyKrige 时用最小依赖（功能自动降级，服务仍可启动）：
+#    python -m pip install -r requirements-min.txt
 
 # 2. 启动服务（局域网联调用 0.0.0.0）
-python -m uvicorn main:app --reload --host 0.0.0.0
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-浏览器打开 [http://localhost:8000/docs](http://localhost:8000/docs) 查看 Swagger 接口测试面板。
+启动会打印「启动自检」横幅，直接显示数据是否到位、哪些能力处于降级状态。
 
-> 接口 1/2/3 已接入唐苗仿真数据集（`data/network_data.csv`，12960 条、18 列，多日时间跨度 + AP/UE 坐标 + 故障注入），返回真实查询与多KPI研判结果；接口 4 报告生成为占位，第 3 周接入。
+浏览器打开 [http://localhost:8000/docs](http://localhost:8000/docs) 查看 Swagger 接口测试面板；
+打开 [http://localhost:8000/api/health](http://localhost:8000/api/health) 看部署自检结果（`data.ok` 应为 `true`）。
+
+> 接口 1/2/3/5/6/9 读取 `data/` 下的网络表（当前 30 天版，129,600 条 × 18 列）；
+> 接口 11/12（预测预警）额外读取 103.6 MB 的 `spectrum_7d.csv`（1,512,000 条 × 9 列）。
 >
-> 时序预测（接口 10）已接入 Prophet：30d 数据支撑"历史 → 未来"预测演示（含置信区间，降级 moving_average 兜底）。
+> 时序预测（接口 10）使用 Prophet，缺失时自动降级为移动平均（`method` 字段如实返回）。
+> ⚠️ Windows 上 Prophet 首次拟合需编译 Stan 模型，可能耗时数分钟——**演示请勿直连接口 10**，
+> 前端预测走 `/api/forecast/preview`，不依赖 Prophet。
 
-### 前端（联调中）
+### 前端
 
-```
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
+
+开发模式下前端通过 `vite.config.ts` 的 proxy 把 `/api` 转发到 `http://127.0.0.1:8000`。
+构建产物部署（`npm run build`）**不带代理**，需要用 `VITE_API_BASE` 或反向代理，见 [DEPLOY.md](DEPLOY.md) 第 6 节。
 
 ## API 接口一览
 
@@ -97,11 +123,16 @@ npm run dev
 | 1    | GET  | /api/data/query       | 查询监测数据                                                 |
 | 2    | POST | /api/analyze/anomaly  | 多 KPI 联合故障研判                                          |
 | 3    | POST | /api/agent/chat       | 自然语言对话                                                 |
-| 4    | POST | /api/export/report    | 导出分析报告                                                 |
-| 10   | POST | /api/analyze/forecast | 区域信号/频谱态势预测：1 小时桶 · 前 80% 训练 Prophet / 后 20% 测试 · 输出 True / Predicted / MAPE + 未来 24h 预测（lower/upper 置信区间）；Prophet 失败自动降级移动平均（method 如实返回） |
-| 6    | GET  | /api/network/topology/basic | 网络拓扑：AP / UE 位置与连接关系（已带坐标） |
-| 8    | GET  | /api/predict/result | 时序预测结果查询（契约 v1 · 查询壳：转调接口 10 数据，不新建模型） |
+| 4    | POST | /api/export/report    | 导出分析报告（后端可生成 Markdown；**前端暂无入口**）         |
+| 5    | GET  | /api/data/heatmap     | 信号热力图（Kriging 空间估计 + 方差；缺 PyKrige 时降级 `grid_mean`） |
+| 6    | GET  | /api/network/topology/basic    | 基础网络拓扑：AP / UE 节点 + 窗口内主服务链路 |
+| 7    | GET  | /api/data/realtime    | 实时增量数据（**当前为空实现**：`start_realtime_service()` 未被调用） |
+| 8    | GET  | /api/predict/result   | 时序预测结果查询（契约 v1 · **占位**：固定返回 `predict_list: []`） |
 | 9    | GET  | /api/network/topology/enhanced | 拓扑增强数据（契约 v1：AP/UE 属性 + 链路多指标 + 整体统计） |
+| 10   | POST | /api/analyze/forecast | 区域信号/频谱态势预测：1 小时桶 · 前 80% 训练 Prophet / 后 20% 测试 + 未来 24h（lower/upper）；Prophet 失败降级移动平均（`method` 如实返回） |
+| 11   | POST | /api/forecast/preview | 预测预警 v2：真实频谱数据 → 历史帧 + 未来帧 + 风险预警（`baseTime` 防未来） |
+| 12   | POST | /api/forecast/analyze | 预测研判 v2：按 `forecastId`/`alertId` 生成文字研判（LLM 不可用降级规则模板） |
+| 13   | GET  | /api/health           | 部署自检：数据文件 / 依赖 / 大模型就绪状态（不依赖数据，永远可访问） |
 
 详细请求 / 响应格式见 [docs/api.md](docs/api.md)。
 
@@ -149,18 +180,30 @@ npm run dev
 
 ```
 AI-NetTune/
-├── main.py          # 后端主程序（FastAPI，P0 接口 + 接口 10 时序预测已接入）
-├── data_generator.py # 仿真数据生成器（v2.3：多日 + 坐标 + 故障注入 + SINR 限幅）
-├── data/
-│   ├── network_data.csv # 唐苗仿真数据集（3 天，12960 条，18 列，坐标 + 故障注入）
-│   ├── network_data_7d.csv # 长周期数据集（7 天，30240 条，供 Prophet/LSTM 训练）
-│   └── network_data_30d.csv # 长周期数据集（30 天，129600 条，供 Prophet/LSTM 训练）
+├── main.py            # 后端主程序（FastAPI，13 个接口）
+├── data_layout.py     # 数据文件定位规则（候选文件名 / 环境变量，单一定义源）
+├── data_generator.py  # 仿真数据生成器（v2.7：多日 + 坐标 + 故障注入 + 频谱混合标注）
+├── forecast_model.py  # Prophet 时序预测（缺包降级 moving_average）
+├── spatial_model.py   # Kriging 空间估计（缺包降级 grid_mean）
+├── llm_agent.py       # LLM 意图解析 + 规则兜底
+├── realtime_simulator.py  # 仿真实时数据流（当前未启用）
+├── requirements.txt   # 后端依赖（requirements-min.txt 为不含 prophet/pykrige 的最小集）
+├── DEPLOY.md          # 部署手册：数据准备 / 环境变量 / 反向代理 / 故障排查
+├── scripts/
+│   ├── doctor.py      # 部署自检（Python/依赖/数据/时间轴/LLM）
+│   └── prepare_data.py # 规整 data/ 下的 "(1)" 文件名
+├── data/              # 数据文件（.gitignore 忽略大文件，仅保留 README.md）
+│   ├── README.md              # 数据交付清单（大小 / SHA256 / 时间范围）
+│   ├── network_data_30d.csv   # 30 天，129,600 条 × 18 列（后端默认读取）
+│   └── spectrum_7d.csv        # 7 天，1,512,000 条 × 9 列（预测预警数据源）
 ├── docs/
-│   ├── api.md       # API 接口契约文档
-│   └── data_dict.md # 数据字典契约文档（18 维字段规范）
-├── frontend/        # React 前端（联调中）
+│   ├── api.md         # API 接口契约文档（13 个接口）
+│   └── data_dict.md   # 数据字典契约文档（18 维字段规范）
+├── frontend/          # React 前端
 └── README.md
 ```
+
+> `data/` 下的大文件不进 Git（合计约 120 MB），全新 clone 后需按 [data/README.md](data/README.md) 放齐。
 
 ## 开发路线
 

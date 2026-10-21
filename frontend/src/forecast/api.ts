@@ -1,4 +1,5 @@
 import { toEpoch } from "../services/backend";
+import { API_BASE } from "../services/apiBase";
 import { FORECAST_CONFIG, FORECAST_LIMITS } from "./config";
 import { createForecastDemo } from "./demo";
 import { completeMain4, normalizeMain4 } from "./main4Adapter";
@@ -102,7 +103,7 @@ async function post(path: string, body: unknown, signal: AbortSignal | undefined
   const controller = new AbortController(), abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true }); const timer = setTimeout(abort, config.timeoutMs);
   try {
-    const response = await fetcher(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal });
+    const response = await fetcher(`${API_BASE}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal });
     if (!response.ok) throw new Error(response.status === 404 ? "预测接口尚未接入（HTTP 404）" : `预测请求失败（HTTP ${response.status}）`);
     let json: unknown; try { json = await response.json(); } catch (cause) { throw new Error("预测接口未返回JSON，请检查接口路径及代理", { cause }); }
     const envelope = object(json); if (envelope.code !== 0) throw new Error(typeof envelope.message === "string" ? envelope.message : "预测接口业务错误");
