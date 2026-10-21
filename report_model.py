@@ -179,11 +179,11 @@ def build_markdown(ctx, include_chart=True):
         L.append(_md_table(["指标", "均值", "阈值", "判定"], s["evidence"]))
         L.append("")
     if s["candidates"]:
-        L.append("### 候选原因（按置信度排序，未经现场核实）")
+        L.append("### 候选原因（按规则评分排序，未经现场核实）")
         L.append("")
         for c in s["candidates"]:
             L.append(f"{c.get('rank', '-')}. **{c.get('cause', '')}**"
-                     f"（置信度 {c.get('confidence', '-')}）")
+                     f"（规则评分 {c.get('confidence', '-')}，非概率）")
             for item in (c.get("support_evidence") or []):
                 L.append(f"   - 支持：{item}")
             for item in (c.get("against_evidence") or []):
@@ -235,7 +235,7 @@ def build_markdown(ctx, include_chart=True):
     L.append("")
     L.append("- 数据来源为**仿真数据集**，不是现网实测；结论用于演示与流程验证。")
     L.append("- 研判由确定性规则引擎输出（非大模型生成），候选原因**未经现场核实**。")
-    L.append("- 置信度为规则命中强度的相对评分，**不代表发生概率**。")
+    L.append("- 规则评分是规则命中强度的相对评分，**不代表发生概率**。")
     L.append("- 本报告不含预测预警内容；预测结果请在「预测预警」弹窗查看，并注意其可信边界。")
     L.append("")
     return "\n".join(L) + "\n"
@@ -290,10 +290,10 @@ def build_html(ctx, include_chart=True):
         parts.append("<h3>证据链（越过研判阈值的指标）</h3>")
         parts.append(table(["指标", "均值", "阈值", "判定"], s["evidence"]))
     if s["candidates"]:
-        parts.append("<h3>候选原因（按置信度排序，未经现场核实）</h3><ol>")
+        parts.append("<h3>候选原因（按规则评分排序，未经现场核实）</h3><ol>")
         for c in s["candidates"]:
             parts.append(f"<li><strong>{escape(str(c.get('cause', '')))}</strong>"
-                         f"（置信度 {escape(str(c.get('confidence', '-')))}）")
+                         f"（规则评分 {escape(str(c.get('confidence', '-')))}，非概率）")
             items = [("支持", c.get("support_evidence")), ("反证", c.get("against_evidence")),
                      ("待核查", c.get("pending_checks"))]
             groups = [(label, xs) for label, xs in items if xs]
@@ -333,7 +333,7 @@ def build_html(ctx, include_chart=True):
     parts.append('<h2>附：口径与限制</h2><div class="note"><ul>'
                  "<li>数据来源为<strong>仿真数据集</strong>，不是现网实测；结论用于演示与流程验证。</li>"
                  "<li>研判由确定性规则引擎输出（非大模型生成），候选原因<strong>未经现场核实</strong>。</li>"
-                 "<li>置信度为规则命中强度的相对评分，<strong>不代表发生概率</strong>。</li>"
+                 "<li>规则评分是规则命中强度的相对评分，<strong>不代表发生概率</strong>。</li>"
                  "<li>本报告不含预测预警内容；预测结果请在「预测预警」弹窗查看。</li>"
                  "</ul></div>")
     parts.append("</body></html>")

@@ -607,6 +607,9 @@ def analyze_anomaly(req: AnomalyRequest):
             "anomaly_type": anomaly_type,
             "level": level,
             "confidence": confidence,
+            # 语义标注（B-6）：confidence 是"规则加权分"，不是统计概率。
+            # 前端据此显示"规则评分·非概率"，避免被当成模型置信度解读。
+            "score_kind": "rule",
             "kpi_evidence": evidence,
             "cause": cause,
             "suggestion": suggestion,
@@ -796,7 +799,7 @@ def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> 
     ap = "、".join(d.get("affected_aps") or ["未知AP"])
     cand = d.get("candidates") or []
     cand_txt = "；".join(
-        f"候选{c.get('rank')}：{c.get('cause')}（置信度{c.get('confidence', '-')}）" for c in cand
+        f"候选{c.get('rank')}：{c.get('cause')}（规则评分 {c.get('confidence', '-')}，非概率）" for c in cand
     ) or "暂无候选原因分解"
     # ---- 降级模板：本身就是四段式，LLM 挂了回复结构也不崩 ----
     if not d.get("is_anomaly"):
