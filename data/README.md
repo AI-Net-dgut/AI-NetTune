@@ -7,48 +7,72 @@
 
 | 文件名 | 行数 × 列数 | 大小 | SHA256 |
 |---|---|---|---|
-| `network_data_30d.csv` | 129,600 × 18 | 14.6 MB | `E4D8547AEEC1199C570FCD85783EBBF3117D46D5DA664BDA12D5CA7B46B8892B` |
-| `spectrum_7d.csv` | 1,512,000 × 9 | 103.6 MB | `14E6649284E0217FF2E8DC304F6080FBAC1CDD645FDA4E68700108362E640F08` |
+| `network_data_7d.csv` | 30,240 × 18 | 3.4 MB | `5BFD190C338802D1F903A628EAD1A8B37CFBEEF5BD9A4B0FC3F12FEAD4031019` |
+| `network_data_30d.csv` | 129,600 × 18 | 14.6 MB | `F20F798EACDEC1E7ED25441BC8EC0E49ABC8A838A539326CDF6262BAA243F24C` |
+| `spectrum_7d.csv` | 1,512,000 × 9 | 103.5 MB | `255BDDE7BB7962FC8F6E5CA28FD8FFBC37E12369906A79AA64D2339E2AFABAFE` |
+
+**数据版本：v2.8（2026-10-21 重新生成）**
+
+- 随机种子 `--seed 42`，**可逐字节复现**
+- **30 天表的前 7 天与 7 天表完全一致**（同 seed 顺序生成，逐行 100% 相同）
+- 事件前后有 **20 分钟渐入/渐出**（`RAMP_MINUTES=20`），事件起止时刻不变
+- 两表异常组**完全对齐（差异 0/0）**
 
 时间范围：
 
-- `network_data_30d.csv`：`2026-01-01 00:00:00` ~ `2026-01-30 23:59:00`，场景仅「校园」
+- `network_data_7d.csv`：`2026-01-01 00:00:00` ~ `2026-01-07 23:59:00`，场景仅「校园」
+- `network_data_30d.csv`：`2026-01-01 00:00:00` ~ `2026-01-30 23:59:00`
 - `spectrum_7d.csv`：`2026-01-01 00:00:00` ~ `2026-01-07 23:59:00`，3 AP × 50 频段
 
-> ⚠️ **两表时间范围不一致**：01-08 ~ 01-30 只有网络数据、没有频谱数据，
-> 这段时间调用 `/api/forecast/preview` 会返回 `insufficient_data`。
+> ⚠️ **频谱只有 7 天**。01-08 之后的时刻调用 `/api/forecast/preview` 会返回 `insufficient_data`。
 > 前端回放默认范围是 01-01 ~ 01-07（`frontend/src/replay/config.ts`），与频谱对齐——演示请勿越界。
+
+## 关于"渐变征兆"（v2.8 新增）
+
+旧数据（v2.7）的故障是**单分钟阶跃**：事件前 25 分钟 RSRP 低于 −105 dBm 的样本数为 0，
+因此"提前 N 分钟预警"在数据上不可能触发。
+
+v2.8 做了两件事：
+
+1. **网络表**：事件强度按 20 分钟线性渐入/渐出（起止时刻不变）。
+2. **频谱表**：功率与占用率不再只按标签二值跳变，而是按网络表的 RSRP/PRB 连续映射"严重度"。
+   未被标注为异常的帧，严重度封顶（weak 0.80 / congestion 0.75），
+   **保证它们留在阈值以上**（功率 ≥ −95 dBm、占用率 < 85%），只体现"正在恶化"。
+
+效果（实测）：基准时刻 `2026-01-01 10:08` 会给出
+「AP-02 预计 14 分钟后功率跌破 −95 dBm」，而实际越阈发生在约 10:22。
 
 ## 可选文件（演示备用，后端不会自动读取）
 
-| 文件名 | 行数 × 列数 | 大小 | 用途 |
-|---|---|---|---|
-| `network_data_7d.csv` | 30,240 × 18 | 3.4 MB | 7 天版，与频谱时间范围完全一致 |
-| `network_data.csv` | 12,960 × 18 | 1.5 MB | 3 天版（早期 4 段故障注入数据） |
+| 文件名 | 行数 × 列数 | 说明 |
+|---|---|---|
+| `network_data.csv` | 12,960 × 18 | 3 天版（旧），仅作历史对照 |
 
 ## 历史遗留文件（建议清理，不要用于演示）
 
 | 文件名 | 问题 |
 |---|---|
 | `network_data_3d_bak.csv` | 与 `network_data.csv` **SHA256 完全相同**，纯冗余 |
-| `network_data_backup_20260929.csv` | **旧格式，只有 11 列**；吞吐量出现 799.9 Mbps、时延 2~200 ms、10 个 UE（`UE-001` 命名），与 `docs/data_dict.md` 的 18 列规范不符 |
+| `network_data_backup_20260929.csv` | **旧格式，只有 11 列**；吞吐量出现 799.9 Mbps、10 个 UE（`UE-001` 命名），与 `docs/data_dict.md` 的 18 列规范不符 |
 
 ## 文件从哪来
 
 1. 团队共享盘 / 发布包（推荐，保证与演示机一致）；
-2. 或由 `data_generator.py` 重新生成：
+2. 或由 `data_generator.py` 重新生成（**必须带同一个 seed**，否则数值全变、对账结论失效）：
 
 ```powershell
-python data_generator.py --days 30          # 生成网络表
-python data_generator.py --days 7 --events  # 生成与事件对齐的频谱表
+# 7 天网络表 + 7 天频谱表（频谱状态对齐网络表）
+python data_generator.py --days 7  --seed 42 --events data/network_data_7d.csv
+
+# 30 天网络表（前 7 天会与上面 7 天表逐字节一致）
+python data_generator.py --days 30 --seed 42 --events data/network_data_30d.csv
 ```
 
-> 注意：生成器当前**没有 `--seed`**，每次生成的数据都不同；
-> 重新生成后两表之间的对齐关系需要重新核对（见审查报告 D-1/D-8）。
+> 注意：第二次运行同样会生成 30 天频谱（约 460 MB，本项目不使用），可自行删除。
 
 ## 文件名规范化
 
-Windows 重复下载会得到 `network_data_30d(1).csv` 这类名字。后端已兼容（见 `data_layout.py` 的候选列表），
+Windows 重复下载会得到 `network_data_7d(1).csv` 这类名字。后端已兼容（见 `data_layout.py` 的候选列表），
 但建议整理成规范名：
 
 ```powershell
@@ -59,7 +83,8 @@ python scripts/prepare_data.py --apply    # 执行
 ## 校验
 
 ```powershell
-python scripts/doctor.py     # 行数 / 列名 / 时间范围 / 状态分布 / 两表重叠
+python scripts/doctor.py       # 行数 / 列名 / 时间范围 / 状态分布 / 两表重叠
+python scripts/audit_data.py   # 两表异常组对账 / 渐变 / 阈值自洽 / 占用率语义
 ```
 
 或直接比对 SHA256：
@@ -72,7 +97,7 @@ Get-ChildItem data\*.csv | ForEach-Object {
 
 ## 是否要把数据放进 Git？
 
-不建议直接提交：单个 103.6 MB 的 CSV 会显著拖慢 clone/push，且多数平台对单文件有硬限制。
+不建议直接提交：单个 103.5 MB 的 CSV 会显著拖慢 clone/push，且多数平台对单文件有硬限制。
 两种可行做法见 `DEPLOY.md` 第 2 节：
 
 1. **发布包/共享盘交付**（当前做法，推荐）；
@@ -81,6 +106,6 @@ Get-ChildItem data\*.csv | ForEach-Object {
    git lfs install
    git lfs track "data/*.csv"
    git add .gitattributes
-   git add data/network_data_30d.csv data/spectrum_7d.csv
+   git add data/network_data_7d.csv data/network_data_30d.csv data/spectrum_7d.csv
    git commit -m "chore(data): 用 LFS 纳入演示数据"
    ```

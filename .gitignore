@@ -35,11 +35,13 @@ temp/
 # 导出的报告（运行时产物，不入库）
 reports/
 
-# 数据文件：体积大（网络表 14.6MB + 频谱表 103.6MB），不纳入 Git。
+# 数据文件：体积大（网络表 14.6MB + 频谱表 103.5MB），不纳入 Git。
 # 交付方式见 data/README.md 与 DEPLOY.md 第 2 节。
 # 用 data/* 而不是 data/ ，否则 git 不会进入该目录，下面的 !data/README.md 会失效。
 data/*
 !data/README.md
+# 数据备份目录（替换数据时自动生成，单个就有 120MB+，绝不能进仓库）
+data_backup_*/
 
 # 包管理器缓存
 .pnpm-store/

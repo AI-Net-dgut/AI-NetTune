@@ -121,6 +121,13 @@ FAULT_SCHEDULE = [
     ("2026-01-03 09:00:00", "2026-01-03 11:00:00", "AP-01", "congestion", 92.0),
 ]
 
+# ---------- 渐变征兆（v2.8）----------
+# 背景：交接文档 v2.7 声称"事件前后存在渐入/渐出期（15–25 分钟）"，
+#       但实测全部是单分钟阶跃（事件前 25 分钟 RSRP < −105 的样本数恒为 0），
+#       导致"提前 N 分钟预警"在数据上不可能触发。
+# 做法：事件强度按时间做线性渐入/渐出，起止时刻不变，只改变事件前后的数值曲线。
+RAMP_MINUTES = 20        # 渐入/渐出各持续多少分钟（落在文档声称的 15–25 区间）
+
 # ---------- 故障时间表扩展（v2.4） ----------
 def build_fault_schedule(total_days: int) -> list:
     """按总天数构建完整故障注入时间表。
@@ -170,12 +177,36 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
     """数值限幅"""
     return max(min_val, min(value, max_val))
 
+def _ramp_factor(start: str, end: str, ts: str) -> float:
+    """事件强度系数 ∈ [0,1]：窗口两端线性渐入/渐出，中段为 1。
+
+    v2.8 新增。起止时刻完全不变，只让强度渐变，从而在事件前产生可预测的下降趋势。
+    """
+    fmt = "%Y-%m-%d %H:%M:%S"
+    t0, t1, now = (datetime.strptime(x, fmt) for x in (start, end, ts))
+    total = (t1 - t0).total_seconds() / 60.0
+    if total <= 0:
+        return 1.0
+    ramp = min(RAMP_MINUTES, total / 3.0)      # 窗口很短时按 1/3 收缩，保证有平台段
+    elapsed = (now - t0).total_seconds() / 60.0
+    remaining = (t1 - now).total_seconds() / 60.0
+    if elapsed < ramp:
+        return max(0.0, elapsed / ramp)
+    if remaining < ramp:
+        return max(0.0, remaining / ramp)
+    return 1.0
+
+
 def get_active_fault(timestamp_str: str):
-    """按时间戳查命中的故障注入条目；未命中返回 (None, None, None)"""
+    """按时间戳查命中的故障注入条目。
+
+    返回 (ap, type, strength, ramp)；未命中返回 (None, None, None, 0.0)。
+    ramp 是渐变系数（v2.8）：调用方用它把强度按比例施加，避免阶跃。
+    """
     for start, end, ap, ftype, strength in FAULT_SCHEDULE:
         if start <= timestamp_str <= end:
-            return ap, ftype, strength
-    return None, None, None
+            return ap, ftype, strength, _ramp_factor(start, end, timestamp_str)
+    return None, None, None, 0.0
 
 # ==================================================
 # 3. 主生成逻辑
@@ -187,7 +218,7 @@ def generate_dataset() -> pd.DataFrame:
 
     for _ in range(total_slots):
         timestamp_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
-        fault_ap, fault_type, fault_strength = get_active_fault(timestamp_str)
+        fault_ap, fault_type, fault_strength, fault_ramp = get_active_fault(timestamp_str)
 
         # 生成当前时刻所有UE的随机位置
         ue_list = []
@@ -213,8 +244,9 @@ def generate_dataset() -> pd.DataFrame:
                 ap_rsrp_map[ap_id] = path_loss + shadow
 
             # 故障注入：弱覆盖时段，对该AP信号额外衰减（制造覆盖空洞）
+            # v2.8：衰减量按 ramp 渐入/渐出，事件前 20 分钟会出现"逐渐变差"的可预测征兆
             if fault_type == "weak_coverage":
-                ap_rsrp_map[fault_ap] -= fault_strength
+                ap_rsrp_map[fault_ap] -= fault_strength * fault_ramp
 
             # 选择信号最优的AP作为服务AP
             serving_ap = max(ap_rsrp_map, key=ap_rsrp_map.get)
@@ -222,9 +254,19 @@ def generate_dataset() -> pd.DataFrame:
 
             # 故障注入：故障时段强制UE接入故障AP（模拟故障区域内用户只能连该AP）
             # —— 否则UE会切换到其他正常AP，故障AP上采样过少，研判占比无法超过阈值
+            # v2.8：弱覆盖事件在渐入/渐出期做"位置过渡"，避免窗口第一分钟就因强制切换产生阶跃。
+            #       注意必须先把未衰减电平还原再混合，否则 ramp 会被乘两次
+            #       （serving = natural + (forced−natural)×ramp 里 forced 已含 −strength×ramp），
+            #       实测会导致下降集中在最后几分钟、看起来仍像阶跃。
             if fault_ap is not None:
+                forced_rsrp = ap_rsrp_map[fault_ap]
+                if fault_type == "weak_coverage" and fault_ramp < 1.0:
+                    unattenuated = forced_rsrp + fault_strength * fault_ramp
+                    serving_rsrp = (serving_rsrp + (unattenuated - serving_rsrp) * fault_ramp
+                                    - fault_strength * fault_ramp)
+                else:
+                    serving_rsrp = forced_rsrp
                 serving_ap = fault_ap
-                serving_rsrp = ap_rsrp_map[fault_ap]
 
             # 计算干扰功率（所有非服务AP + 底噪）
             interference_mw = dbm_to_mw(NOISE_FLOOR_DBM)
@@ -253,9 +295,12 @@ def generate_dataset() -> pd.DataFrame:
             prb_usage = round(clamp(prb_usage, 10.0, 98.0), 2)
 
             # 故障注入：拥塞时段，抬升目标AP的PRB与丢包（制造容量拥塞）
+            # v2.8：按 ramp 从自然值过渡到目标值，渐入期 PRB 会逐步越过 85% 阈值
             if fault_type == "congestion" and serving_ap == fault_ap:
-                prb_usage = round(clamp(fault_strength + random.uniform(-2, 3), 85.0, 98.0), 2)
-                packet_loss = round(clamp(packet_loss + 3.0, 5.0, 12.0), 2)
+                target_prb = clamp(fault_strength + random.uniform(-2, 3), 85.0, 98.0)
+                target_loss = clamp(packet_loss + 3.0, 5.0, 12.0)
+                prb_usage = round(prb_usage + (target_prb - prb_usage) * fault_ramp, 2)
+                packet_loss = round(packet_loss + (target_loss - packet_loss) * fault_ramp, 2)
 
             # 故障状态判定
             network_status = "normal"
@@ -392,16 +437,43 @@ def generate_spectrum_dataset(total_days: int, fault_schedule: list, events_df=N
     # v2.7：预构建 (timestamp, ap_id) → 异常类型集合（聚合同一 AP 下所有 UE 的标注，
     # 含 EV 事件与背景异常；多 UE 多类型全部保留，用于频段级混合标注）
     status_map = {}
+    weak_sev, cong_sev = {}, {}
     if events_df is not None:
+        # 第一遍：标签（v2.7 口径，聚合同一 AP 下所有 UE 的标注）
         for ts, ap, st in events_df[["timestamp", "ap_id", "network_status"]].itertuples(index=False):
             if st != "normal":
                 status_map.setdefault((ts, ap), set()).add(st)
-        print(f"[v2.7] 已加载网络事件表：异常 (时间,AP) 键 {len(status_map)} 个")
+
+        # 第二遍：严重度（v2.8）。让频谱功率随真实恶化程度连续变化，
+        # 否则频谱只有"正常/异常"两档，事件前的渐变在频谱里完全看不到，
+        # 基于频谱的提前预警也就不可能触发。
+        #
+        # 关键约束：**未被标注为异常的帧必须留在阈值以上**（弱覆盖 −95 dBm / 拥塞 85%），
+        # 否则会出现"标签说正常、频谱却越阈"的误报（实测在正常时段触发过）。
+        # 于是未标注帧的严重度封顶（weak 0.80 / congestion 0.75）：
+        # 表现为"正在逐渐恶化但尚未越阈"，预测把这些趋势外推后才越过阈值 →
+        # 这正是"提前预警"，而不是"已发生"。
+        for ts, ap, rsrp, prb in events_df[
+                ["timestamp", "ap_id", "rsrp", "prb_usage"]].itertuples(index=False):
+            key = (ts, ap)
+            types = status_map.get(key, set())
+            sev_w = clamp((-float(rsrp) - 95.0) / 17.6, 0.0, 1.0)
+            if "weak_coverage" not in types:
+                sev_w = min(sev_w, 0.80)
+            sev_c = clamp((float(prb) - 60.0) / 25.0, 0.0, 1.0)
+            if "congestion" not in types:
+                sev_c = min(sev_c, 0.75)
+            if sev_w > weak_sev.get(key, 0.0):
+                weak_sev[key] = sev_w
+            if sev_c > cong_sev.get(key, 0.0):
+                cong_sev[key] = sev_c
+        print(f"[v2.8] 已加载网络事件表：异常 (时间,AP) 键 {len(status_map)} 个，"
+              f"严重度键 weak={len(weak_sev)} / congestion={len(cong_sev)}")
 
     records = []
     for i in range(total_slots):
         ts_str = (start + timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S")
-        fault_ap, fault_type, fault_strength = get_active_fault(ts_str)
+        fault_ap, fault_type, fault_strength, _fault_ramp = get_active_fault(ts_str)
         # 背景干扰仅 v2.5（非 events 模式）保留：约 2% 帧随机 AP × 连续频段
         noise_ap_idx = None
         noise_start = noise_len = None
@@ -432,16 +504,27 @@ def generate_spectrum_dataset(total_days: int, fault_schedule: list, events_df=N
             weak_mask = np.array([s == "weak_coverage" for s in statuses])
             cong_mask = np.array([s == "congestion" for s in statuses])
             normal_mask = ~(weak_mask | cong_mask)
-            # 数值联动（两种状态源共用同一口径）
-            if weak_mask.any():
-                # 弱覆盖：功率整体压深至全段 < -95 dBm（对齐后端弱覆盖高亮阈值），占用 10-30%
-                power_row[weak_mask] -= SPECTRUM_DROP_K + 33.0
-                occ_row[weak_mask] = np.random.uniform(*OCC_WEAK_RANGE, int(weak_mask.sum()))
-            if cong_mask.any():
-                # 拥塞：占用 85-95%（中心加权），仅对拥塞段生效
-                occ_row[cong_mask] = np.random.uniform(*OCC_CONGEST_RANGE, int(cong_mask.sum()))
-                occ_row[cong_mask] -= np.abs(band_centers[cong_mask] - SPECTRUM_CENTER_MHZ) / 500.0 * 15.0
-                occ_row[cong_mask] = np.clip(occ_row[cong_mask], 85.0, 95.0)
+            # 数值联动：按"严重度"连续施加（v2.8）
+            #   events 模式用网络表算出的严重度（渐变期 0~1 连续），
+            #   非 events 模式直接 0/1（保持 v2.5 行为）。
+            if events_df is not None:
+                sev_w = weak_sev.get((ts_str, ap_id), 0.0)
+                sev_c = cong_sev.get((ts_str, ap_id), 0.0)
+            else:
+                sev_w = 1.0 if (fault_type == "weak_coverage" and fault_ap == ap_id) else 0.0
+                sev_c = 1.0 if (fault_type == "congestion" and fault_ap == ap_id) else 0.0
+
+            if sev_w > 0:
+                # 弱覆盖：功率按严重度压深。严重度=1 时等效原来的 −41 dB（全段 < −95 dBm）；
+                # 严重度 0~1 之间就是事件前的"渐变征兆"（此时标签仍可能为 normal）。
+                power_row -= sev_w * (SPECTRUM_DROP_K + 33.0)
+                weak_draw = np.random.uniform(*OCC_WEAK_RANGE, n_bands)
+                occ_row = occ_row * (1.0 - sev_w) + weak_draw * sev_w
+            if sev_c > 0:
+                cong_draw = np.random.uniform(*OCC_CONGEST_RANGE, n_bands)
+                cong_draw = cong_draw - np.abs(band_centers - SPECTRUM_CENTER_MHZ) / 500.0 * 15.0
+                cong_draw = np.clip(cong_draw, 85.0, 95.0)
+                occ_row = occ_row * (1.0 - sev_c) + cong_draw * sev_c
             # v2.5 背景干扰（仅非 events 模式）：只叠加在 normal 段，避免双重异常
             if noise_ap_idx == ap_idx and noise_len is not None and normal_mask.any():
                 power_row[noise_start:noise_start + noise_len] -= SPECTRUM_POWER_DROP_DB
@@ -488,14 +571,17 @@ def validate_and_export_spectrum(df: pd.DataFrame):
 # 5. 程序入口
 # ==================================================
 def parse_args():
-    """命令行参数：--days 生成天数(3/7/30)，--output 自定义输出路径，--events 网络事件表对齐"""
-    parser = argparse.ArgumentParser(description="AI-NetTune 仿真数据生成器 v2.6")
+    """命令行参数：--days 生成天数(3/7/30)，--output 自定义输出路径，--events 网络事件表对齐，--seed 随机种子"""
+    parser = argparse.ArgumentParser(description="AI-NetTune 仿真数据生成器 v2.8")
     parser.add_argument("--days", type=int, default=3, choices=[3, 7, 30],
                         help="生成总天数（3/7/30），默认3")
     parser.add_argument("--output", type=str, default=None,
                         help="自定义输出路径，默认按天数自动命名")
     parser.add_argument("--events", type=str, default=None,
                         help="网络事件表CSV（如 data/network_data_7d_events.csv）：频谱状态逐分钟对齐该表")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="随机种子。给定后同一 seed + 同一 --days 可逐字节复现；"
+                             "同 seed 的 7 天版与 30 天版前 7 天完全一致")
     return parser.parse_args()
 
 
@@ -503,14 +589,24 @@ def main():
     args = parse_args()
     global TOTAL_DAYS, OUTPUT_PATH, FAULT_SCHEDULE, SPECTRUM_OUTPUT_PATH
     TOTAL_DAYS = args.days
+    if args.seed is not None:
+        # 两套随机源都要播种：位置/波动用 random，阴影衰落用 np.random
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        print(f"[v2.8] 随机种子 = {args.seed}（同 seed 可复现）")
+    else:
+        print("[v2.8] 未指定 --seed：本次数据不可复现（与历史行为一致）")
     if args.output:
         OUTPUT_PATH = args.output
+        # 旧行为：--output 只改网络表，频谱仍写默认名；这是隐性坑，这里显式提示
+        print(f"[v2.8] 注意：--output 仅影响网络表；频谱仍写入 {SPECTRUM_OUTPUT_PATH}")
     else:
         suffix = {3: "", 7: "_7d", 30: "_30d"}.get(args.days, "")
         OUTPUT_PATH = f"data/network_data{suffix}.csv"
         SPECTRUM_OUTPUT_PATH = f"data/spectrum{suffix}.csv"
     FAULT_SCHEDULE = build_fault_schedule(TOTAL_DAYS)  # 按天数延伸故障时间表
-    print(f"[v2.6] 生成 {TOTAL_DAYS} 天数据，故障注入 {len(FAULT_SCHEDULE)} 条 → {OUTPUT_PATH}")
+    print(f"[v2.8] 生成 {TOTAL_DAYS} 天数据，故障注入 {len(FAULT_SCHEDULE)} 条，"
+          f"渐变 {RAMP_MINUTES} 分钟 → {OUTPUT_PATH}")
     dataset = generate_dataset()
     validate_and_export(dataset)
 

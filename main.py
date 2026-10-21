@@ -1698,7 +1698,16 @@ def forecast_preview(req: ForecastPreviewRequest):
         # 输出分两种语义，与《问题状态与责任分工》里"持续风险"和"提前预警"分别验收一致：
         #   already=True  → 基准时刻已越阈，提示"已发生、预计持续"（持续风险）
         #   already=False → 基准时刻未越阈，提示"预计 N 分钟后…"（提前预警，带提前量）
-        min_crossing_bands = max(3, len(bands) // 10)
+        # 越阈频段数下限：要求"大多数频段"越阈，而不是几个边缘频段。
+        # 起因：包络中心 −60 dBm、边缘 −70 dBm，边缘频段更容易先跌破阈值；
+        # 实测只按 5/50 个频段判定时，正常时段也会因为边缘频段而误报。
+        # 真实弱覆盖/拥塞是 50/50 全段越阈，渐变期则是"逐渐有更多频段越阈"，
+        # 用 80% 作为门槛既能滤掉边缘噪声，又能让预测阶段给出提前量。
+        min_crossing_bands = max(5, int(len(bands) * 0.8))
+        # 持续性约束：必须连续 N 分钟越阈才算命中。
+        # 起因：KPI 有阴影衰落，单分钟噪声就可能让若干频段瞬间跌破阈值，
+        # 若只按"某一分钟越阈"触发，正常时段也会冒出误报（实测出现过 1 次）。
+        min_crossing_minutes = 3
 
         def _bands_over(values, threshold, direction):
             """返回越阈频段列表；按越阈幅度从最严重排起。"""
@@ -1716,6 +1725,24 @@ def forecast_preview(req: ForecastPreviewRequest):
                 continue
             crossing = [_bands_over(f["values"], threshold, direction) for f in frames]
             hit_minutes = [i for i, ids in enumerate(crossing) if len(ids) >= min_crossing_bands]
+
+            # 找出"连续 ≥ min_crossing_minutes 分钟"的段落，取第一段
+            run_start = None
+            run = []
+            for i in hit_minutes:
+                if run and i == run[-1] + 1:
+                    run.append(i)
+                else:
+                    if len(run) >= min_crossing_minutes:
+                        run_start = run[0]
+                        break
+                    run = [i]
+            if run_start is None:
+                if len(run) >= min_crossing_minutes:
+                    run_start = run[0]
+                else:
+                    continue          # 没有够长的连续段 → 视为噪声，不告警
+            hit_minutes = [i for i in hit_minutes if i >= run_start]
             if not hit_minutes:
                 continue
 

@@ -93,8 +93,10 @@ def main() -> int:
         ok(f"weak_coverage 行 RSRP 最大 {weak.max():.2f} ≤ −110")
     elif len(weak):
         bad(f"weak_coverage 行存在 RSRP > −110（最大 {weak.max():.2f}）")
-    if len(normal) and normal.min() > -110:
-        ok(f"normal 行 RSRP 最小 {normal.min():.2f} > −110")
+    if len(normal) and normal.min() > -110.01:
+        # 容差 0.01：rsrp 落库时 round 到 2 位，原始值 -109.999 会显示成 -110.0，
+        # 但标签是按原始值判的（-109.999 不小于 -110 → normal），属正常边界现象。
+        ok(f"normal 行 RSRP 最小 {normal.min():.2f} > −110（含 0.01 舍入容差）")
     elif len(normal):
         bad(f"normal 行存在 RSRP ≤ −110（最小 {normal.min():.2f}）")
 
@@ -112,9 +114,16 @@ def main() -> int:
             status = g["network_status"].to_numpy()
             rsrp = g["rsrp"].to_numpy()
             ts = g["ts"].to_numpy()
+            last_counted = None      # 上一次已计入的切点时间，用于去掉同一事件的重复切点
             for i in range(1, len(status)):
                 if not (status[i - 1] == "normal" and status[i] == "weak_coverage"):
                     continue
+                # 同一事件内 3 个 UE 会各自在不同分钟跨过阈值，导致同一事件被数成多次；
+                # 60 分钟内视为同一次事件，只统计首个切入。
+                if last_counted is not None:
+                    gap_min = int((ts[i] - last_counted).astype("timedelta64[m]").astype(int))
+                    if gap_min < 60:     # 同一事件内的重复切点
+                        continue
                 # 往前找连续 normal 段的起点
                 j = i
                 while j > 0 and status[j - 1] == "normal" and i - j < 25:
@@ -122,6 +131,7 @@ def main() -> int:
                 seg_len = i - j
                 if seg_len < 8:          # 段太短：多半是闪烁，不是渐变
                     continue
+                last_counted = ts[i]
                 pre = rsrp[j:i]
                 below = int((pre < -105).sum())
                 drop = float(pre.mean() - rsrp[i])
