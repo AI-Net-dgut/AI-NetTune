@@ -126,7 +126,7 @@ npm run dev
 | 4    | POST | /api/export/report    | 导出分析报告（后端可生成 Markdown；**前端暂无入口**）         |
 | 5    | GET  | /api/data/heatmap     | 信号热力图（Kriging 空间估计 + 方差；缺 PyKrige 时降级 `grid_mean`） |
 | 6    | GET  | /api/network/topology/basic    | 基础网络拓扑：AP / UE 节点 + 窗口内主服务链路 |
-| 7    | GET  | /api/data/realtime    | 实时增量数据（**当前为空实现**：`start_realtime_service()` 未被调用） |
+| 7    | GET  | /api/data/events      | 故障事件清单（读 `data/fault_events.csv`，案例窗口的单一事实来源） |
 | 8    | GET  | /api/predict/result   | 时序预测结果查询（契约 v1 · **占位**：固定返回 `predict_list: []`） |
 | 9    | GET  | /api/network/topology/enhanced | 拓扑增强数据（契约 v1：AP/UE 属性 + 链路多指标 + 整体统计） |
 | 10   | POST | /api/analyze/forecast | 区域信号/频谱态势预测：1 小时桶 · 前 80% 训练 Prophet / 后 20% 测试 + 未来 24h（lower/upper）；Prophet 失败降级移动平均（`method` 如实返回） |
@@ -180,7 +180,7 @@ npm run dev
 
 ```
 AI-NetTune/
-├── main.py            # 后端主程序（FastAPI，13 个接口）
+├── main.py            # 后端主程序（FastAPI，14 个接口）
 ├── data_layout.py     # 数据文件定位规则（候选文件名 / 环境变量，单一定义源）
 ├── data_generator.py  # 仿真数据生成器（v2.7：多日 + 坐标 + 故障注入 + 频谱混合标注）
 ├── forecast_model.py  # Prophet 时序预测（缺包降级 moving_average）
@@ -199,7 +199,7 @@ AI-NetTune/
 │   ├── network_data_30d.csv   # 30 天，129,600 条 × 18 列（后端默认读取）
 │   └── spectrum_7d.csv        # 7 天，1,512,000 条 × 9 列（预测预警数据源）
 ├── docs/
-│   ├── api.md         # API 接口契约文档（13 个接口）
+│   ├── api.md         # API 接口契约文档（14 个接口）
 │   └── data_dict.md   # 数据字典契约文档（18 维字段规范）
 ├── frontend/          # React 前端
 └── README.md
@@ -231,7 +231,7 @@ AI-NetTune/
 | 层级 | 内容                                                         |
 | ---- | ------------------------------------------------------------ |
 | P0   | 基础功能闭环（数据 / KPI 查询 / 研判 / LLM 意图 / 对话链路 / 基础 UI）——预测不阻塞，不加 |
-| P1   | 接口 10 返回 `past_frames` + `future_frames` 帧序列；前端**静态并排**展示"过去 7 帧 → 未来 3 帧"序列态势图 + MAE / RMSE 指标；**拓扑图 UE 点选联动真实 vs 预测对比**；预测模型采用**机器学习（Prophet / LSTM）**，移动平均仅作链路打通 baseline（与申报书"机器学习模型"口径一致） |
+| P1   | 🚧 **部分完成**：接口 10 已返回真实 Prophet / 移动平均结果与逐点 MAE / RMSE，「真实 vs 预测对比」已接入工作台；**未完成**：`past_frames` + `future_frames` 帧序列字段，以及"过去 7 帧 → 未来 3 帧"的静态并排序列态势图（当前频谱预测是连续时频带，不是离散帧格子）；拓扑图 UE 点选联动对比也已接入 |
 | P2   | 帧间**播放动画**、渐进过渡、地图缩放交互、指标面板美化（P0 未完成前不碰 P2） |
 
 ## 团队成员

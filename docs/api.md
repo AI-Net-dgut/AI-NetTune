@@ -13,7 +13,7 @@ Base URL: http://localhost:8000
 |4|POST|/api/export/report|导出分析报告|
 |5|GET|/api/data/heatmap|信号热力图数据|
 |6|GET|/api/network/topology/basic|基础网络拓扑数据|
-|7|GET|/api/data/realtime|实时增量监测数据|
+|7|GET|/api/data/events|故障事件清单（来自 data/fault_events.csv，案例起点的单一事实来源）|
 |8|GET|/api/predict/result|时序预测结果查询（契约v1·查询壳：转调接口10数据，不新建模型）|
 |9|GET|/api/network/topology/enhanced|拓扑增强数据（契约v1）|
 |10|POST|/api/analyze/forecast|区域信号/频谱态势预测（Prophet 时序模型）|
@@ -341,7 +341,7 @@ GET /api/network/topology/basic?scenario = 校园 \& timestamp=2026\-01\-01 00:0
 
 ## 接口 7：实时增量监测数据
 
-GET /api/data/realtime?last\_time=2026\-10\-06 00:00:00
+GET /api/data/events?scenario=校园
 
 可选参数:
 
@@ -696,7 +696,13 @@ POST /api/forecast/preview
 > **重要限制（数据侧）**：本判据能给出提前量的前提是历史窗口里存在"朝阈值滑动"的渐变趋势。
 > 但当前仿真数据的事件是**单分钟阶跃**（事件前 20 分钟 `RSRP < −110 dBm` 的行数恒为 0），
 > 事件前历史完全平坦 → 趋势门限判为无趋势 → 提前量恒为 0。
-> 实测扫描两个事件前后各 16 个基准时刻（间隔 4 分钟）：**提前预警 0 次，已发生·持续 4 次**。
+> 实测（v2.8 数据，2026-10 重新生成后）：**提前预警可触发**。基准时刻 `2026-01-01 10:08`
+> （弱覆盖事件 10:00 起、渐变 20 分钟）给出「AP-02 预计 14 分钟后功率跌破 −95 dBm」，
+> 实际越阈约在 10:22；拥塞事件（01-01 20:00 起）实测提前 1–19 分钟。
+>
+> ⚠️ 旧结论作废：v2.7 数据是单分钟阶跃（事件前 25 分钟 RSRP < −105 的样本数恒为 0），
+> 当时"提前预警 0 次、已发生·持续 4 次"是**数据缺陷导致的能力不可用**，不是模型限制。
+> v2.8 给数据加了 20 分钟渐入/渐出后，该能力才真正可演示。
 > 用合成渐变历史（−0.6 dBm/分）验证判据本身有效：提前量 23 分钟。
 > 要让"提前预警"在演示中真实出现，需先修数据侧的渐变征兆（见审查报告 D-3）。
 
@@ -816,7 +822,7 @@ POST /api/forecast/analyze
 |lower_mhz / upper_mhz|number|频段上下边界 MHz|
 |power_dbm|number|观测点在频段内的接收功率 dBm（非功率谱密度）|
 |occupancy_pct|number|频段在 1 分钟帧内的**资源占用比例** %（业务负载指标，与 power_dbm 不是同一物理量，见下）|
-|network_status|string|normal / weak_coverage / congestion；与 network_data_7d_events.csv 逐分钟逐 AP 对齐（含 EV 事件与背景异常标签）。UE→AP 汇总规则：同一 (分钟,AP) 下任一 UE 异常即该 AP 异常；多类型并存时频段级混合标注（前 25 段 congestion、后 25 段 weak_coverage），单类型全段一致|
+|network_status|string|normal / weak_coverage / congestion；与网络表（`network_data_7d.csv`）逐分钟逐 AP 对齐。UE→AP 汇总规则：同一 (分钟,AP) 下任一 UE 异常即该 AP 异常；多类型并存时频段级混合标注（前 25 段 congestion、后 25 段 weak_coverage），单类型全段一致|
 |scenario|string|业务场景，如 校园|
 
 ### 四条锁定口径
@@ -842,7 +848,7 @@ POST /api/forecast/analyze
    其占用率低是因为弱覆盖区用户少、业务量低——这是符合物理的，不是数据错误。
 4. **防未来口径**：模型与预警只用 `baseTime` 及以前的数据，不读取 7 天 CSV 的未来真值或未来异常标签。
 
-> 事件对齐说明（v2.7）：频谱 `network_status` 由生成器 `--events data/network_data_7d_events.csv` 模式逐分钟逐 AP 全量取自网络事件表（含 EV 事件与背景异常标签、非整点事件段如 09:44 起）。聚合口径：同一 (时间,AP) 多 UE 多类型全部保留并按频段混合标注，保证按「分钟+AP+异常类型」去重后两表差异为 0（v2.6 曾因只取首个非 normal 导致 86 组类型缺失，v2.7 已修复）。
+> 事件对齐说明（v2.8）：频谱 `network_status` 由生成器 `--events data/network_data_7d.csv`v` 模式逐分钟逐 AP 全量取自网络事件表（含 EV 事件与背景异常标签、非整点事件段如 09:44 起）。聚合口径：同一 (时间,AP) 多 UE 多类型全部保留并按频段混合标注，保证按「分钟+AP+异常类型」去重后两表差异为 0（v2.6 曾因只取首个非 normal 导致 86 组类型缺失，v2.7 已修复）。
 > 数据文件按 `.gitignore` 不入仓库，由数据侧另行转交。
 
 ### 网络表事件口径（v2.8，取代旧的 EV 事件表口径）
