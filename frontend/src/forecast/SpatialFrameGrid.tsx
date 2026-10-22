@@ -1,17 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchSpatialFrames } from "../services/backend";
 import type { SpatialFrame, SpatialFrameSeries } from "../services/backend";
 import "./SpatialFrameGrid.css";
 
 /**
- * 区域电磁态势的序列态势图（过去N帧 → 未来N帧）。
+ * 区域电磁态势序列图：过去 N 帧 → 未来 N 帧，可**拖动时间轴**并可**自动播放**。
  *
- * 与频率条的区别：每帧是一张 grid×grid 的**二维区域场**（接口16），
- * 所以画出来是一块有形状的区域热力图，而不是 50 条横纹。故障发生时能看到
- * 一片深色区域随时间扩张 —— 这正是"预测覆盖区域电磁态势"该有的样子。
+ * 为什么这么做：申报书要求「序列态势图」。静态并排只能看到"几张贴图"，
+ * 拖时间轴/播放才能看出"恶化区域在扩张"这个过程——这正是"预测"要表达的东西。
  *
- * 用 canvas 而不是 SVG：26×26=676 格，9 帧就是 6084 个矩形，SVG 会明显卡；
- * canvas 一次性画完再靠 CSS 放大（image-rendering: pixelated 保持清晰）。
+ * 数据来自接口16（二维区域场），与频谱预测（频率维度）互补：
+ * 频谱回答"哪个频段在恶化"，这里回答"哪个区域在恶化"。
+ *
+ * 实现要点：
+ * - 所有帧**一次性取回**（past+future），滑块只在已取回的帧之间切换 → 零延迟；
+ *   "未来帧"由后端按格点外推，不是前端插值，所以拖动看到的仍是真实预测值。
+ * - 色阶在全部帧上统一计算，否则每帧自适应会让"哪一帧更严重"看不出来。
+ * - canvas 而不是 SVG：26×26=676 格 × 多帧，SVG 会明显卡。
  */
 
 const COLOR_STOPS: [number, [number, number, number]][] = [
@@ -36,7 +41,9 @@ function colorAt(t: number): string {
   return "rgb(215,48,39)";
 }
 
-function FrameCanvas({ frame, min, max }: { frame: SpatialFrame; min: number; max: number }) {
+function FrameCanvas({ frame, min, max, big = false }: {
+  frame: SpatialFrame; min: number; max: number; big?: boolean;
+}) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -52,16 +59,26 @@ function FrameCanvas({ frame, min, max }: { frame: SpatialFrame; min: number; ma
       for (let c = 0; c < cols; c += 1) {
         const value = frame.values[r][c];
         ctx.fillStyle = value == null ? "#e8edf4" : colorAt((value - min) / span);
-        // 画布 y 轴向下，数据 y 轴向上 → 翻转行序，让区域方向与地图一致
+        // 画布 y 轴向下、数据 y 轴向上 → 翻转行序，与地图方向一致
         ctx.fillRect(c, rows - 1 - r, 1, 1);
       }
     }
   }, [frame, min, max]);
-
-  return <canvas ref={ref} className="ain-spatial-cell-canvas" />;
+  return <canvas ref={ref} className={big ? "ain-spatial-main-canvas" : "ain-spatial-cell-canvas"} />;
 }
 
-export default function SpatialFrameGrid({ scenario, baseTime, frameMinutes = 6, pastFrames = 6, futureFrames = 3, metric = "rsrp" }: {
+/** 预测时长档位：内部换算成"每帧分钟数"，帧数固定 6 帧 */
+const HORIZON_OPTIONS = [
+  { label: "30 分钟", minutes: 5 },
+  { label: "1 小时", minutes: 10 },
+  { label: "2 小时", minutes: 20 },
+  { label: "4 小时", minutes: 40 },
+];
+const FUTURE_FRAMES = 6;
+
+export default function SpatialFrameGrid({
+  scenario, baseTime, frameMinutes = 10, pastFrames = 8, futureFrames = FUTURE_FRAMES, metric = "rsrp",
+}: {
   scenario: string;
   baseTime: string;
   frameMinutes?: number;
@@ -71,59 +88,111 @@ export default function SpatialFrameGrid({ scenario, baseTime, frameMinutes = 6,
 }) {
   const [series, setSeries] = useState<SpatialFrameSeries | null>(null);
   const [error, setError] = useState("");
+  const [index, setIndex] = useState(-1);       // -1 表示"跟随数据默认值"
+  const [playing, setPlaying] = useState(false);
+  const [horizon, setHorizon] = useState(frameMinutes);   // 每帧分钟数，由"预测时长"决定
 
   useEffect(() => {
     const controller = new AbortController();
     fetchSpatialFrames(scenario, baseTime, controller.signal,
-      { frameMinutes, pastFrames, futureFrames, metric })
+      { frameMinutes: horizon, pastFrames, futureFrames, metric })
       .then((data) => { if (!controller.signal.aborted) { setSeries(data); setError(""); } })
       .catch((reason) => {
         if (controller.signal.aborted) return;
         setError(reason instanceof Error ? reason.message : "区域态势获取失败");
       });
     return () => controller.abort();
-  }, [scenario, baseTime, frameMinutes, pastFrames, futureFrames, metric]);
+  }, [scenario, baseTime, horizon, pastFrames, futureFrames, metric]);
 
-  // loading 由数据推导，避免在 effect 里 setState（react-hooks/set-state-in-effect）
-  const loading = !series && !error;
-  if (loading) return <p className="ain-spatial-note">正在计算区域态势帧序列……</p>;
+  const frames = useMemo(
+    () => (series ? [...series.past, ...series.future] : []),
+    [series],
+  );
+  const lastPastIndex = series ? Math.max(0, series.past.length - 1) : 0;
+  const active = index < 0 ? lastPastIndex : Math.min(index, Math.max(0, frames.length - 1));
+
+  // 自动播放：在已取回的帧之间循环推进（无需重新请求接口）
+  useEffect(() => {
+    if (!playing || frames.length < 2) return;
+    const timer = window.setInterval(() => {
+      setIndex((prev) => {
+        const at = prev < 0 ? lastPastIndex : prev;
+        return (at + 1) % frames.length;
+      });
+    }, 700);
+    return () => window.clearInterval(timer);
+  }, [playing, frames.length, lastPastIndex]);
+
+  if (!series && !error) return <p className="ain-spatial-note">正在计算区域态势帧序列……</p>;
   if (error) return <p className="ain-forecast-chart-note">区域态势暂不可用：{error}</p>;
-  if (!series || (!series.past.length && !series.future.length)) {
-    return <p className="ain-forecast-chart-note">该时段没有可用的区域态势帧。</p>;
-  }
+  if (!series || !frames.length) return <p className="ain-forecast-chart-note">该时段没有可用的区域态势帧。</p>;
 
-  // 所有帧共用一个色阶，否则各帧之间无法比较（严不严重看不出来）
-  const all = [...series.past, ...series.future]
-    .flatMap((f) => f.values.flat())
-    .filter((v): v is number => typeof v === "number");
+  const all = frames.flatMap((f) => f.values.flat()).filter((v): v is number => typeof v === "number");
   const min = all.length ? Math.min(...all) : 0;
   const max = all.length ? Math.max(...all) : 1;
-
-  const cell = (frame: SpatialFrame, label: string, future: boolean) => (
-    <figure className={`ain-spatial-cell${future ? " is-future" : ""}`} key={`${label}-${frame.start}`}>
-      <FrameCanvas frame={frame} min={min} max={max} />
-      <figcaption>
-        <span>{label}</span>
-        <time>{frame.start.slice(11, 16)}</time>
-      </figcaption>
-      <title>{`${frame.start} — ${frame.end}（${series.rows}×${series.cols} 网格）`}</title>
-    </figure>
-  );
+  const current = frames[active];
+  const isFuture = active >= series.past.length;
+  const unit = metric === "rsrp" ? " dBm" : metric === "sinr" ? " dB" : "";
+  const flat = current.values.flat().filter((v): v is number => typeof v === "number");
 
   return (
     <section className="ain-spatial-grid" aria-label="区域电磁态势序列">
       <header>
         <h4>区域电磁态势序列</h4>
         <span>
-          {metric.toUpperCase()} · 色阶 {min.toFixed(0)} ~ {max.toFixed(0)}
-          {metric === "rsrp" ? " dBm" : ""} · 每帧 {series.frameMinutes} 分钟 ·
+          {metric.toUpperCase()} · 色阶 {min.toFixed(0)}~{max.toFixed(0)}{unit} · 每帧 {series.frameMinutes} 分钟 ·
           区域 X {series.xRange[0].toFixed(0)}~{series.xRange[1].toFixed(0)} m
         </span>
+        <label className="ain-spatial-horizon">
+          预测时长
+          <select aria-label="选择预测时长" value={horizon}
+            onChange={(event) => { setPlaying(false); setIndex(-1); setHorizon(Number(event.target.value)); }}>
+            {HORIZON_OPTIONS.map(o => (
+              <option key={o.minutes} value={o.minutes}>{o.label}</option>
+            ))}
+          </select>
+        </label>
       </header>
+
+      <div className="ain-spatial-stage">
+        <figure className={`ain-spatial-main${isFuture ? " is-future" : ""}`}>
+          <FrameCanvas frame={current} min={min} max={max} big />
+          <figcaption>
+            <strong>{isFuture ? `未来${active - series.past.length + 1}` : `过去${series.past.length - active}`}</strong>
+            <span>{current.start} → {current.end}</span>
+            <span>最低 {Math.min(...flat).toFixed(1)}{unit} · 最高 {Math.max(...flat).toFixed(1)}{unit}</span>
+          </figcaption>
+        </figure>
+
+        <div className="ain-spatial-controls">
+          <button type="button" className="ain-button" onClick={() => setPlaying((p) => !p)}
+            aria-pressed={playing}>
+            {playing ? "⏸ 暂停" : "▶ 播放"}
+          </button>
+          <input type="range" min={0} max={frames.length - 1} value={active}
+            aria-label="态势帧时间轴"
+            onChange={(event) => { setPlaying(false); setIndex(Number(event.target.value)); }} />
+          <span className="ain-spatial-hint">
+            第 {active + 1} / {frames.length} 帧（过去 {series.past.length} 帧 + 预测 {series.future.length} 帧）
+          </span>
+        </div>
+      </div>
+
       <div className="ain-spatial-row">
-        {series.past.map((f, i) => cell(f, `过去${series.past.length - i}`, false))}
-        {series.future.length > 0 && <span className="ain-spatial-sep" aria-hidden="true" />}
-        {series.future.map((f, i) => cell(f, `未来${i + 1}`, true))}
+        {frames.map((frame, i) => {
+          const future = i >= series.past.length;
+          const label = future ? `未来${i - series.past.length + 1}` : `过去${series.past.length - i}`;
+          return (
+            <button key={`${label}-${frame.start}`} type="button"
+              className={`ain-spatial-cell${future ? " is-future" : ""}${i === active ? " is-active" : ""}`}
+              title={`${frame.start} — ${frame.end}`}
+              onClick={() => { setPlaying(false); setIndex(i); }}>
+              <FrameCanvas frame={frame} min={min} max={max} />
+              <span>{label}</span>
+              <time>{frame.start.slice(11, 16)}</time>
+            </button>
+          );
+        })}
       </div>
       <p className="ain-spatial-note">{series.note}</p>
     </section>

@@ -119,7 +119,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 | 地址 | 期望 |
 |---|---|
 | http://127.0.0.1:8000/api/health | `data.ok = true`，两个 `rows > 0` |
-| http://127.0.0.1:8000/docs | Swagger 面板，14 个接口 |
+| http://127.0.0.1:8000/docs | Swagger 面板，16 个接口 |
 | http://127.0.0.1:8000/api/data/query?scenario=校园&start_time=2026-01-01%2010:00:00&end_time=2026-01-01%2010:05:00 | `total > 0` |
 
 ---
@@ -276,7 +276,7 @@ python scripts/prepare_data.py --apply    # 真正重命名
 - [ ] `data/network_data_30d.csv`、`data/spectrum_7d.csv` 已到位（合计约 120 MB）
 - [ ] `python scripts/doctor.py` 退出码 0
 - [ ] `GET /api/health` 的 `data.ok` 为 `true`
-- [ ] `GET /docs` 能看到 14 个接口
+- [ ] `GET /docs` 能看到 16 个接口
 - [ ] 前端 `npm run dev` 打开后，工作台能出图、AI 区能问答
 - [ ] 预测弹窗能打开且 `status=ready`
 - [ ] 若前后端分开部署（`VITE_API_BASE` 直连后端），`main.py` 的 `allow_origins` 已包含前端访问地址

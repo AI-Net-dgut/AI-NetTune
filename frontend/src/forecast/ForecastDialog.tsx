@@ -93,7 +93,11 @@ export default function ForecastDialog({ request, result, pending, error, onClos
             </section>
             <div className="ain-forecast-chart-stack">
               <SpectrumViewPanel result={result} alert={alert} focusTime={request.targetWindow?.start} />
-              {impact && trend ? <section className="ain-forecast-impact"><div className="ain-forecast-impact-heading"><h3>{globalOnly ? "全网参考" : "可能影响"} · {impact.label}预测</h3><span>{impact.targetLabel}{demo ? " · 示例数据" : ""}</span></div>
+              {/* 「全网参考 · SINR预测」块已下线：后端只给全网均值，单标量序列在
+                  60 分钟窗口内无显著趋势（_gated_slope 判为 0），画出来是一条平线，
+                  看着像 bug 又没有信息量。区域电磁态势图已按指标（含 SINR）提供
+                  空间维度的预测，这里保留与告警联动的 per-AP 影响图。 */}
+              {impact && trend && !globalOnly ? <section className="ain-forecast-impact"><div className="ain-forecast-impact-heading"><h3>可能影响 · {impact.label}预测</h3><span>{impact.targetLabel}{demo ? " · 示例数据" : ""}</span></div>
                 {globalOnly && <><p className="ain-forecast-chart-note">后端仅提供全网均值，此图不是所选AP的专属影响预测。</p><label>参考指标 <select aria-label="选择全网参考指标" value={impact.id} onChange={event => setGlobalMetric(event.target.value)}>{globalImpacts.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label></>}
                 <ChartPanel title={`${impact.label}预测`} description={`${impact.unit} · 实线为历史，虚线为预测`} height={144} option={trend} />
                 <p className="ain-forecast-chart-legend"><span>━ 历史观测</span><span>┄ 未来预测</span>{impact.predicted.some(p => p.lower != null && p.upper != null) && <span>▰ 预测区间</span>}{impact.threshold && <span className="is-threshold">{impact.threshold.direction === "below" ? "低于" : "高于"}阈值需关注</span>}</p>

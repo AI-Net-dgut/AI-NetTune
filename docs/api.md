@@ -21,6 +21,8 @@ Base URL: http://localhost:8000
 |12|POST|/api/forecast/analyze|预测研判（基于同一轮预测的文字分析，v2）|
 |13|GET|/api/health|部署自检（数据文件/依赖/大模型就绪状态，不依赖数据文件、永远可访问）|
 |14|POST|/api/plan/simulate|方案对比仿真（改参数后在同一窗口重算"原配置 vs 方案"）|
+|15|GET|/api/forecast/spatial_frames|区域电磁态势帧序列（过去N帧 + 未来N帧，二维网格场）|
+|16|GET|/api/navigate/signal|信号导航建议（位置感知 + 覆盖分析 + 移动方向/距离/预期增益）|
 
 ## 通用响应格式
 成功: {"code": 0, "message": "success", "data": {...}}
@@ -822,7 +824,7 @@ POST /api/forecast/analyze
 |lower_mhz / upper_mhz|number|频段上下边界 MHz|
 |power_dbm|number|观测点在频段内的接收功率 dBm（非功率谱密度）|
 |occupancy_pct|number|频段在 1 分钟帧内的**资源占用比例** %（业务负载指标，与 power_dbm 不是同一物理量，见下）|
-|network_status|string|normal / weak_coverage / congestion；与网络表（`network_data_7d.csv`）逐分钟逐 AP 对齐。UE→AP 汇总规则：同一 (分钟,AP) 下任一 UE 异常即该 AP 异常；多类型并存时频段级混合标注（前 25 段 congestion、后 25 段 weak_coverage），单类型全段一致|
+|network_status|string|normal / weak_coverage / congestion；与网络表（`network_data_7d.csv`）逐分钟对齐（**注意**：频谱每 AP 每分钟都有帧，网络表只在该 AP 当分钟有用户接入时才有行，(分钟,AP) 槽位覆盖约 66.7%，详见下方"事件对齐说明"）。UE→AP 汇总规则：同一 (分钟,AP) 下任一 UE 异常即该 AP 异常；多类型并存时频段级混合标注（前 25 段 congestion、后 25 段 weak_coverage），单类型全段一致|
 |scenario|string|业务场景，如 校园|
 
 ### 四条锁定口径
@@ -848,7 +850,22 @@ POST /api/forecast/analyze
    其占用率低是因为弱覆盖区用户少、业务量低——这是符合物理的，不是数据错误。
 4. **防未来口径**：模型与预警只用 `baseTime` 及以前的数据，不读取 7 天 CSV 的未来真值或未来异常标签。
 
-> 事件对齐说明（v2.8）：频谱 `network_status` 由生成器 `--events data/network_data_7d.csv`v` 模式逐分钟逐 AP 全量取自网络事件表（含 EV 事件与背景异常标签、非整点事件段如 09:44 起）。聚合口径：同一 (时间,AP) 多 UE 多类型全部保留并按频段混合标注，保证按「分钟+AP+异常类型」去重后两表差异为 0（v2.6 曾因只取首个非 normal 导致 86 组类型缺失，v2.7 已修复）。
+> 事件对齐说明（v2.8）：频谱 `network_status` 由生成器 `--events data/network_data_7d.csv` 模式逐分钟逐 AP 取自网络表（含事件段与非整点起始段如 09:44 起）。聚合口径：同一 (时间,AP) 多 UE 多类型全部保留并按频段混合标注，保证按「分钟+AP+异常类型」去重后两表差异为 0（v2.6 曾因只取首个非 normal 导致 86 组类型缺失，v2.7 已修复）。
+>
+> ⚠️ **"逐分钟逐 AP 对齐"要分清两个层面（审查报告 D-6）**：
+>
+> | 层面 | 实际情况 |
+> |---|---|
+> | **频谱表覆盖** | ✅ 每个 AP **每分钟都有帧**（3 AP × 50 频段 × 每分钟 = 完整网格，1,512,000 行无缺失） |
+> | **网络表覆盖** | ⚠️ 只有**该分钟有 UE 接入**该 AP 才有行 —— 实测 (分钟,AP) 槽位覆盖 **20,181 / 30,240 = 66.7%** |
+>
+> 所以"对齐"指的是：**频谱的 `network_status` 逐分钟取自网络表**（异常组差异 0/0），
+> **不是**"每个 (分钟,AP) 槽位都有 KPI 采样行"。剩下约 1/3 的空槽位是**该 AP 当分钟没有服务用户**
+> —— 这在真实网络里是正常现象（没用户就没有 KPI 上报），不是数据缺失。
+>
+> 影响面：依赖"按 (分钟,AP) 取窗口均值"的分析（研判、热力图）只看有采样的槽位，口径正确；
+> 但**不要**把"槽位覆盖率"当成数据质量指标去解释 —— 它反映的是业务分布，不是缺失率。
+
 > 数据文件按 `.gitignore` 不入仓库，由数据侧另行转交。
 
 ### 网络表事件口径（v2.8，取代旧的 EV 事件表口径）
@@ -887,6 +904,65 @@ POST /api/forecast/analyze
 （3 天/30 天版），events 模式（7 天版）关闭该逻辑，以保证与网络表全量对齐。
 
 **验证工具**：`python scripts/audit_data.py`（两表对账 / 渐变分类 / 阈值自洽 / 占用率语义）。
+
+### 新增响应字段（v2.9，三阶段整改）
+
+以下字段为兼容性**新增**，旧字段全部保留，前端可选择性消费。
+
+**接口 2 `/api/analyze/anomaly`**
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `rule_score` | number | 规则评分（**主字段**）。衡量规则命中强度，**不是概率**；`confidence` 保留一版用于向后兼容 |
+| `score_kind` | string | 固定 `"rule"`，语义标注 |
+| `anomaly_scope` | string | `window`=整窗异常 / `hour`=仅个别小时越阈（整窗均值正常）/ `none` |
+| `anomaly_spans` | array | **分钟级异常区间**：`[{ap_id, type, start, end, minutes}]`，start/end 精确到分钟（申报书要求"定位异常的起止时间"）。同一 AP、同一类型、间隔 ≤2 分钟的异常分钟合并；平稳窗口返回 `[]` |
+| `plan_narrative` | string | 方案的自然语言说明（LLM 可用时由大模型改写，否则模板） |
+| `plan_narrative_source` | string | `llm` / `template` |
+
+**接口 3 `/api/agent/chat`**
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `intent_debug.intent` | string | 识别到的意图 |
+| `intent_debug.source` | string | `rule`（规则命中）/ `llm`（大模型识别）/ `fallback`（兜底） |
+| `intent_debug.rule_hit` | boolean | 关键词规则是否命中 |
+| `intent_debug.llm_enabled` | boolean | 当前是否启用大模型 |
+| `intent_debug.parsed` | object | 解析到的槽位：`scenario` / `ap_id` / `time_range` / `window` |
+| `multi_turn.turns` | number | 该 session 累计轮次 |
+| `multi_turn.inherited` | object | 本轮从上一轮继承的槽位（指代词如"它/那个/再"触发） |
+| `kind` | string | `chain` 表示本次为**多步编排**（其余为单工具，无此字段） |
+| `chain` | array | 编排轨迹：`[{tool, status, summary}]`，如 `analyze_anomaly → forecast_preview` |
+
+**接口 11 `/api/forecast/preview`**
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `narrative` | string | 预测结果的自然语言说明（含越阈提前量、不确定性说明） |
+| `narrative_source` | string | `llm` / `template` |
+
+**接口 15 `/api/forecast/spatial_frames`（新增）**
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `scenario` / `baseTime` | 必填 | 场景与基准时刻 |
+| `historyMinutes` | 48 | 历史总时长 |
+| `frameMinutes` | 6 | 每帧覆盖分钟数（1~60） |
+| `pastFrames` | 6 | 历史帧数（1~12） |
+| `futureFrames` | 3 | 预测帧数（1~6） |
+| `metric` | rsrp | `rsrp` / `sinr` / `throughput` |
+
+返回 `{shape:{grid,rows,cols}, x_range, y_range, past:[{start,end,points,values}], future:[...], note}`。
+`values` 是 `rows×cols` 的二维场。未来帧**逐格点**外推（饱和 τ=3 帧），
+所以恶化区域在空间上会扩张，而不是整场平移。
+
+**接口 16 `/api/navigate/signal`（新增）**
+
+参数 `scenario` / `start_time` / `end_time` / `ue_id` / `metric`；
+返回 `{available, ue_id, current:{x,y,field_value,measured_value}, grid, advice:{action, direction, distance_m, target_x, target_y, expected, gain_db, text}, assumptions[]}`。
+
+`advice.action` 为 `move`（有 ≥1 dB 的可行改善）或 `stay`（当前位置已接近最优）。
+`assumptions` 必须原样展示 —— 这是基于区域信号场的**建议**，不是实时信道测量。
 
 ## 接口 13：部署自检（GET /api/health）
 

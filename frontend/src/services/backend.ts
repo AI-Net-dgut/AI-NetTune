@@ -335,7 +335,7 @@ export async function fetchSpatialMap(scope: QueryScope, signal?: AbortSignal, f
 }
 function candidate(value: unknown, i: number): Candidate {
   const c = obj(value);
-  return { rank: numeric(c.rank) || i + 1, cause: str(c.cause), score: numeric(c.confidence),
+  return { rank: numeric(c.rank) || i + 1, cause: str(c.cause), score: numeric(c.rule_score ?? c.confidence),
     support: strings(c.support_evidence), against: strings(c.against_evidence), checks: strings(c.pending_checks) };
 }
 export function parseDiagnosis(value: unknown, scope: QueryScope): Diagnosis {
@@ -347,7 +347,7 @@ export function parseDiagnosis(value: unknown, scope: QueryScope): Diagnosis {
   });
   return {
     scope: { ...scope }, state: d.is_anomaly ? "anomaly" : comparison.length ? "normal" : "empty",
-    anomalyType: str(d.anomaly_type), level: str(d.level), score: numeric(d.confidence),
+    anomalyType: str(d.anomaly_type), level: str(d.level), score: numeric(d.rule_score ?? d.confidence),
     cause: str(d.cause) || str(d.reason), suggestion: str(d.suggestion), affectedAps: strings(d.affected_aps),
     evidence: arr(d.kpi_evidence).map(v => { const e = obj(v); return { metric: str(e.metric), value: numeric(e.avg_value), threshold: numeric(e.threshold), status: str(e.status) }; }),
     candidates: arr(d.candidates).map(candidate),
