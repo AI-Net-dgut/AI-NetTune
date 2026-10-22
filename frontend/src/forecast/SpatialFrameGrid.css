@@ -1,7 +1,24 @@
-/* 区域电磁态势序列（二维帧格子 + 时间轴播放）。 */
+/* 区域电磁态势序列：左侧大图 + 右侧控制/信息栏 + 底部缩略帧条。
+   注意：这里显式给白底卡片样式。同级兄弟 .ain-forecast-spectrum 有 background:#fff，
+   而本组件是裸 <section>，不给就会露出弹窗的深色底（实测出现过整块深蓝）。 */
+
+/* 用组合选择器提高优先级：单类选择器被上层深色规则压掉过（实测露出整块深蓝）。 */
+.ain-forecast-chart-stack .ain-spatial-grid {
+  margin: 0;
+  padding: 10px 12px 8px;
+  border: 1px solid #dbe7f6;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f3a5f;
+}
 
 .ain-spatial-grid {
-  margin: 12px 0 4px;
+  margin: 0;
+  padding: 10px 12px 8px;
+  border: 1px solid #dbe7f6;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f3a5f;
 }
 
 .ain-spatial-grid > header {
@@ -16,18 +33,19 @@
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  color: #1f3a5f;
+  color: #264c7b;
 }
 
 .ain-spatial-grid > header span {
   font-size: 11px;
-  color: #6b7f96;
+  color: #7890ab;
 }
 
 .ain-spatial-horizon {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
   font-size: 11px;
   color: #52657d;
 }
@@ -41,26 +59,26 @@
   color: #1f3a5f;
 }
 
-/* ---- 主视图 + 控制条 ---- */
+/* ---- 大图 + 右侧控制栏 ---- */
+/* 大图放大到 320px、右侧栏放宽到 480px，整块 820px：
+   之前 240+420=674 在 940px 宽的卡片里右侧空出一大块（实测很难看）。 */
 .ain-spatial-stage {
   display: flex;
-  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 14px;
-  margin-bottom: 10px;
+  gap: 16px;
+  max-width: 820px;
+  background: #fff;
 }
 
 .ain-spatial-main {
   margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex: 0 0 auto;
 }
 
 .ain-spatial-main-canvas {
   display: block;
-  width: 208px;
-  height: 208px;
+  width: 320px;
+  height: 320px;
   border: 1px solid #d7e0ec;
   border-radius: 4px;
   background: #f7fafd;
@@ -72,47 +90,62 @@
   box-shadow: 0 0 0 2px rgba(193, 123, 37, 0.16);
 }
 
-.ain-spatial-main figcaption {
+.ain-spatial-side {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  font-size: 11px;
-  color: #52657d;
-  max-width: 208px;
+  gap: 8px;
+  flex: 1 1 380px;
+  max-width: 480px;
+  min-width: 0;
+  background: #fff;
 }
 
-.ain-spatial-main figcaption strong {
-  color: #1f3a5f;
+.ain-spatial-play {
+  align-self: flex-start;
 }
 
-.ain-spatial-main.is-future figcaption strong {
-  color: #a8661c;
-}
-
-.ain-spatial-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 240px;
-  flex: 1 1 240px;
-}
-
-.ain-spatial-controls input[type="range"] {
+.ain-spatial-range {
   width: 100%;
   accent-color: #c17b25;
 }
 
-.ain-spatial-hint {
+.ain-spatial-counter {
   font-size: 11px;
-  color: #8b9bb0;
+  color: #7890ab;
 }
 
-/* ---- 缩略图条 ---- */
+/* 时间 / 简述 信息块（对应草图右侧那个方框） */
+.ain-spatial-info {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #e3ecf7;
+  border-radius: 6px;
+  background: #f8fbff;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ain-spatial-info dt {
+  color: #7890ab;
+  white-space: nowrap;
+}
+
+.ain-spatial-info dd {
+  margin: 0;
+  color: #33475f;
+  word-break: break-all;
+}
+
+/* ---- 底部缩略帧条 ---- */
 .ain-spatial-row {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
+  margin-top: 12px;
 }
 
 .ain-spatial-cell {
@@ -142,8 +175,8 @@
 
 .ain-spatial-cell-canvas {
   display: block;
-  width: 92px;
-  height: 92px;
+  width: 96px;
+  height: 96px;
   border: 1px solid #d7e0ec;
   border-radius: 3px;
   background: #f7fafd;

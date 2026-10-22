@@ -134,6 +134,11 @@ export default function SpatialFrameGrid({
   const isFuture = active >= series.past.length;
   const unit = metric === "rsrp" ? " dBm" : metric === "sinr" ? " dB" : "";
   const flat = current.values.flat().filter((v): v is number => typeof v === "number");
+  const prev = active > 0 ? frames[active - 1] : null;
+  const prevFlat = prev ? prev.values.flat().filter((v): v is number => typeof v === "number") : [];
+  const kindLabel = isFuture ? `未来${active - series.past.length + 1}` : `过去${series.past.length - active}`;
+  // 简述：本帧最低值与相对上一帧的变化，帮用户判断"这一帧比上一帧更糟还是更好"
+  const delta = prevFlat.length && flat.length ? Math.min(...flat) - Math.min(...prevFlat) : null;
 
   return (
     <section className="ain-spatial-grid" aria-label="区域电磁态势序列">
@@ -157,28 +162,34 @@ export default function SpatialFrameGrid({
       <div className="ain-spatial-stage">
         <figure className={`ain-spatial-main${isFuture ? " is-future" : ""}`}>
           <FrameCanvas frame={current} min={min} max={max} big />
-          <figcaption>
-            <strong>{isFuture ? `未来${active - series.past.length + 1}` : `过去${series.past.length - active}`}</strong>
-            <span>{current.start} → {current.end}</span>
-            <span>最低 {Math.min(...flat).toFixed(1)}{unit} · 最高 {Math.max(...flat).toFixed(1)}{unit}</span>
-          </figcaption>
         </figure>
 
-        <div className="ain-spatial-controls">
-          <button type="button" className="ain-button" onClick={() => setPlaying((p) => !p)}
+        <div className="ain-spatial-side">
+          <button type="button" className="ain-button ain-spatial-play" onClick={() => setPlaying((p) => !p)}
             aria-pressed={playing}>
             {playing ? "⏸ 暂停" : "▶ 播放"}
           </button>
-          <input type="range" min={0} max={frames.length - 1} value={active}
+          <input type="range" className="ain-spatial-range" min={0} max={frames.length - 1} value={active}
             aria-label="态势帧时间轴"
             onChange={(event) => { setPlaying(false); setIndex(Number(event.target.value)); }} />
-          <span className="ain-spatial-hint">
+          <span className="ain-spatial-counter">
             第 {active + 1} / {frames.length} 帧（过去 {series.past.length} 帧 + 预测 {series.future.length} 帧）
           </span>
+          <dl className="ain-spatial-info">
+            <dt>时间</dt>
+            <dd>{current.start} — {current.end}</dd>
+            <dt>简述</dt>
+            <dd>
+              {kindLabel} · 最低 {Math.min(...flat).toFixed(1)}{unit} / 最高 {Math.max(...flat).toFixed(1)}{unit}
+              {delta !== null && (
+                <> · 较上一帧 {delta >= 0 ? "+" : ""}{delta.toFixed(1)} dB</>
+              )}
+            </dd>
+          </dl>
         </div>
       </div>
 
-      <div className="ain-spatial-row">
+      <div className="ain-spatial-row" aria-label="全部帧">
         {frames.map((frame, i) => {
           const future = i >= series.past.length;
           const label = future ? `未来${i - series.past.length + 1}` : `过去${series.past.length - i}`;
