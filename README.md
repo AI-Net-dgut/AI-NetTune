@@ -69,6 +69,23 @@
 > **完整部署步骤、环境变量、反向代理配置与故障排查见 [DEPLOY.md](DEPLOY.md)。**
 > 数据文件不在仓库里（约 120 MB），**部署前必须先放数据**，见 [data/README.md](data/README.md)。
 
+### 环境要求
+
+| 组件 | 要求 | 说明 |
+|---|---|---|
+| **Python** | **≥ 3.10**（本项目在 3.13.10 上验证） | 代码用了 `str \| None` 等 3.10+ 语法，**3.9 会直接 `TypeError` 起不来** |
+| Node.js | ≥ 20 | 前端 Vite 构建 |
+| 数据 | 约 120 MB | 见下方「0. 先放数据」 |
+
+> 不确定当前 `python` 是哪个版本、依赖是否齐全？用 `python scripts/doctor.py` 自检（退出码 0 = 可以启动）。
+> Windows 上如果机器装了多个 Python，**推荐用 `scripts/start_backend.ps1` 启动** —— 它会自动挑 ≥3.10 的解释器，
+> 并检查数据与依赖，避免用错解释器导致的莫名报错：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start_backend.ps1
+#   加 -Reload 开发热重载；加 -Port 8001 换端口
+```
+
 ### 0. 先放数据
 
 把 `network_data_30d.csv`（14.6 MB）与 `spectrum_7d.csv`（103.6 MB）放进 `data/`。
@@ -92,6 +109,19 @@ python -m pip install -r requirements.txt
 # 2. 启动服务（局域网联调用 0.0.0.0）
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+> 若上一步的 `python` 不是 3.10+，请改用 `powershell -ExecutionPolicy Bypass -File scripts\start_backend.ps1`。
+
+**可选：接入大模型（不配也能跑）**
+
+```powershell
+setx LLM_API_KEY "sk-你的key"     # 设置后需重开终端
+setx LLM_MODEL "deepseek-chat"    # 可选，默认就是 deepseek-chat
+```
+
+不配置时，意图识别与文案生成**自动降级为规则模板**（接口照常返回，`source`/`narrative_source` 字段会如实标为 `rule`/`template`）。
+配置后，规则未命中的自然语言提问、预测解释、方案解释与预测研判会改用大模型生成（单次约 2~5 秒）。
+配置与排查细节见 [DEPLOY.md](DEPLOY.md) 第 7 节。
 
 启动会打印「启动自检」横幅，直接显示数据是否到位、哪些能力处于降级状态。
 

@@ -140,10 +140,10 @@ npm run dev
 
 ### 跨域（CORS）：默认不需要改
 
-`main.py` 里有一份写死的允许来源：
+`main.py` 里默认只放行两个来源（保持最小放行，**不是 `*`**）：
 
 ```python
-allow_origins=["http://localhost:5173", "http://10.63.118.174:5173"]
+_DEFAULT_ORIGINS = ["http://localhost:5173", "http://10.63.118.174:5173"]
 ```
 
 **绝大多数情况用不到它。** 走 `npm run dev` 时前端请求的是相对路径 `/api/...`，
@@ -155,7 +155,13 @@ allow_origins=["http://localhost:5173", "http://10.63.118.174:5173"]
 - 前后端分开部署，用 `VITE_API_BASE` 指向另一个主机/端口（见第 6 节方案 B）；
 - 或前端产物放在别的端口、又靠 `VITE_API_BASE` 直连后端。
 
-这时把**前端的访问地址**（协议 + 主机 + 端口，如 `http://192.168.1.10:8080`）加进 `allow_origins` 并重启后端。
+这时**不用改代码**，用环境变量追加即可（逗号分隔）：
+
+```powershell
+setx NETTUNE_ALLOW_ORIGINS "http://192.168.1.10:8080,http://192.168.1.20:8080"
+# 重开终端后重启后端生效；默认那两个来源仍保留，环境变量只是追加
+```
+
 若按第 6 节方案 A 用 nginx 同源反代，则永远不需要改。
 
 ---
@@ -219,6 +225,8 @@ npm run preview        # 注意：preview 不读 vite.config.ts 的 proxy，仍�
 | `LLM_URL` | 后端 | `https://api.deepseek.com/chat/completions` | OpenAI 兼容接口均可 |
 | `LLM_MODEL` | 后端 | `deepseek-chat` | 模型名 |
 | `NETTUNE_ENABLE_LLM` | 后端 | `1` | 设为 `0` 强制走纯规则链路 |
+| `NETTUNE_ALLOW_ORIGINS` | 后端 | 空 | 追加 CORS 允许来源（逗号分隔）。默认已放行 `localhost:5173` 与 `10.63.118.174:5173`，这里是**追加**不是覆盖 |
+| `NETTUNE_PROPHET_TIMEOUT` | 后端 | `20` | 接口 10 的 Prophet 拟合超时（秒）。超时自动降级移动平均，`method` 字段如实返回 |
 | `VITE_API_BASE` | 前端（构建时） | 空 | 空 = 同源 `/api`；填完整地址则直连后端 |
 | `VITE_PROXY_TARGET` | 前端（dev） | `http://127.0.0.1:8000` | 仅 `npm run dev` 生效 |
 
