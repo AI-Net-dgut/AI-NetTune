@@ -2541,13 +2541,24 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
         reply = None
 
     if not reply:
+        # 无告警 ≠ 已检测到风险：cached.alerts 为空时要如实说"未发现越阈风险"，
+        # 否则会出现"没有风险却在说检测到风险"的自相矛盾（预览页 0 项需关注时必现）。
+        cached_alerts = cached.get("alerts") or []
+        if not cached_alerts:
+            head = (f"【规则研判】预测窗口 {req.forecast.start} ~ {req.forecast.end} 内"
+                    f"未检测到越阈风险（预警阈值为经验设定，未触发不代表绝对安全）。")
+            advice = ("建议：维持当前配置，按常规巡检节奏关注窗口后半段的 SINR 变化；"
+                      "如需提前量，可把预测时长拉长再看一次趋势。")
+        else:
+            head = (f"【规则研判】预测窗口 {req.forecast.start} ~ {req.forecast.end} 内检测到需要关注的风险"
+                    f"（{alert_detail.get('title', '见预警摘要') if alert_detail else '预警事件'}）。")
+            advice = ("建议：提前核查相关 AP 负载与邻区干扰，关注受影响 UE 的接入与切换状态；"
+                      "若窗口后半段 SINR 持续走低，考虑均衡邻区负载或扩容。")
         reply = (
-            f"【规则研判】预测窗口 {req.forecast.start} ~ {req.forecast.end} 内检测到需要关注的风险"
-            f"（{alert_detail.get('title', '见预警摘要') if alert_detail else '预警事件'}）。"
-            f"历史窗口 RSRP={rsrp_text} dBm、SINR={sinr_text} dB，{trend_text}。"
-            f"建议：提前核查相关 AP 负载与邻区干扰，关注受影响 UE 的接入与切换状态；"
-            f"若窗口后半段 SINR 持续走低，考虑均衡邻区负载或扩容。"
-            f"不确定性：当前 LLM 研判不可用，以上为基于历史均值的规则提示，未结合频谱细节。"
+            head
+            + f"历史窗口 RSRP={rsrp_text} dBm、SINR={sinr_text} dB，{trend_text}。"
+            + advice
+            + "不确定性：当前 LLM 研判不可用，以上为基于历史均值的规则提示，未结合频谱细节。"
         )
 
     return success_response({

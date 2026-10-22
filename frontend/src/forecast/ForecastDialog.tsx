@@ -116,7 +116,7 @@ export default function ForecastDialog({ request, result, pending, error, onClos
           </>}
         </>}
       </div>
-      <footer className="ain-forecast-dialog-footer"><span>{demo ? "示例研判不会调用大模型" : noRiskToReview && result?.status === "ready" ? "暂无风险可移交；当前网络问题可在AI区提问" : "详细原因、证据与预防方案在AI区查看"}</span><div><button type="button" className="ain-forecast-primary" disabled={!canAnalyze || pending || Boolean(error) || result?.status !== "ready" || noRiskToReview} onClick={() => { if (result && !noRiskToReview) onAnalyze({ result, alertId: alert?.id ?? null, question: request.question, targetWindow: request.targetWindow }); }}>交给AI详细研判</button><button type="button" onClick={onClose}>关闭</button></div></footer>
+      <footer className="ain-forecast-dialog-footer"><span>{demo ? "示例研判不会调用大模型" : noRiskToReview && result?.status === "ready" ? "预测窗口内无越阈风险，仍可交给 AI 说明趋势与不确定性" : "详细原因、证据与预防方案在AI区查看"}</span><div><button type="button" className="ain-forecast-primary" disabled={!canAnalyze || pending || Boolean(error) || result?.status !== "ready"} onClick={() => { if (result) onAnalyze({ result, alertId: alert?.id ?? null, question: request.question, targetWindow: request.targetWindow }); }}>交给AI详细研判</button><button type="button" onClick={onClose}>关闭</button></div></footer>
     </section>
   </div>;
   return typeof document === "undefined" ? content : createPortal(content, document.body);
