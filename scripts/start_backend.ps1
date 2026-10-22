@@ -15,7 +15,9 @@
 
 param(
     [int]$Port = 8000,
-    [string]$HostAddress = '127.0.0.1'
+    [string]$HostAddress = '127.0.0.1',
+    # -Reload: auto-restart on .py changes (for development). Off by default for demos.
+    [switch]$Reload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +60,14 @@ Write-Host ""
 
 Push-Location $root
 try {
-    & $python -m uvicorn main:app --host $HostAddress --port $Port
+    $uvicornArgs = @('-m', 'uvicorn', 'main:app', '--host', $HostAddress, '--port', $Port)
+    if ($Reload) {
+        # Watch only the project root so the 100MB CSV files are not scanned.
+        $uvicornArgs += @('--reload', '--reload-dir', $root)
+        Write-Host "Reload mode ON - backend restarts automatically on .py changes" -ForegroundColor Yellow
+        Write-Host ""
+    }
+    & $python @uvicornArgs
 } finally {
     Pop-Location
 }
