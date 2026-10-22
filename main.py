@@ -25,7 +25,9 @@ import report_model
 import spectrum_frames as _sf
 import spatial_frames as _spf
 import signal_nav as _sn
-from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
+# 【已移除】from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
+#   B-1 删除 /api/data/realtime 接口后，这三个符号在本文件中的使用数均为 0，
+#   这行 import 已无意义；先删导入、再删 realtime_simulator.py（否则删文件会 ModuleNotFoundError）。
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
