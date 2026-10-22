@@ -26,6 +26,17 @@ const MAX_ROWS = 1000;
 //     改数据即失效。现在改为由后端 GET /api/data/events 读取 data/fault_events.csv，
 //     事件清单是单一事实来源，见 fetchFaultEvents()。
 
+/**
+ * 兜底窗口（审查报告 B-4 的尾巴）。
+ *
+ * 这不是"数据集范围"，而是一个**演示用例**的固定窗口：对应 fault_events.csv 的
+ * EV-001（AP-02 弱覆盖，2026-01-01 10:00–12:00），与 replay/config.ts 的回放区间
+ * 以及后端 DEFAULT_SCOPE 口径保持一致。
+ *
+ * 只在调用方没给出窗口时作为兜底。换数据或换演示事件时**必须同步这里**，
+ * 否则会查到空结果。彻底的数据驱动方案：用 fetchFaultEvents() 取事件起止时间
+ * （见 CaseEventButtons 的做法），不要再往这里加第二个手写时间戳。
+ */
 export const DEFAULT_SCOPE: QueryScope = {
   scenario: "校园",
   start: "2026-01-01 10:00:00",
