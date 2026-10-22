@@ -24,6 +24,7 @@ import plan_model
 import report_model
 import spectrum_frames as _sf
 import spatial_frames as _spf
+import signal_nav as _sn
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
@@ -139,9 +140,17 @@ async def global_exception_handler(request, exc):
         }
     )
 # 允许前端(React dev server 5173)跨域调用本后端
+# CORS 来源（审查报告 P0-5）：原来写死两个 IP，换机器/换端口就要改代码。
+# 现在默认仍只放行这两个，但可用环境变量追加（逗号分隔）：
+#   setx NETTUNE_ALLOW_ORIGINS "http://192.168.1.20:5173,http://myhost:5173"
+# 保持"默认最小放行"，不改成 ["*"]——否则任何站点都能跨域读数据。
+_DEFAULT_ORIGINS = ["http://localhost:5173", "http://10.63.118.174:5173"]
+_EXTRA_ORIGINS = [o.strip() for o in os.getenv("NETTUNE_ALLOW_ORIGINS", "").split(",") if o.strip()]
+ALLOWED_ORIGINS = _DEFAULT_ORIGINS + [o for o in _EXTRA_ORIGINS if o not in _DEFAULT_ORIGINS]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://10.63.118.174:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -500,6 +509,47 @@ def judge_ap(ap, ap_rows):
             "cause": f"{ap}各项指标均在正常范围", "suggestion": "无需处理",
             "candidates": build_candidates(ap, base, "正常")}
 
+def _anomaly_spans(rows: list[dict], limit: int = 20) -> list[dict]:
+    """把分钟级异常行合并成连续区间，回答"异常从几点到几点"。
+
+    为什么需要（审查报告「缺口5 分钟级起止」）：申报书 L17 写的是
+    「实时分析定位异常的空间分布与**起止时间**」，但原来只给了小时粒度的
+    alarm_history（time 精确到 `2026-01-01 10:00`），说不出"09:47–11:12"。
+    数据本身是分钟级的，这里把同一 AP、同一类型、相邻分钟（间隔 ≤ 1 分钟）
+    的异常行合并成一段，给出精确到分钟的起止与持续分钟数。
+    """
+    grouped: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        status = row.get("network_status")
+        if status and status != "normal":
+            grouped.setdefault((row["ap_id"], status), set()).add(row["timestamp"])
+
+    spans: list[dict] = []
+    for (ap_id, status), timestamps in grouped.items():
+        # 同一分钟可能有多个 UE 各一行，先按"分钟"去重；再把连续分钟合并。
+        # 容忍 2 分钟的空洞（某分钟恰好没有该 AP 的采样），否则区间会被切碎。
+        ordered = sorted(timestamps, key=lambda t: datetime.strptime(t, "%Y-%m-%d %H:%M:%S"))
+        current: dict | None = None
+        last_dt: datetime | None = None
+        for ts_str in ordered:
+            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            if current is not None and last_dt is not None and (ts - last_dt).total_seconds() <= 120:
+                current["end"] = ts_str
+                current["minutes"] += int(round((ts - last_dt).total_seconds() // 60)) or 1
+                last_dt = ts
+            else:
+                if current is not None:
+                    spans.append(current)
+                current = {"ap_id": ap_id, "type": status,
+                           "start": ts_str, "end": ts_str, "minutes": 1}
+                last_dt = ts
+        if current is not None:
+            spans.append(current)
+
+    spans.sort(key=lambda s: (s["start"], s["ap_id"]))
+    return spans[:limit]
+
+
 @app.post("/api/analyze/anomaly")
 def analyze_anomaly(req: AnomalyRequest):
     # 第2周深化版：CSV真实数据，按AP分组多KPI联合研判（可解释证据链）
@@ -637,21 +687,29 @@ def analyze_anomaly(req: AnomalyRequest):
             "anomaly_scope": anomaly_scope,
             "anomaly_type": anomaly_type,
             "level": level,
+            # rule_score 是主字段名（审查报告 B-6）：它衡量的是"规则命中强度"，
+            # 不是统计概率。confidence 保留一版用于向后兼容，前端应优先读 rule_score。
+            "rule_score": confidence,
             "confidence": confidence,
-            # 语义标注（B-6）：confidence 是"规则加权分"，不是统计概率。
-            # 前端据此显示"规则评分·非概率"，避免被当成模型置信度解读。
+            # 语义标注：前端据此显示"规则评分·非概率"
             "score_kind": "rule",
             "kpi_evidence": evidence,
             "cause": cause,
             "suggestion": suggestion,
             "affected_aps": affected_aps,
             "network_status": nstatus,
-            "candidates": candidates,
+            "candidates": [{**c, "rule_score": c.get("confidence")} for c in candidates],
             "ap_candidates": ap_candidates,
             "hourly_trend": hourly_trend,        # 新增：小时级趋势
             "ap_comparison": ap_comparison,      # 新增：多AP横向对比
             "alarm_history": alarm_history,      # 新增：告警历史
+            # 分钟级异常区间：申报书 L17 要求"定位异常的起止时间"，
+            # alarm_history 只有小时粒度，这里给出精确到分钟的连续区间
+            "anomaly_spans": _anomaly_spans(rows),
             "plans": plans,                      # 新增：处理方案 + 对比仿真（闭环"方案制定"）
+            # 方案的自然语言说明（阶段2）：LLM 可用时改写，否则用模板；只引用方案内已有数值
+            "plan_narrative": explain_plans(plans, anomaly_type),
+            "plan_narrative_source": "llm" if ENABLE_LLM else "template",
         },
     }
 
@@ -729,8 +787,12 @@ class ChatRequest(BaseModel):
 VALID_SCENARIOS = ("校园", "商场", "体育馆")
 
 # 对话工具默认窗口（前端未传时使用）；接口2/热力图/拓扑接口的默认口径不变
-TOOL_WINDOW_START = "2026-01-01 00:00:00"
-TOOL_WINDOW_END = "2026-01-03 23:59:59"
+# 工具默认窗口（审查报告 B-4）：原来是写死的 2026-01-01~01-03，而数据集是 7/30 天，
+# 一旦走到兜底分支就会给出与页面口径不符的窗口。改为按**实际加载的数据范围**计算。
+# 正常路径由 _default_window() 动态取"最近 24h"，这两个常量只在完全没有数据时才用。
+_TOOL_TIMESTAMPS = [r["timestamp"] for r in DF] if isinstance(DF, list) and DF else []
+TOOL_WINDOW_START = min(_TOOL_TIMESTAMPS) if _TOOL_TIMESTAMPS else "2026-01-01 00:00:00"
+TOOL_WINDOW_END = max(_TOOL_TIMESTAMPS) if _TOOL_TIMESTAMPS else "2026-01-03 23:59:59"
 
 def _default_window(scenario: str):
     """AI 工具默认窗口（方案B）：跟随场景数据最新时刻往前推 24 小时。
@@ -830,7 +892,7 @@ def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> 
     ap = "、".join(d.get("affected_aps") or ["未知AP"])
     cand = d.get("candidates") or []
     cand_txt = "；".join(
-        f"候选{c.get('rank')}：{c.get('cause')}（规则评分 {c.get('confidence', '-')}，非概率）" for c in cand
+        f"候选{c.get('rank')}：{c.get('cause')}（规则评分 {c.get('rule_score', c.get('confidence')) or '-'}，非概率）" for c in cand
     ) or "暂无候选原因分解"
     # ---- 降级模板：本身就是四段式，LLM 挂了回复结构也不崩 ----
     if not d.get("is_anomaly"):
@@ -871,6 +933,190 @@ def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> 
     except Exception as e:
         print(f"[Main] LLM研判润色失败，降级模板：{e}")
     return fallback
+
+
+def _llm_rewrite(sys_prompt: str, evidence: dict, fallback: str, tag: str) -> str:
+    """把结构化结果交给 LLM 改写成中文说明；LLM 不可用/超时/输出过短则返回模板。
+
+    与研判润色同一套降级策略：**没有 key 也必须有话可说**，所以 fallback 模板
+    由调用方用真实数值拼好，LLM 只负责"说得更顺"，绝不参与计算。
+    """
+    if not ENABLE_LLM:
+        return fallback
+    try:
+        out = llm_agent.call_llm_chat(sys_prompt, _json.dumps(evidence, ensure_ascii=False))
+        if out and len(out) > 20:
+            return out
+    except Exception as e:
+        print(f"[Main] LLM {tag}解释失败，降级模板：{e}")
+    return fallback
+
+
+def _forecast_template(data: dict) -> str:
+    """预测结果的模板说明（无 LLM 时使用）。只用 data 里已有的数值。"""
+    alerts = data.get("alerts") or []
+    impacts = data.get("impacts") or []
+    parts = []
+    if alerts:
+        first = alerts[0]
+        lead = 0
+        try:
+            lead = int((datetime.strptime(first["start"], "%Y-%m-%d %H:%M:%S")
+                        - datetime.strptime(data.get("base_time", first["start"]),
+                                            "%Y-%m-%d %H:%M:%S")).total_seconds() // 60)
+        except (KeyError, ValueError, TypeError):
+            lead = 0
+        if lead > 0:
+            parts.append(f"{first['target']} 预计 {lead} 分钟后越阈（{first['title']}）。")
+        else:
+            parts.append(f"{first['target']} 已处于越阈状态，预计持续（{first['title']}）。")
+        if len(alerts) > 1:
+            parts.append(f"另有 {len(alerts) - 1} 个对象存在风险。")
+    else:
+        parts.append("预测窗口内所有对象均未越过告警阈值。")
+    if impacts:
+        ups = [i for i in impacts if (i.get("points") or [])]
+        if ups:
+            first_impact = ups[0]
+            pts = first_impact["points"]
+            parts.append(f"{first_impact.get('label', '指标')}当前约 {pts[0].get('value')}，"
+                         f"预测末值约 {pts[-1].get('value')}（区间 {pts[-1].get('lower')}~{pts[-1].get('upper')}）。")
+    parts.append("以上为基于历史窗口趋势外推的结果，不含未来故障注入信息；"
+                 "预测越远区间越宽，应以区间而非单点解读。")
+    return "".join(parts)
+
+
+def explain_forecast(data: dict) -> str:
+    """预测结果的自然语言说明（阶段2）：LLM 优先，否则用模板。"""
+    fallback = _forecast_template(data)
+    sys_prompt = (
+        "你是无线网络预测分析助手。下面是某时段区域电磁态势与频谱的预测结果 JSON。"
+        "请用中文写 2~3 句给运维人员看的说明，必须覆盖：①未来会出现什么变化；"
+        "②预计多久越阈（有 alerts 才有此项）；③不确定性与使用限制。"
+        "硬性要求：只能引用 JSON 中的数值与对象名，禁止编造数据或阈值，"
+        "不要输出 JSON、不要寒暄，只输出正文。"
+    )
+    evidence = {
+        "base_time": data.get("base_time"),
+        "alerts": [{k: a.get(k) for k in ("target", "title", "severity", "start", "end")}
+                   for a in (data.get("alerts") or [])[:3]],
+        "impacts": [{"label": i.get("label"), "current": (i.get("points") or [{}])[0].get("value"),
+                     "last": (i.get("points") or [{}])[-1].get("value")}
+                    for i in (data.get("impacts") or [])],
+        "limitations": data.get("limitations") or [],
+    }
+    return _llm_rewrite(sys_prompt, evidence, fallback, "预测")
+
+
+def _plans_template(plans: list[dict], anomaly_type: str = "") -> str:
+    """方案的模板说明（无 LLM 时使用）。只用方案里已有的名称、summary 与权衡项。"""
+    if not plans:
+        return ("本次研判未生成处理方案：当前窗口未判定为可处置的异常类型，"
+                "或缺少有效采样。")
+    items = []
+    for idx, plan in enumerate(plans, start=1):
+        sim = plan.get("simulation") or {}
+        # summary 形如「下调天线下倾角： RSRP -111.24 → …」，已含方案名且自带句号；
+        # 这里去掉尾部句号，避免拼出「…（+11%）。；2）」
+        summary = (sim.get("summary") or "").strip().rstrip("。")
+        if not summary:
+            summary = plan.get("name", "方案")
+        items.append(f"{idx}）{summary}")
+    cost = []
+    for plan in plans:
+        cost.extend(plan.get("tradeoffs") or [])
+    text = f"针对{anomaly_type or '当前异常'}共给出 {len(plans)} 个候选方案：" + "；".join(items) + "。"
+    if cost:
+        text += f"需要权衡的是：{'；'.join(dict.fromkeys(cost))}。"
+    text += ("以上对比基于经验系数估算，未在现网验证；实施前应结合现场工勘，"
+             "实施后需复测边缘点位。")
+    return text
+
+
+def explain_plans(plans: list[dict], anomaly_type: str = "") -> str:
+    """方案结果的自然语言说明（阶段2）：LLM 优先，否则用模板。"""
+    fallback = _plans_template(plans, anomaly_type)
+    sys_prompt = (
+        "你是无线网络优化助手。下面是针对某个网络异常生成的处理方案及其仿真对比结果（JSON）。"
+        "请用中文写 2~4 句说明：①每个方案做什么、预期改善什么；②各方案的代价或风险；"
+        "③实施前后需要注意什么。硬性要求：只能引用 JSON 中的方案名、数值与权衡项，"
+        "禁止编造指标或承诺效果，不要输出 JSON、不要寒暄，只输出正文。"
+    )
+    evidence = {
+        "anomaly_type": anomaly_type,
+        "plans": [{"name": p.get("name"), "summary": (p.get("simulation") or {}).get("summary"),
+                   "tradeoffs": p.get("tradeoffs"), "tasks": p.get("tasks")}
+                  for p in plans[:4]],
+    }
+    return _llm_rewrite(sys_prompt, evidence, fallback, "方案")
+
+
+def _worst_ap(diagnosis: dict) -> str | None:
+    """从研判结果的 ap_comparison 里挑"最差"的 AP（异常占比最高、等级最重）。"""
+    rows = diagnosis.get("ap_comparison") or []
+    if not rows:
+        aps = diagnosis.get("affected_aps") or []
+        return aps[0] if aps else None
+    rank = {"严重": 0, "中等": 1, "轻微": 2, "低": 3}
+    best, best_key = None, None
+    for row in rows:
+        weak = float(row.get("weak_ratio") or 0)
+        cong = float(row.get("cong_ratio") or 0)
+        key = (rank.get(row.get("level"), 9), -(weak + cong))
+        if best_key is None or key < best_key:
+            best, best_key = row, key
+    return (best or {}).get("ap_id")
+
+
+def _plan_chain(req, scenario, params) -> dict | None:
+    """工具链编排（阶段2）：一句话触发多步。
+
+    目前编排一种最常见的复合问法："哪个 AP 最差 + 它的预测/预警"。
+    为什么用确定性规则而不是让 LLM 自由规划：
+      · 无 LLM 时也要能演示，不能把核心回路押在外部服务上；
+      · 编排路径可解释、可测试（返回 chain 轨迹）；
+      · LLM 更适合做"理解问题"，而不是决定工具调用序列（易产生幻觉调用）。
+    返回 None 表示不需要编排，交回单工具分发。
+    """
+    text = req.message
+    wants_worst = any(k in text for k in ("最差", "最严重", "哪个ap", "哪个 AP", "哪里最"))
+    wants_future = any(k in text for k in ("预测", "预警", "趋势", "接下来"))
+    if not (wants_worst and wants_future):
+        return None
+
+    window_start = req.window_start or TOOL_WINDOW_START
+    window_end = req.window_end or TOOL_WINDOW_END
+    steps: list[dict] = []
+
+    diag = analyze_anomaly(AnomalyRequest(scenario=scenario,
+                                         window_start=window_start,
+                                         window_end=window_end))["data"]
+    worst = _worst_ap(diag)
+    steps.append({"tool": "analyze_anomaly", "status": "ok",
+                  "summary": f"研判完成，最差对象 {worst or '未识别'}（{diag.get('anomaly_type')} / {diag.get('level')}）"})
+
+    forecast_payload = None
+    if worst:
+        base_dt = datetime.strptime(window_end, "%Y-%m-%d %H:%M:%S")
+        hist_start = (base_dt - timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:%S")
+        forecast_payload = forecast_preview(ForecastPreviewRequest(
+            scenario=scenario, baseTime=window_end,
+            history=_TimeRange(start=hist_start, end=window_end),
+            horizonMinutes=60))["data"]
+        steps.append({"tool": "forecast_preview", "status": "ok",
+                      "summary": f"未来 60 分钟预警 {len(forecast_payload.get('alerts') or [])} 条"})
+
+    return {
+        "kind": "chain",
+        "intent": "worst_ap_forecast",
+        "chain": steps,
+        "reply": (f"已按两步执行：先研判找出最差对象，再对它做未来 60 分钟预测。"
+                  f"最差对象为 {worst or '未识别'}。"),
+        "worst_ap": worst,
+        "diagnosis": diag,
+        "forecast": forecast_payload,
+        "chart": None,
+    }
 
 
 def tool_fault_diagnosis(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:
@@ -1069,6 +1315,7 @@ _DATA_HINTS = (
     "rsrp", "sinr", "rsrq", "吞吐", "throughput", "prb", "功率", "占用", "干扰",
     "热力", "拓扑", "链路", "节点", "研判", "诊断", "故障", "弱覆盖", "拥塞", "异常",
     "预测", "趋势", "预警", "报告", "导出", "指标", "统计", "采样", "频段", "频谱",
+    "方案", "处置", "优化建议", "怎么处理", "闭环",
     "ap", "ue", "用户", "基站", "场景", "校园", "商场", "体育馆", "分析", "对比", "评估",
 )
 
@@ -1092,23 +1339,97 @@ TOOLS = {
 # 说明：ENABLE_LLM 已上移到文件顶部配置区（那里定义了环境变量 NETTUNE_ENABLE_LLM 开关）。
 
 
+# ============ 多轮会话上下文（缺口6） ============
+# 原来 ChatRequest.session_id 只声明、从未使用，于是每轮都是"失忆"的单轮调用：
+# 用户说"那给它出个方案"，系统不知道"它"是谁。
+# 这里给每个 session 留存最近若干轮的关键槽位（场景/时间窗/AP），
+# 遇到指代词时从上一轮继承，并把上下文一并交给 LLM 做意图识别。
+_SESSIONS: dict[str, list[dict]] = {}
+_SESSION_TURNS = 8          # 每个会话保留最近 8 轮
+_SESSION_LIMIT = 50         # 最多保留 50 个会话（防止长跑内存增长）
+_REFER_PATTERNS = (
+    "它", "他", "她", "那个", "这个", "该", "这条", "上一条", "上面", "刚才",
+    "再", "继续", "然后", "还有", "呢", "换成", "改成", "同样",
+)
+
+
+def _remember_turn(session_id: str, turn: dict) -> None:
+    """记录一轮对话，并按上限淘汰（会话数 + 轮数双限，避免内存无界增长）。"""
+    turns = _SESSIONS.setdefault(session_id, [])
+    turns.append(turn)
+    del turns[:-_SESSION_TURNS]
+    while len(_SESSIONS) > _SESSION_LIMIT:
+        _SESSIONS.pop(next(iter(_SESSIONS)), None)
+
+
+def _context_line(turns: list[dict]) -> str:
+    """把最近几轮压成一行上下文，供 LLM 做指代消解。"""
+    if not turns:
+        return ""
+    parts = []
+    for t in turns[-3:]:
+        seg = f"用户问「{t.get('question', '')}」→ 识别为 {t.get('intent', '')}"
+        if t.get("ap_id"):
+            seg += f"，对象 {t['ap_id']}"
+        if t.get("window_start"):
+            seg += f"，窗口 {t.get('window_start')}~{t.get('window_end')}"
+        parts.append(seg)
+    return "【对话上文】" + "；".join(parts) + "。"
+
+
 @app.post("/api/agent/chat")
 def agent_chat(req: ChatRequest):
     # 1. 第一层：统一关键词规则（llm_agent.rule_intent，独立主路径，完全不依赖LLM）
     rule = rule_intent(req.message)
     intent = rule.get("intent", "query_kpi")
     params = rule.get("params", {})
+    # 规则引擎不一定抽 AP 编号，但用户话里常直接说"AP-02"。
+    # 这里补一个显式提取，让 intent_debug.parsed 能如实反映"我理解你指的是哪台"。
+    if not params.get("ap_id"):
+        _ap_hit = re.search(r"AP\s*[-－]?\s*0*(\d+)", req.message, re.IGNORECASE)
+        if _ap_hit:
+            params["ap_id"] = f"AP-{int(_ap_hit.group(1)):02d}"
     hit = rule.get("hit", False)
 
     # 2. 第二层：关键词未命中 + 启用LLM时，才调用大模型增强识别（get_intent 内部自带降级）
+    intent_source = "rule" if hit else "fallback"
+    turns = _SESSIONS.get(req.session_id, [])
+    context_note = _context_line(turns) if turns else ""
     if not hit and ENABLE_LLM:
         try:
-            intent_obj = get_intent(req.message)
+            # 把上文一并交给 LLM，让它能理解"那给它出个方案"里的"它"
+            intent_obj = get_intent(f"{context_note}{req.message}" if context_note else req.message)
             intent = intent_obj.get("intent", intent)
             params = {**params, **intent_obj.get("params", {})}
+            # 标记意图来源，便于前端/答辩说明"这句是大模型识别的还是规则识别的"
+            if intent_obj.get("intent"):
+                intent_source = "llm" if intent_obj.get("confidence") is not None else "llm"
         except Exception:
             # get_intent 已内部降级到 rule_intent，此处仅做最终兜底，不抛出错误
             pass
+
+    # 2.4 "出个方案/怎么处置"这类请求没有独立工具：方案本身是研判的产物
+    #     （analyze_anomaly 会带上 plans），所以先落到 fault_diagnosis，
+    #     再靠下面的指代继承拿到 AP 与时间窗。否则会被判成闲聊。
+    if intent in ("chat", "query_kpi") and any(
+            word in req.message for word in ("方案", "处置", "优化建议", "怎么处理", "怎么优化")):
+        intent = "fault_diagnosis"
+
+    # 2.5 指代继承：话里出现"它/那个/再/继续"等指代词且本轮未给槽位时，沿用上一轮
+    inherited: dict = {}
+    if turns and any(word in req.message for word in _REFER_PATTERNS):
+        last = turns[-1]
+        if not params.get("scenario") and last.get("scenario"):
+            params["scenario"] = last["scenario"]
+            inherited["scenario"] = last["scenario"]
+        if not params.get("ap_id") and last.get("ap_id"):
+            params["ap_id"] = last["ap_id"]
+            inherited["ap_id"] = last["ap_id"]
+        if not req.window_start and last.get("window_start"):
+            req.window_start, req.window_end = last["window_start"], last.get("window_end")
+            inherited["window"] = f"{last['window_start']}~{last.get('window_end')}"
+        if not params.get("time_range") and last.get("time_range"):
+            params["time_range"] = last["time_range"]
 
     # 3. 第三层：最终兜底。
     #    关键词未命中且没有 LLM 可用时，只有"明显不是数据问题"的才走闲聊；
@@ -1133,15 +1454,49 @@ def agent_chat(req: ChatRequest):
         # 4.2 仍缺窗口 → 动态最近 24h
         if not req.window_start or not req.window_end:
             req.window_start, req.window_end = _default_window(scenario)
-    handler = TOOLS[intent]
-    if intent == "forecast":
-        data = handler(scenario, req.window_start, req.window_end, req.message)
+    # 3.5 工具链编排（阶段2）：复合问法先试编排，命中则跳过单工具分发
+    chain_result = _plan_chain(req, scenario, params)
+    if chain_result is not None:
+        data = chain_result
+        intent = "chain"
     else:
-        data = handler(scenario, req.window_start, req.window_end)
+        handler = TOOLS[intent]
+        if intent == "forecast":
+            data = handler(scenario, req.window_start, req.window_end, req.message)
+        else:
+            data = handler(scenario, req.window_start, req.window_end)
+    # 记录本轮，供下一轮做指代消解（缺口6）
+    _remember_turn(req.session_id, {
+        "question": req.message, "intent": intent, "scenario": scenario,
+        "window_start": req.window_start, "window_end": req.window_end,
+        "ap_id": params.get("ap_id"), "time_range": params.get("time_range"),
+    })
+    # 把"这一轮用了上文什么"显式回给前端，便于展示"AI 记得上文"
+    if isinstance(data, dict):
+        data.setdefault("multi_turn", {
+            "session_id": req.session_id,
+            "turns": len(_SESSIONS.get(req.session_id, [])),
+            "inherited": inherited,
+        })
+        # 意图可解释（阶段2）：让前端能显示"我理解你想看 X 在 Y 时段的情况"，
+        # 而不是把意图藏在后端。source 用来区分这句是规则命中还是大模型识别的。
+        data.setdefault("intent_debug", {
+            "intent": intent,
+            "source": intent_source,        # rule / llm / fallback
+            "rule_hit": hit,
+            "llm_enabled": bool(ENABLE_LLM),
+            "message": req.message,
+            "parsed": {
+                "scenario": scenario,
+                "ap_id": params.get("ap_id"),
+                "time_range": params.get("time_range"),
+                "window": {"start": req.window_start, "end": req.window_end},
+            },
+        })
     return {"code": 0, "message": "success", "data": data}
 
 
-@app.get("/api/data/events", summary="接口15：故障事件清单（来自 data/fault_events.csv）")
+@app.get("/api/data/events", summary="接口7：故障事件清单（来自 data/fault_events.csv）")
 def data_events(scenario: str | None = Query(None, description="按场景过滤，不传返回全部")):
     """返回数据生成器同步输出的故障事件清单。
 
@@ -1170,8 +1525,8 @@ def data_events(scenario: str | None = Query(None, description="按场景过滤�
     return success_response({"events": events, "count": len(events)})
 
 
-# ============ 接口16：区域电磁态势帧序列（过去 N 帧 + 未来 N 帧） ============
-@app.get("/api/forecast/spatial_frames", summary="接口16：区域电磁态势帧序列（过去N帧 + 未来N帧）")
+# ============ 接口15：区域电磁态势帧序列（过去 N 帧 + 未来 N 帧） ============
+@app.get("/api/forecast/spatial_frames", summary="接口15：区域电磁态势帧序列（过去N帧 + 未来N帧）")
 def spatial_frame_series(
     scenario: str = Query(..., description="场景，如：校园"),
     baseTime: str = Query(..., description="基准时刻 yyyy-MM-dd HH:mm:ss"),
@@ -1235,6 +1590,35 @@ def spatial_frame_series(
         "past": past, "future": future,
         "note": "每帧为 IDW 插值得到的区域场；未来帧逐格点外推，饱和时间常数 3 帧",
     })
+
+
+# ============ 接口16：信号导航建议 ============
+@app.get("/api/navigate/signal", summary="接口16：信号导航建议（位置感知+覆盖分析+移动建议）")
+def navigate_signal(
+    scenario: str = Query(..., description="场景，如：校园"),
+    start_time: str = Query(..., description="分析窗口开始 yyyy-MM-dd HH:mm:ss"),
+    end_time: str = Query(..., description="分析窗口结束 yyyy-MM-dd HH:mm:ss"),
+    ue_id: str | None = Query(None, description="目标 UE，不传取样本里的第一个"),
+    metric: str = Query("rsrp", description="依据指标：rsrp / sinr / throughput"),
+):
+    """给出"往哪走信号更好"的建议（分工文档 P1：位置感知、覆盖分析、移动建议）。
+
+    与其他模块共用同一套 IDW 区域场，保证"导航建议"和"区域态势图"口径一致——
+    否则会出现"图上这里是绿的、导航却让我走开"的矛盾。
+
+    返回里带 assumptions：这是基于区域信号场的**建议**，不是实时信道测量，
+    移动后的实际信号还受遮挡、负载、终端能力影响。前端应原样展示这些前提。
+    """
+    if metric not in ("rsrp", "sinr", "throughput"):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "metric 仅支持 rsrp / sinr / throughput")
+    rows = filter_rows(scenario, start_time, end_time)
+    if not rows:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "该窗口没有数据，无法做覆盖分析")
+    result = _sn.suggest(rows, ue_id, metric)
+    if not result.get("available"):
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], result.get("reason", "无法生成导航建议"))
+    return success_response({**result, "scenario": scenario,
+                             "window": {"start": start_time, "end": end_time}})
 
 
 # ============ 接口4：导出分析报告 ============
@@ -2054,6 +2438,11 @@ def forecast_preview(req: ForecastPreviewRequest):
         "source": "simulation", "status": "ready",
         "message": "预测窗口内发现需要关注的风险" if alerts else "预测窗口内整体正常",
         "alerts": alerts, "spectra": spectra, "impacts": impacts,
+        # 预测结果的自然语言说明（阶段2）：LLM 可用时由大模型改写，否则用模板。
+        # 模板只引用本响应里已有的数值，保证"没 key 也有话可说"且不编造。
+        "narrative": explain_forecast({"base_time": req.baseTime, "alerts": alerts,
+                                       "impacts": impacts}),
+        "narrative_source": "llm" if ENABLE_LLM else "template",
         "spectrumViews": {
             "powerId": f"{views_ap}-power", "occupancyId": f"{views_ap}-occupancy",
             "recommendedView": "occupancy" if alerts else "curve",

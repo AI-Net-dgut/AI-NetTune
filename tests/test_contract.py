@@ -131,6 +131,178 @@ def test_topology():
 
 
 # ---------------------------------------------------------------- 预警
+def test_anomaly_minute_spans():
+    """缺口5：申报书要求"定位异常的起止时间"，必须精确到分钟而不是小时。"""
+    d = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)))
+    spans = d["anomaly_spans"]
+    assert spans, "弱覆盖窗口应至少有一个异常区间"
+    first = spans[0]
+    for key in ("ap_id", "type", "start", "end", "minutes"):
+        assert key in first, f"区间缺字段 {key}"
+    # 分钟级：起止时间必须带分钟，不能只有小时
+    assert len(first["start"]) == 19 and first["start"][14:16] != "00", \
+        f"起止时间应精确到分钟，实得 {first['start']}"
+    assert first["start"] <= first["end"]
+    assert first["minutes"] >= 1
+    # 平稳窗口不应报区间
+    quiet = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO,
+        window_start="2026-01-03 02:00:00", window_end="2026-01-03 03:59:59")))
+    assert quiet["anomaly_spans"] == [], "平稳窗口不应有异常区间"
+
+
+def test_chat_multi_turn_inherit():
+    """缺口6：session_id 必须真正用于多轮上下文，指代词要能继承上一轮的槽位。"""
+    sid = "test-multiturn"
+    first = _data(main.agent_chat(main.ChatRequest(
+        message="分析一下 AP-02 在 2026-01-01 10:00 到 12:00 的弱覆盖",
+        session_id=sid, scenario=SCENARIO)))
+    assert first["intent"] == "fault_diagnosis"
+    assert first["multi_turn"]["turns"] == 1
+    assert first["multi_turn"]["inherited"] == {}, "第一轮没有上文，不应继承"
+
+    second = _data(main.agent_chat(main.ChatRequest(
+        message="那给它出个方案", session_id=sid, scenario=SCENARIO)))
+    inherited = second["multi_turn"]["inherited"]
+    assert second["multi_turn"]["turns"] == 2, "同一 session 应累计轮次"
+    assert "window" in inherited, f"「它」应继承上一轮时间窗，实得 {inherited}"
+    assert inherited.get("window", "").startswith("2026-01-01 10:00")
+    assert second["intent"] == "fault_diagnosis", "「出个方案」应走研判（方案是研判产物）"
+
+    # 换一个 session 不应继承
+    other = _data(main.agent_chat(main.ChatRequest(
+        message="那给它出个方案", session_id="test-multiturn-other", scenario=SCENARIO)))
+    assert other["multi_turn"]["inherited"] == {}, "新会话不应继承别的会话上文"
+    assert other["multi_turn"]["turns"] == 1
+
+
+def test_spatial_frames_series():
+    """接口15：区域态势帧序列——过去N帧+未来N帧，未来帧必须比当前帧"更糟"且形态保留。"""
+    d = _data(main.spatial_frame_series(
+        scenario=SCENARIO, baseTime="2026-01-01 10:08:00", historyMinutes=90,
+        frameMinutes=10, pastFrames=8, futureFrames=6, metric="rsrp"))
+    assert d["shape"]["rows"] > 0 and d["shape"]["cols"] > 0, "应返回网格尺寸"
+    assert len(d["past"]) == 8, f"过去帧数应为 8，实得 {len(d['past'])}"
+    assert len(d["future"]) == 6, f"未来帧数应为 6，实得 {len(d['future'])}"
+
+    def flat(frame):
+        return [v for row in frame["values"] for v in row if v is not None]
+
+    for frame in d["past"] + d["future"]:
+        assert len(frame["start"]) == 19 and frame["start"] < frame["end"]
+        vals = flat(frame)
+        assert vals, "每帧都应有有效数值"
+        assert all(-140 <= v <= -40 for v in vals), "RSRP 应落在物理范围内"
+
+    # 未来帧的时间必须连续向后（可播放的前提）
+    for prev, nxt in zip(d["future"], d["future"][1:]):
+        assert prev["end"] == nxt["start"], "未来帧时间应首尾相接"
+
+    # 恶化期：未来末帧的最差格应不优于当前帧（外推方向正确），且空间落差扩大
+    def spread(frame):
+        vals = flat(frame)
+        return max(vals) - min(vals)
+
+    assert spread(d["future"][-1]) >= spread(d["past"][-1]) - 1.0, \
+        "弱覆盖渐变期未来帧的空间落差不应缩小（否则外推方向错了）"
+
+
+def test_signal_navigation():
+    """缺口8：信号导航 = 位置感知 + 覆盖分析 + 移动建议（分工文档 P1）。"""
+    r = main.navigate_signal(scenario=SCENARIO, start_time=WEAK_START, end_time=WEAK_END,
+                             ue_id=None, metric="rsrp")
+    assert r["code"] == 0, r.get("message")
+    d = r["data"]
+    assert d["available"] is True
+    assert d["ue_id"].startswith("UE-")
+    assert d["samples"] > 0
+    cur = d["current"]
+    for key in ("x", "y", "field_value", "measured_value"):
+        assert key in cur, f"当前位置缺字段 {key}"
+    advice = d["advice"]
+    assert advice["action"] in ("move", "stay")
+    if advice["action"] == "move":
+        assert advice["direction"] in ("东", "东北", "北", "西北", "西", "西南", "南", "东南")
+        assert advice["distance_m"] > 0
+        assert advice["gain_db"] >= 1.0
+        assert "建议向" in advice["text"]
+        # 目标点必须落在采样覆盖范围内（不外推到未知区域）
+        assert d["grid"]["x_range"][0] <= advice["target_x"] <= d["grid"]["x_range"][1]
+        assert d["grid"]["y_range"][0] <= advice["target_y"] <= d["grid"]["y_range"][1]
+    # 必须如实给出前提，不能包装成确定性结论
+    assert len(d["assumptions"]) >= 2
+
+
+def test_chat_intent_debug():
+    """阶段2：意图必须可解释——返回理解到的槽位与来源，而不是藏在后端。"""
+    d = _data(main.agent_chat(main.ChatRequest(
+        message="分析一下 AP-02 在 2026-01-01 10:00 到 12:00 的弱覆盖",
+        session_id="test-intent-debug", scenario=SCENARIO)))
+    dbg = d["intent_debug"]
+    assert dbg["intent"] == "fault_diagnosis"
+    assert dbg["source"] in ("rule", "llm", "fallback")
+    assert dbg["parsed"]["ap_id"] == "AP-02", f"应抽取到 AP-02，实得 {dbg['parsed'].get('ap_id')}"
+    assert dbg["parsed"]["scenario"] == SCENARIO
+    assert dbg["parsed"]["window"]["start"].startswith("2026-01-01 10:00")
+
+    # AP 编号写法要宽容：ap-1 / AP 3 都应识别
+    for text, want in (("看看ap-1的情况", "AP-01"), ("AP 3 现在怎么样", "AP-03")):
+        e = _data(main.agent_chat(main.ChatRequest(
+            message=text, session_id="test-intent-debug-2", scenario=SCENARIO)))
+        assert e["intent_debug"]["parsed"]["ap_id"] == want, f"「{text}」应得 {want}"
+
+
+def test_forecast_narrative():
+    """阶段2：预测结果必须有自然语言说明；无 LLM 时走模板，且模板不编造数据。"""
+    d = _preview("2026-01-01 10:08:00")
+    assert d["narrative"], "预测结果应带自然语言说明"
+    assert d["narrative_source"] in ("llm", "template")
+    text = d["narrative"]
+    assert len(text) > 20
+    # 模板必须说明不确定性/限制，不能只报喜
+    assert ("区间" in text) or ("不确定性" in text) or ("不含未来故障" in text), text
+    if d["narrative_source"] == "template":
+        # 有告警时应给出"预计 N 分钟后"这类提前量表述
+        if d["alerts"]:
+            assert ("分钟后" in text) or ("已处于越阈" in text)
+
+
+def test_plan_narrative():
+    """阶段2：方案结果也必须有自然语言说明，且如实给出代价与限制。"""
+    d = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)))
+    assert d["plans"], "覆盖故障应有候选方案"
+    text = d["plan_narrative"]
+    assert text and len(text) > 20
+    assert d["plan_narrative_source"] in ("llm", "template")
+    # 必须点出方案数量与代价，不能只报好处
+    assert "候选方案" in text or "方案" in text
+    assert ("权衡" in text) or ("代价" in text) or ("风险" in text), text
+    # 必须声明这是估算而非现网验证
+    assert ("未在现网验证" in text) or ("经验系数" in text), text
+    # 拼接质量
+    assert "。；" not in text
+
+
+def test_chat_tool_chain():
+    """阶段2：复合问法应触发多步编排，并返回可解释的执行轨迹。"""
+    d = _data(main.agent_chat(main.ChatRequest(
+        message="哪个 AP 最差，接下来会怎样", session_id="test-chain", scenario=SCENARIO,
+        window_start=WEAK_START, window_end=WEAK_END)))
+    assert d.get("kind") == "chain", f"应走编排，实得 {d.get('kind')}"
+    steps = d.get("chain") or []
+    assert len(steps) >= 2, "编排至少两步"
+    tools = [s["tool"] for s in steps]
+    assert tools[0] == "analyze_anomaly", f"第一步应研判，实得 {tools}"
+    assert "forecast_preview" in tools, f"第二步应做预测，实得 {tools}"
+    assert d.get("worst_ap", "").startswith("AP-"), f"应识别最差 AP，实得 {d.get('worst_ap')}"
+    for step in steps:
+        assert step["status"] == "ok" and step["summary"]
+    # 编排结果要能自洽：最差 AP 出现在研判的受影响对象里
+    assert d["worst_ap"] in (d["diagnosis"].get("affected_aps") or [d["worst_ap"]])
+
+
 def test_forecast_preview_early_warning():
     """渐变期必须能给出提前量 —— 这是申报书的核心里程碑。
 
