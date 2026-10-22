@@ -32,6 +32,17 @@ temp/
 /frontend/.env.*
 !/frontend/.env.example
 
+# 根目录环境变量（安全兜底）
+# 当前 LLM_API_KEY 走系统环境变量（setx），仓库里没有任何 .env 文件；
+# 但只要有 .env 留在根目录就可能被 `git add -A` 误提交，这里先堵住。
+/.env
+/.env.*
+!/.env.example
+# 其它常见凭据文件名
+*.pem
+*.key
+!data/*.key
+
 # 导出的报告（运行时产物，不入库）
 reports/
 
