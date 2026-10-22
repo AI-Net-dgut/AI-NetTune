@@ -43,6 +43,73 @@ export const DEFAULT_SCOPE: QueryScope = {
   end: "2026-01-01 11:59:59",
 };
 
+/** 区域态势帧序列（接口16）：每帧是一张 grid×grid 的二维场 */
+export interface SpatialFrame {
+  start: string;
+  end: string;
+  values: (number | null)[][];
+}
+export interface SpatialFrameSeries {
+  scenario: string;
+  metric: string;
+  frameMinutes: number;
+  xRange: [number, number];
+  yRange: [number, number];
+  rows: number;
+  cols: number;
+  past: SpatialFrame[];
+  future: SpatialFrame[];
+  note: string;
+}
+
+/**
+ * 读取区域电磁态势帧序列（过去N帧 + 未来N帧）。
+ *
+ * 与 fetchFaultEvents 同样的理由：态势图的参考形态是"过去帧 → 未来帧"的二维区域图，
+ * 而接口11 的频谱预测是频率维度的一条带，只能画成横纹。帧序列由接口16 提供。
+ */
+export async function fetchSpatialFrames(
+  scenario: string, baseTime: string, signal?: AbortSignal,
+  options: { frameMinutes?: number; pastFrames?: number; futureFrames?: number; metric?: string } = {},
+): Promise<SpatialFrameSeries> {
+  // 注意：request() 的规则是"有 body 就 POST"，而这些是 GET 接口，
+  // 传 body 会变成 POST → 405。所以参数必须拼进查询字符串。
+  const query = new URLSearchParams({
+    scenario,
+    baseTime,
+    frameMinutes: String(options.frameMinutes ?? 6),
+    pastFrames: String(options.pastFrames ?? 6),
+    futureFrames: String(options.futureFrames ?? 3),
+    metric: options.metric ?? "rsrp",
+  }).toString();
+  const data = await request(`/forecast/spatial_frames?${query}`, signal);
+  const shape = obj(data.shape ?? {});
+  const toFrame = (v: unknown): SpatialFrame => {
+    const f = obj(v);
+    return {
+      start: str(f.start),
+      end: str(f.end),
+      values: Array.isArray(f.values)
+        ? f.values.map((row) => (Array.isArray(row) ? row.map((x) => (x == null ? null : numeric(x))) : []))
+        : [],
+    };
+  };
+  const pick = (v: unknown) => (Array.isArray(v) ? v.map(toFrame) : []);
+  return {
+    scenario: str(data.scenario),
+    metric: str(data.metric),
+    frameMinutes: numeric(data.frame_minutes) || 6,
+    xRange: [(numeric((data.x_range as unknown[])?.[0])), (numeric((data.x_range as unknown[])?.[1]))],
+    yRange: [(numeric((data.y_range as unknown[])?.[0])), (numeric((data.y_range as unknown[])?.[1]))],
+    rows: numeric(shape.rows) || 0,
+    cols: numeric(shape.cols) || 0,
+    past: pick(data.past),
+    future: pick(data.future),
+    note: str(data.note),
+  };
+}
+
+
 /** 故障事件（来自 data/fault_events.csv，单一事实来源） */
 export interface FaultEvent {
   eventId: string;
@@ -64,7 +131,9 @@ export interface FaultEvent {
  * 由后端读它、前端消费它，"事件"才有唯一来源。
  */
 export async function fetchFaultEvents(scenario?: string, signal?: AbortSignal): Promise<FaultEvent[]> {
-  const data = await request("/data/events", signal, scenario ? { scenario } : undefined);
+  // 同 fetchSpatialFrames：GET 接口不能传 body，否则会被 request() 当成 POST → 405
+  const query = scenario ? `?${new URLSearchParams({ scenario }).toString()}` : "";
+  const data = await request(`/data/events${query}`, signal);
   const list = Array.isArray(data.events) ? data.events : [];
   return list.map((v) => {
     const e = obj(v);

@@ -1,0 +1,88 @@
+/* 区域电磁态势序列（二维帧格子）。 */
+
+.ain-spatial-grid {
+  margin: 12px 0 4px;
+}
+
+.ain-spatial-grid > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.ain-spatial-grid > header h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f3a5f;
+}
+
+.ain-spatial-grid > header span {
+  font-size: 11px;
+  color: #6b7f96;
+}
+
+.ain-spatial-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.ain-spatial-cell {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 正方形近似的缩略图：canvas 内部分辨率是 26×26，靠 CSS 放大 */
+.ain-spatial-cell-canvas {
+  display: block;
+  width: 62px;
+  height: 62px;
+  border: 1px solid #d7e0ec;
+  border-radius: 3px;
+  background: #f7fafd;
+  image-rendering: pixelated;
+}
+
+.ain-spatial-cell.is-future .ain-spatial-cell-canvas {
+  border-color: #c17b25;
+  box-shadow: 0 0 0 1px rgba(193, 123, 37, 0.18);
+}
+
+.ain-spatial-cell figcaption {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.25;
+  font-size: 10px;
+  color: #52657d;
+}
+
+.ain-spatial-cell.is-future figcaption span {
+  color: #a8661c;
+  font-weight: 600;
+}
+
+.ain-spatial-cell figcaption time {
+  font-size: 9px;
+  color: #8b9bb0;
+}
+
+.ain-spatial-sep {
+  align-self: stretch;
+  width: 1px;
+  margin: 0 2px 20px;
+  background: repeating-linear-gradient(to bottom, #c17b25 0 4px, transparent 4px 8px);
+}
+
+.ain-spatial-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #8b9bb0;
+}
