@@ -1567,7 +1567,7 @@ def data_events(scenario: str | None = Query(None, description="按场景过滤�
 def spatial_frame_series(
     scenario: str = Query(..., description="场景，如：校园"),
     baseTime: str = Query(..., description="基准时刻 yyyy-MM-dd HH:mm:ss"),
-    historyMinutes: int = Query(48, ge=6, le=720, description="历史总时长（分钟）"),
+    historyMinutes: int = Query(48, ge=6, le=1920, description="历史总时长（分钟）"),
     frameMinutes: int = Query(6, ge=1, le=240, description="每帧覆盖的分钟数"),
     pastFrames: int = Query(6, ge=1, le=12, description="返回的历史帧数"),
     futureFrames: int = Query(3, ge=1, le=12, description="预测的未来帧数"),

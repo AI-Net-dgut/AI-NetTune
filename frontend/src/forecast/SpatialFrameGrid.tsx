@@ -91,7 +91,7 @@ export default function SpatialFrameGrid({
   // 未来帧数 = 总时长 / 每帧时长（1440/240=6；若有余数则补一帧）
   const futureCount = Math.max(1, Math.min(12, Math.ceil(horizonMinutes / frameMinutes)));
   // 历史帧必须和每帧时长匹配，否则"每帧 60 分钟 + 历史 48 分钟"只能拼出 1 个历史帧
-  const historyMinutes = Math.max(6, Math.min(720, frameMinutes * pastFrames));
+  const historyMinutes = Math.max(6, Math.min(1920, frameMinutes * pastFrames));
 
   useEffect(() => {
     const controller = new AbortController();

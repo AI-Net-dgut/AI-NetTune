@@ -23,6 +23,7 @@ import math
 GRID = 26          # 每边格点数：26×26=676，足够看出区域形状，传输也不大
 POWER = 2.0        # IDW 幂次：越大越"局地"，越小越平滑
 TAU_FRAMES = 3.0   # 饱和外推的时间常数（帧）
+MAX_IDW_POINTS = 400  # 单帧参与插值的采样点上限（超了就等距下采样，把耗时钉成常数）
 
 
 def _idw(points: list[tuple[float, float, float]], xs: list[float], ys: list[float],
@@ -64,6 +65,15 @@ def build_grid(rows: list[dict], metric: str = "rsrp", grid: int = GRID) -> dict
     if not pts:
         return {"values": [], "x_range": [0, 0], "y_range": [0, 0], "grid": grid, "points": 0}
 
+    # IDW 的复杂度是 O(输入点 × 格数)，格数固定 676，所以耗时只随采样点线性增长。
+    # 历史窗口拉长到十几小时时点数会到上万，实测 1920 分钟要 1.5 秒（拖动会卡）。
+    # 这里做等距下采样把点数钉在 MAX_IDW_POINTS：空间覆盖基本不变（点本身高度冗余），
+    # 但耗时从线性无界变成常数级。
+    total_points = len(pts)
+    if total_points > MAX_IDW_POINTS:
+        step = total_points / MAX_IDW_POINTS
+        pts = [pts[int(i * step)] for i in range(MAX_IDW_POINTS)]
+
     xs_all = [p[0] for p in pts]
     ys_all = [p[1] for p in pts]
     # 采样点分布范围外留 5% 边距，避免边缘插值外推
@@ -79,7 +89,8 @@ def build_grid(rows: list[dict], metric: str = "rsrp", grid: int = GRID) -> dict
         "x_range": [round(x0, 1), round(x1, 1)],
         "y_range": [round(y0, 1), round(y1, 1)],
         "grid": grid,
-        "points": len(pts),
+        "points": total_points,
+        "points_used": len(pts),
     }
 
 

@@ -946,7 +946,7 @@ POST /api/forecast/analyze
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `scenario` / `baseTime` | 必填 | 场景与基准时刻 |
-| `historyMinutes` | 48 | 历史总时长（6~720 分钟） |
+| `historyMinutes` | 48 | 历史总时长（6~1920 分钟） |
 | `frameMinutes` | 6 | 每帧覆盖分钟数（1~240） |
 | `pastFrames` | 6 | 历史帧数（1~12） |
 | `futureFrames` | 3 | 预测帧数（1~12） |
