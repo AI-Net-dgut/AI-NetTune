@@ -32,6 +32,12 @@ ENERGY_EPS = 0.02
 TAU_MINUTES = 20.0
 # 变化率场的跨频段平滑窗口（频段数，奇数）
 SMOOTH_BANDS = 5
+# 细节回填强度：平滑只用来压噪声，频段间原有差异要按比例加回去，
+# 否则整场被压成"齐平下降"，图上仍是均匀变色而看不出形态演化。
+DETAIL_GAIN = 0.6
+# 形态放大：当前偏离场均值的频段，其变化率再放大一点，
+# 让已有的凹陷/凸起随时间继续扩展（对应参考图里干扰斑块的生长）。
+SHAPE_GAIN = 0.35
 
 
 def _smooth(values: list[float], window: int = SMOOTH_BANDS) -> list[float]:
@@ -46,6 +52,35 @@ def _smooth(values: list[float], window: int = SMOOTH_BANDS) -> list[float]:
         chunk = values[lo:hi]
         out.append(sum(chunk) / len(chunk))
     return out
+
+
+def field_from_slopes(slopes: list[float], values: list[float] | None = None) -> list[float]:
+    """把逐频段斜率整理成"变化率场"。
+
+    三步（这是形态能否演化的关键）：
+      1. 跨频段平滑压噪声；
+      2. 把原始斜率相对平滑均值的**细节按 DETAIL_GAIN 加回去**，
+         避免整场被压成齐平下降；
+      3. 若给了当前帧数值，按"离场均值的偏离度"再放大（SHAPE_GAIN），
+         让已经存在的凹陷/凸起随时间继续生长。
+
+    没有第 3 步时，未来帧只是整体平移，视觉上与"整块变色"差别不大。
+    """
+    if not slopes:
+        return []
+    smoothed = _smooth(slopes, SMOOTH_BANDS if len(slopes) > SMOOTH_BANDS else 3)
+    mean_sm = sum(smoothed) / len(smoothed)
+    field = [smoothed[i] + (slopes[i] - mean_sm) * DETAIL_GAIN for i in range(len(slopes))]
+
+    if values:
+        n = min(len(field), len(values))
+        mean_v = sum(values[:n]) / n
+        spread = max((abs(v - mean_v) for v in values[:n]), default=0.0)
+        if spread > 1e-6:
+            for i in range(n):
+                deviation = (values[i] - mean_v) / spread      # [-1, 1]
+                field[i] *= (1.0 + SHAPE_GAIN * deviation)
+    return field
 
 
 def _slope_per_minute(times_min: list[float], values: list[float]) -> float:
@@ -108,14 +143,15 @@ def predict_frames(times_min: list[float], frames: list[list[float]],
     n_bands = min(len(f) for f in valid)
     # 每频段斜率（单位/分钟）
     slopes = [_slope_per_minute(times_min, [f[b] for f in valid]) for b in range(n_bands)]
-    field = _smooth(slopes)
+    last = list(valid[-1][:n_bands])
+    # 变化率场：平滑 + 细节回填 + 结构放大（见 field_from_slopes 注释）
+    field = field_from_slopes(slopes, last)
 
     # 场能量太小时直接保持当前形态（不制造假趋势）
     energy = max((abs(d) for d in field), default=0.0)
     if energy < ENERGY_EPS:
         field = [0.0] * n_bands
 
-    last = list(valid[-1][:n_bands])
     steps = max(1, int(horizon_minutes // step_minutes))
     out: list[list[float]] = []
     for k in range(1, steps + 1):

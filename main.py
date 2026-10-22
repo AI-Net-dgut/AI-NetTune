@@ -1757,20 +1757,33 @@ def forecast_preview(req: ForecastPreviewRequest):
             t = base_dt
             for step in range(int(req.horizonMinutes)):
                 values = []
-                # 按"场"推进而不是逐段独立外推：先把各频段斜率做跨频段平滑，
-                # 保留主导形态；场能量过小才判为静止。
-                slopes_field = _sf._smooth(
-                    [band_trend[metric][b["band_id"]][0] or 0.0 for b in bands])
+                # 按"场"推进而不是逐段独立外推：平滑 + 细节回填 + 结构放大，
+                # 既压噪声、又保住频段间差异（否则未来帧只是整体平移）。
+                _band_slopes = [band_trend[metric][b["band_id"]][0] or 0.0 for b in bands]
+                _last_values = [band_trend[metric][b["band_id"]][1] or 0.0 for b in bands]
+                slopes_field = _sf.field_from_slopes(_band_slopes,
+                                                     [v if v else None for v in _last_values])
                 if max((abs(x) for x in slopes_field), default=0.0) < _sf.ENERGY_EPS:
                     slopes_field = [0.0] * len(bands)
+                # τ 必须随预测长度伸缩：固定 20 分钟时，120 分钟预测在 t=60 就已饱和到
+                # 95%，后半段等于把平台值复制一遍 → 图上又是一块平色。
+                _tau = max(_sf.TAU_MINUTES, req.horizonMinutes * 0.6)
+                _total_factor = _tau * (1.0 - math.exp(-req.horizonMinutes / _tau))
+                # 归一化：若场外推到末端会整体撞上 max_drift 上限，所有频段会被夹到同一
+                # 个值（实测末帧各频段变化跨度 = 0），形态又消失。这里按峰值等比缩放，
+                # 让最大值落在上限的 80%，频段间差异得以保留。
+                _known = [v for v in (band_trend[metric][b["band_id"]][1] for b in bands) if v is not None]
+                _drift_cap = _profile_drift(metric, sum(_known) / len(_known)) if _known else 1e9
+                _peak = max((abs(x) for x in slopes_field), default=0.0) * _total_factor
+                _scale = min(1.0, (_drift_cap * 0.8) / _peak) if _peak > 1e-9 else 1.0
                 for idx, b in enumerate(bands):
                     _slope, last = band_trend[metric][b["band_id"]]
                     if last is None:
                         values.append(None)
                         continue
-                    # 饱和外推：v = last + d·τ·(1−e^(−t/τ))，保留各频段相对差异
-                    factor = _sf.TAU_MINUTES * (1.0 - math.exp(-step / _sf.TAU_MINUTES))
-                    value = last + slopes_field[idx] * factor
+                    factor = _tau * (1.0 - math.exp(-step / _tau))
+                    value = last + slopes_field[idx] * factor * _scale
+                    # 仍保留硬上限兜底（归一化后正常不会触发）
                     drift = _profile_drift(metric, last)
                     value = max(last - drift, min(last + drift, value))
                     lo_b, hi_b = FORECAST_PROFILES[metric]["bounds"]
