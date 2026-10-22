@@ -70,13 +70,14 @@ export interface SpatialFrameSeries {
  */
 export async function fetchSpatialFrames(
   scenario: string, baseTime: string, signal?: AbortSignal,
-  options: { frameMinutes?: number; pastFrames?: number; futureFrames?: number; metric?: string } = {},
+  options: { historyMinutes?: number; frameMinutes?: number; pastFrames?: number; futureFrames?: number; metric?: string } = {},
 ): Promise<SpatialFrameSeries> {
   // 注意：request() 的规则是"有 body 就 POST"，而这些是 GET 接口，
   // 传 body 会变成 POST → 405。所以参数必须拼进查询字符串。
   const query = new URLSearchParams({
     scenario,
     baseTime,
+    historyMinutes: String(options.historyMinutes ?? 48),
     frameMinutes: String(options.frameMinutes ?? 6),
     pastFrames: String(options.pastFrames ?? 6),
     futureFrames: String(options.futureFrames ?? 3),

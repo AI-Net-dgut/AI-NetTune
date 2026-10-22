@@ -41,22 +41,11 @@
   color: #7890ab;
 }
 
-.ain-spatial-horizon {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  font-size: 11px;
-  color: #52657d;
-}
+/* .ain-spatial-horizon 已随组件内下拉一并移除：预测时长统一由弹窗顶部控件控制 */
 
-.ain-spatial-horizon select {
-  font-size: 11px;
-  padding: 2px 4px;
-  border: 1px solid #cfdcec;
-  border-radius: 3px;
-  background: #fff;
-  color: #1f3a5f;
+.ain-spatial-cover {
+  color: #a8661c;
+  font-weight: 600;
 }
 
 /* ---- 大图 + 右侧控制栏 ---- */

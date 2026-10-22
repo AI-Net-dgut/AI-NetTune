@@ -98,7 +98,8 @@ export default function ForecastDialog({ request, result, pending, error, onClos
                   第一眼就能看到（含大图/时间轴/播放/预测时长）。
                   原来它挂在 SpectrumChart 内部，只有在切到"功率时频/占用态势"
                   tab 并向下滚动后才可见，首屏看不到。 */}
-              <SpatialFrameGrid scenario={result.scenario} baseTime={result.baseTime} />
+              <SpatialFrameGrid scenario={result.scenario} baseTime={result.baseTime}
+                horizonMinutes={request.horizonMinutes} />
               <SpectrumViewPanel result={result} alert={alert} focusTime={request.targetWindow?.start} />
               {/* 「全网参考 · SINR预测」块已下线：后端只给全网均值，单标量序列在
                   60 分钟窗口内无显著趋势（_gated_slope 判为 0），画出来是一条平线，

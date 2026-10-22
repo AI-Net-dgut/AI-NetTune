@@ -67,42 +67,43 @@ function FrameCanvas({ frame, min, max, big = false }: {
   return <canvas ref={ref} className={big ? "ain-spatial-main-canvas" : "ain-spatial-cell-canvas"} />;
 }
 
-/** 预测时长档位：内部换算成"每帧分钟数"，帧数固定 6 帧 */
-const HORIZON_OPTIONS = [
-  { label: "30 分钟", minutes: 5 },
-  { label: "1 小时", minutes: 10 },
-  { label: "2 小时", minutes: 20 },
-  { label: "4 小时", minutes: 40 },
-];
+/** 未来帧数固定 6 帧；每帧时长由上层"预测时长"换算而来 */
 const FUTURE_FRAMES = 6;
 
 export default function SpatialFrameGrid({
-  scenario, baseTime, frameMinutes = 10, pastFrames = 8, futureFrames = FUTURE_FRAMES, metric = "rsrp",
+  scenario, baseTime, pastFrames = 8, metric = "rsrp", horizonMinutes = 60,
 }: {
   scenario: string;
   baseTime: string;
-  frameMinutes?: number;
   pastFrames?: number;
-  futureFrames?: number;
   metric?: string;
+  /** 预测总时长（分钟），由弹窗的「预测时长」下拉统一控制，本组件不再单独提供开关 */
+  horizonMinutes?: number;
 }) {
   const [series, setSeries] = useState<SpatialFrameSeries | null>(null);
   const [error, setError] = useState("");
   const [index, setIndex] = useState(-1);       // -1 表示"跟随数据默认值"
   const [playing, setPlaying] = useState(false);
-  const [horizon, setHorizon] = useState(frameMinutes);   // 每帧分钟数，由"预测时长"决定
+
+  // 每帧时长按预测总时长反算，让未来帧数保持在 6 帧左右、又不超接口上限：
+  //   30分→5分/帧，60→10，120→20，240→40，1440→240（6 帧正好覆盖 24 小时）
+  const frameMinutes = Math.max(1, Math.min(240, Math.round(horizonMinutes / FUTURE_FRAMES)));
+  // 未来帧数 = 总时长 / 每帧时长（1440/240=6；若有余数则补一帧）
+  const futureCount = Math.max(1, Math.min(12, Math.ceil(horizonMinutes / frameMinutes)));
+  // 历史帧必须和每帧时长匹配，否则"每帧 60 分钟 + 历史 48 分钟"只能拼出 1 个历史帧
+  const historyMinutes = Math.max(6, Math.min(720, frameMinutes * pastFrames));
 
   useEffect(() => {
     const controller = new AbortController();
     fetchSpatialFrames(scenario, baseTime, controller.signal,
-      { frameMinutes: horizon, pastFrames, futureFrames, metric })
+      { historyMinutes, frameMinutes, pastFrames, futureFrames: futureCount, metric })
       .then((data) => { if (!controller.signal.aborted) { setSeries(data); setError(""); } })
       .catch((reason) => {
         if (controller.signal.aborted) return;
         setError(reason instanceof Error ? reason.message : "区域态势获取失败");
       });
     return () => controller.abort();
-  }, [scenario, baseTime, horizon, pastFrames, futureFrames, metric]);
+  }, [scenario, baseTime, historyMinutes, frameMinutes, pastFrames, futureCount, metric]);
 
   const frames = useMemo(
     () => (series ? [...series.past, ...series.future] : []),
@@ -146,17 +147,13 @@ export default function SpatialFrameGrid({
         <h4>区域电磁态势序列</h4>
         <span>
           {metric.toUpperCase()} · 色阶 {min.toFixed(0)}~{max.toFixed(0)}{unit} · 每帧 {series.frameMinutes} 分钟 ·
-          区域 X {series.xRange[0].toFixed(0)}~{series.xRange[1].toFixed(0)} m
+          <strong className="ain-spatial-cover">
+            覆盖 未来 {series.future.length * series.frameMinutes} 分钟
+          </strong>
+          · 区域 X {series.xRange[0].toFixed(0)}~{series.xRange[1].toFixed(0)} m
         </span>
-        <label className="ain-spatial-horizon">
-          预测时长
-          <select aria-label="选择预测时长" value={horizon}
-            onChange={(event) => { setPlaying(false); setIndex(-1); setHorizon(Number(event.target.value)); }}>
-            {HORIZON_OPTIONS.map(o => (
-              <option key={o.minutes} value={o.minutes}>{o.label}</option>
-            ))}
-          </select>
-        </label>
+        {/* 预测时长不在这里单独提供下拉：弹窗顶部那一个才是权威控件（它驱动接口11
+            重新预测），本组件只按它换算每帧时长，避免两个下拉各说各话。 */}
       </header>
 
       <div className="ain-spatial-stage">

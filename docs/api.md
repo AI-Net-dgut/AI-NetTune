@@ -946,10 +946,10 @@ POST /api/forecast/analyze
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `scenario` / `baseTime` | 必填 | 场景与基准时刻 |
-| `historyMinutes` | 48 | 历史总时长 |
-| `frameMinutes` | 6 | 每帧覆盖分钟数（1~60） |
+| `historyMinutes` | 48 | 历史总时长（6~720 分钟） |
+| `frameMinutes` | 6 | 每帧覆盖分钟数（1~240） |
 | `pastFrames` | 6 | 历史帧数（1~12） |
-| `futureFrames` | 3 | 预测帧数（1~6） |
+| `futureFrames` | 3 | 预测帧数（1~12） |
 | `metric` | rsrp | `rsrp` / `sinr` / `throughput` |
 
 返回 `{shape:{grid,rows,cols}, x_range, y_range, past:[{start,end,points,values}], future:[...], note}`。
