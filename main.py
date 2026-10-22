@@ -1388,34 +1388,11 @@ def get_basic_topology(
         }
     }
 
-#新增实时数据接口
-@app.get("/api/data/realtime", summary="获取实时增量监测数据")
-def api_get_realtime_data(last_time: str = None):
-    """
-    获取分钟级增量监测数据
-    - last_time: 上次拉取的最大时间戳，格式 yyyy-MM-dd HH:mm:ss，不传则返回最近10条
-    """
-    # 参数格式校验
-    if last_time is not None:
-        try:
-            datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return {
-                "code": 40002,
-                "message": "时间参数格式错误，正确格式：yyyy-MM-dd HH:mm:ss",
-                "data": None
-            }
-
-    records = get_incremental_data(last_time)
-    return {
-        "code": 0,
-        "message": "success",
-        "data": {
-            "total": len(records),
-            "columns": DATA_COLUMNS,
-            "records": records
-        }
-    }
+# 【已删除】GET /api/data/realtime（审查报告 B-1）
+#   原实现返回 get_incremental_data() 的结果，字段是 DATA_COLUMNS 那套旧结构，
+#   与主数据接口 /api/data/query 的 18 列契约完全不同；前端 0 引用（grep 全仓无命中），
+#   docs/api.md 里也没有它的契约。保留它只会让"接口清单"多一个没人用、语义又混乱的项。
+#   若将来确实需要"增量拉取"，应按 /api/data/query 的字段契约重新实现，而不是复用旧结构。
 
 
 # ========== 接口5：区域信号/频谱态势预测（Prophet 时序模型，P1 任务1） ==========
