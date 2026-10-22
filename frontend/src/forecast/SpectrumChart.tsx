@@ -2,7 +2,6 @@ import { memo, useId, useMemo } from "react";
 import { toEpoch } from "../services/backend";
 import { spectrumCells, spectrumColor } from "./charts";
 import { spectrumHighlightRanges, spectrumTimeTicks } from './spectrumModel';
-import SpatialFrameGrid from './SpatialFrameGrid';
 import { FORECAST_LIMITS } from './config';
 import type { ForecastResult, SpectrumForecast, ForecastAlert } from "./types";
 
@@ -45,8 +44,8 @@ function SpectrumChart({ result, spectrum, alert }: { result: ForecastResult; sp
     </svg>
     {(spectrum.history.length > FORECAST_LIMITS.displayFrames || spectrum.predicted.length > FORECAST_LIMITS.displayFrames) && <p className="ain-forecast-chart-note">长时段热力图按有效时长汇总显示；缺失频段留空，频谱曲线仍可选择原始采样帧。</p>}
     {!spectrum.predicted.length && <p className="ain-forecast-chart-note">暂无未来频谱预测；当前仅展示历史观测。</p>}
-    {/* 区域电磁态势序列：每帧是二维区域场（接口16），与上面的频率维度图互补 */}
-    <SpatialFrameGrid scenario={result.scenario} baseTime={result.baseTime} />
+    {/* 区域电磁态势序列已移到 ForecastDialog 的弹窗层级（放在频谱三视图之前），
+        这样它跳出 tab 体系、首屏即可见；这里不再重复渲染。 */}
   </figure>;
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ChartPanel from "../components/charts/ChartPanel";
 import SpectrumViewPanel from "./SpectrumViewPanel";
+import SpatialFrameGrid from "./SpatialFrameGrid";
 import { forecastTrendOption } from "./charts";
 import type { ForecastRequest, ForecastResult, ForecastHandoff } from "./types";
 import { FORECAST_HORIZONS } from './config';
@@ -92,6 +93,12 @@ export default function ForecastDialog({ request, result, pending, error, onClos
               {alert && <small>预计时段：{alert.start} — {alert.end} · 详细原因与建议可交给AI研判</small>}
             </section>
             <div className="ain-forecast-chart-stack">
+              {/* 区域电磁态势序列提到弹窗层级、放在频谱三视图之前：
+                  它跳出"频谱曲线/功率时频/占用态势"的 tab 体系，所以点开预测预警
+                  第一眼就能看到（含大图/时间轴/播放/预测时长）。
+                  原来它挂在 SpectrumChart 内部，只有在切到"功率时频/占用态势"
+                  tab 并向下滚动后才可见，首屏看不到。 */}
+              <SpatialFrameGrid scenario={result.scenario} baseTime={result.baseTime} />
               <SpectrumViewPanel result={result} alert={alert} focusTime={request.targetWindow?.start} />
               {/* 「全网参考 · SINR预测」块已下线：后端只给全网均值，单标量序列在
                   60 分钟窗口内无显著趋势（_gated_slope 判为 0），画出来是一条平线，
@@ -102,7 +109,7 @@ export default function ForecastDialog({ request, result, pending, error, onClos
                 <ChartPanel title={`${impact.label}预测`} description={`${impact.unit} · 实线为历史，虚线为预测`} height={144} option={trend} />
                 <p className="ain-forecast-chart-legend"><span>━ 历史观测</span><span>┄ 未来预测</span>{impact.predicted.some(p => p.lower != null && p.upper != null) && <span>▰ 预测区间</span>}{impact.threshold && <span className="is-threshold">{impact.threshold.direction === "below" ? "低于" : "高于"}阈值需关注</span>}</p>
                 {!impact.predicted.length && <p className="ain-forecast-chart-note">暂无该指标的未来预测，当前仅显示历史。</p>}</section>
-                : <section className="ain-forecast-chart-empty is-small"><h3>相关指标预测</h3><p>尚未提供与当前风险关联的指标预测。</p></section>}
+                : null}
             </div>
             <p className="ain-forecast-result-note">{demo ? "设计示例" : result.source === "simulation" ? "仿真数据预测" : "监测数据预测"} · 结果生成于 {result.generatedAt} · 频段繁忙本身不能直接证明干扰</p>
           </>}
