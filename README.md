@@ -212,9 +212,14 @@ npm run dev
 AI-NetTune/
 ├── main.py            # 后端主程序（FastAPI，16 个接口）
 ├── data_layout.py     # 数据文件定位规则（候选文件名 / 环境变量，单一定义源）
-├── data_generator.py  # 仿真数据生成器（v2.7：多日 + 坐标 + 故障注入 + 频谱混合标注）
-├── forecast_model.py  # Prophet 时序预测（缺包降级 moving_average）
+├── data_generator.py  # 仿真数据生成器（v2.8：多日 + 坐标 + 故障注入 + 频谱混合标注）
+├── forecast_model.py  # Prophet 时序预测（缺包降级 moving_average）+ 真实 MAE/RMSE/MAPE 回测
 ├── spatial_model.py   # Kriging 空间估计（缺包降级 grid_mean）
+├── spectrum_frames.py # 频率维度帧序列（分频段功率场的逐频带趋势外推）
+├── spatial_frames.py  # 区域维度帧序列（IDW 插值 + 逐格点趋势外推，接口15）
+├── signal_nav.py      # 信号导航（位置感知 + 覆盖分析 + 移动建议，接口16）
+├── plan_model.py      # 处置方案生成与对比仿真（原配置 vs 方案）
+├── report_model.py    # 报告渲染（Markdown / HTML）
 ├── llm_agent.py       # LLM 意图解析 + 规则兜底
 ├── requirements.txt   # 后端依赖（requirements-min.txt 为不含 prophet/pykrige 的最小集）
 ├── DEPLOY.md          # 部署手册：数据准备 / 环境变量 / 反向代理 / 故障排查
@@ -222,11 +227,16 @@ AI-NetTune/
 │   ├── doctor.py      # 部署自检（Python/依赖/数据/时间轴/LLM）
 │   ├── audit_data.py  # 数据对账（两表异常组/渐变征兆/阈值自洽/占用率语义）
 │   ├── find_dead_code.py # 前端死代码分析（可达性扫描 + 删除命令）
-│   └── prepare_data.py # 规整 data/ 下的 "(1)" 文件名
+│   ├── prepare_data.py # 规整 data/ 下的 "(1)" 文件名
+│   └── start_backend.ps1 # Windows 一键启动（自动挑 ≥3.10 解释器，-Reload / -Port）
+├── tests/
+│   ├── run_tests.py   # 零依赖测试运行器（不需要 pytest / httpx）
+│   └── test_contract.py  # 接口契约测试（25 项）
 ├── data/              # 数据文件（.gitignore 忽略大文件，仅保留 README.md）
 │   ├── README.md              # 数据交付清单（大小 / SHA256 / 时间范围）
 │   ├── network_data_30d.csv   # 30 天，129,600 条 × 18 列（后端默认读取）
-│   └── spectrum_7d.csv        # 7 天，1,512,000 条 × 9 列（预测预警数据源）
+│   ├── spectrum_7d.csv        # 7 天，1,512,000 条 × 9 列（预测预警数据源）
+│   └── fault_events.csv       # 故障事件清单（接口7 的单一事实来源，8 个事件）
 ├── docs/
 │   ├── api.md         # API 接口契约文档（16 个接口）
 │   └── data_dict.md   # 数据字典契约文档（18 维字段规范）
