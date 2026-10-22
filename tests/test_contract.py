@@ -27,6 +27,14 @@ except Exception:
 
 import main  # noqa: E402
 
+# 单元测试必须**确定性**：无论宿主机有没有配 LLM_API_KEY，这里都强制关闭大模型。
+# 原因（实测）：配了 key 后 ENABLE_LLM=True，条条请求都会真的调一次大模型，
+#   ① 耗时从 11s 涨到 80s；
+#   ② 断言会随模型输出漂移 —— 大模型返回 ap_id="ap-1"（小写不补零）曾让
+#      test_chat_intent_debug 失败，返回的自由文本也未必包含模板里的固定措辞。
+# LLM 通路另有专门的联调脚本（F:\AI-NetTune\_review\check_llm.py），不混在契约测试里。
+main.ENABLE_LLM = False
+
 ISO = "%Y-%m-%d %H:%M:%S"
 SCENARIO = "校园"
 

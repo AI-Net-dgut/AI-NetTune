@@ -1379,6 +1379,21 @@ def _context_line(turns: list[dict]) -> str:
     return "【对话上文】" + "；".join(parts) + "。"
 
 
+def _normalize_ap(value) -> str | None:
+    """把各种写法的 AP 编号统一成 AP-XX。
+
+    为什么需要：大模型返回的 params 里常是 "ap-1"（小写、无补零），
+    直接覆盖会把正则抽到的 "AP-01" 变成 "ap-1"，导致前端筛选/展示不一致
+    （实测配 key 后 test_chat_intent_debug 因此失败）。
+    """
+    if not value:
+        return None
+    match = re.search(r"AP\s*[-－]?\s*0*(\d+)", str(value), re.IGNORECASE)
+    if match:
+        return f"AP-{int(match.group(1)):02d}"
+    return str(value)
+
+
 @app.post("/api/agent/chat")
 def agent_chat(req: ChatRequest):
     # 1. 第一层：统一关键词规则（llm_agent.rule_intent，独立主路径，完全不依赖LLM）
@@ -1391,6 +1406,8 @@ def agent_chat(req: ChatRequest):
         _ap_hit = re.search(r"AP\s*[-－]?\s*0*(\d+)", req.message, re.IGNORECASE)
         if _ap_hit:
             params["ap_id"] = f"AP-{int(_ap_hit.group(1)):02d}"
+    else:
+        params["ap_id"] = _normalize_ap(params["ap_id"])
     hit = rule.get("hit", False)
 
     # 2. 第二层：关键词未命中 + 启用LLM时，才调用大模型增强识别（get_intent 内部自带降级）
@@ -1405,7 +1422,13 @@ def agent_chat(req: ChatRequest):
             # 把上文一并交给 LLM，让它能理解"那给它出个方案"里的"它"
             intent_obj = get_intent(f"{context_note}{req.message}" if context_note else req.message)
             intent = intent_obj.get("intent", intent)
-            params = {**params, **intent_obj.get("params", {})}
+            # 大模型返回的 params 不能直接覆盖已有槽位：
+            # 它可能给 null/空串（把正则抽到的值清掉），也可能给 "ap-1" 这种非规范写法。
+            _llm_params = {k: v for k, v in (intent_obj.get("params") or {}).items()
+                           if v not in (None, "", [])}
+            params = {**params, **_llm_params}
+            if params.get("ap_id"):
+                params["ap_id"] = _normalize_ap(params["ap_id"])
             # 标记意图来源，便于前端/答辩说明"这句是大模型识别的还是规则识别的"
             if intent_obj.get("intent"):
                 intent_source = "llm"
