@@ -23,6 +23,7 @@ from spatial_model import build_spatial
 import plan_model
 import report_model
 import spectrum_frames as _sf
+import spatial_frames as _spf
 from realtime_simulator import start_realtime_service, get_incremental_data, DATA_COLUMNS
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
@@ -1167,6 +1168,73 @@ def data_events(scenario: str | None = Query(None, description="按场景过滤�
             except (TypeError, ValueError):
                 item[key] = None
     return success_response({"events": events, "count": len(events)})
+
+
+# ============ 接口16：区域电磁态势帧序列（过去 N 帧 + 未来 N 帧） ============
+@app.get("/api/forecast/spatial_frames", summary="接口16：区域电磁态势帧序列（过去N帧 + 未来N帧）")
+def spatial_frame_series(
+    scenario: str = Query(..., description="场景，如：校园"),
+    baseTime: str = Query(..., description="基准时刻 yyyy-MM-dd HH:mm:ss"),
+    historyMinutes: int = Query(48, ge=6, le=720, description="历史总时长（分钟）"),
+    frameMinutes: int = Query(6, ge=1, le=60, description="每帧覆盖的分钟数"),
+    pastFrames: int = Query(6, ge=1, le=12, description="返回的历史帧数"),
+    futureFrames: int = Query(3, ge=1, le=6, description="预测的未来帧数"),
+    metric: str = Query("rsrp", description="场指标：rsrp / sinr / throughput"),
+):
+    """按"帧"返回区域电磁态势：每帧是一张 grid×grid 的二维场。
+
+    为什么要这个接口（申报书「预测覆盖区域电磁频谱态势」+「序列态势图」）：
+    接口11 的频谱预测是频率维度的一条带，画出来只有横纹；态势图的参考形态是
+    "过去N帧 → 未来N帧"的二维区域图。这里用 IDW 把 UE 采样点插成面，
+    未来帧对**每个格点**分别外推，所以故障周边那片区域会随时间扩张/加深。
+
+    未来帧的斜率来自最近若干历史帧，饱和外推（τ=3 帧）避免线性外推到荒谬值；
+    max_drift 按指标量级给，并在超限时按峰值等比缩放，防止全场撞上限被夹平。
+    """
+    if metric not in ("rsrp", "sinr", "throughput"):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "metric 仅支持 rsrp / sinr / throughput")
+    try:
+        base_dt = datetime.strptime(baseTime, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return error_response(ERROR_CODE["PARAM_INVALID"], "baseTime 格式应为 yyyy-MM-dd HH:mm:ss")
+
+    fmt = lambda d: d.strftime("%Y-%m-%d %H:%M:%S")  # noqa: E731
+    span = pastFrames * frameMinutes
+    if span > historyMinutes:
+        pastFrames = max(1, historyMinutes // frameMinutes)
+
+    past, grids = [], []
+    meta = {"grid": _spf.GRID, "x_range": [0, 0], "y_range": [0, 0]}
+    for i in range(pastFrames):
+        end = base_dt - timedelta(minutes=(pastFrames - 1 - i) * frameMinutes)
+        start = end - timedelta(minutes=frameMinutes)
+        built = _spf.build_grid(filter_rows(scenario, fmt(start), fmt(end)), metric)
+        meta = {"grid": built["grid"], "x_range": built["x_range"], "y_range": built["y_range"]}
+        past.append({"start": fmt(start), "end": fmt(end),
+                     "points": built["points"], "values": built["values"]})
+        grids.append(built["values"])
+
+    # 指标量级对应的最大漂移（与接口11 的 profile 口径一致）
+    drift = {"rsrp": 15.0, "sinr": 8.0, "throughput": 20.0}[metric]
+    bounds = {"rsrp": (-140.0, -40.0), "sinr": (-25.0, 30.0), "throughput": (0.0, 150.0)}[metric]
+    future = []
+    for i, values in enumerate(
+            _spf.predict_frames(grids, future=futureFrames, max_drift=drift, bounds=bounds), start=1):
+        f_start = base_dt + timedelta(minutes=(i - 1) * frameMinutes)
+        future.append({"start": fmt(f_start),
+                       "end": fmt(f_start + timedelta(minutes=frameMinutes)),
+                       "values": values})
+
+    last_grid = grids[-1] if grids else []
+    return success_response({
+        "scenario": scenario, "metric": metric, "base_time": baseTime,
+        "frame_minutes": frameMinutes,
+        "shape": {"grid": meta["grid"],
+                  "rows": len(last_grid), "cols": len(last_grid[0]) if last_grid else 0},
+        "x_range": meta["x_range"], "y_range": meta["y_range"],
+        "past": past, "future": future,
+        "note": "每帧为 IDW 插值得到的区域场；未来帧逐格点外推，饱和时间常数 3 帧",
+    })
 
 
 # ============ 接口4：导出分析报告 ============
