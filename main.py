@@ -9,6 +9,7 @@ from pydantic import BaseModel
 import datetime
 import csv as _csv
 import statistics
+import json as _json
 import re
 import math
 import os
@@ -912,7 +913,6 @@ def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> 
     )
     # ---- LLM 润色：只喂结构化证据，禁止它编数据 ----
     try:
-        import json as _json
         evidence = {
             "scenario": scenario, "window": [win_start, win_end],
             "anomaly_type": d.get("anomaly_type"), "level": d.get("level"),
@@ -1395,6 +1395,9 @@ def agent_chat(req: ChatRequest):
 
     # 2. 第二层：关键词未命中 + 启用LLM时，才调用大模型增强识别（get_intent 内部自带降级）
     intent_source = "rule" if hit else "fallback"
+    # 大模型自评的意图理解置信度（0~1）。规则命中路径没有这个值，保持 None —— 
+    # 不拿规则分数冒充"概率"，与 B-6 的 rule_score 口径一致。
+    intent_confidence: float | None = None
     turns = _SESSIONS.get(req.session_id, [])
     context_note = _context_line(turns) if turns else ""
     if not hit and ENABLE_LLM:
@@ -1405,7 +1408,12 @@ def agent_chat(req: ChatRequest):
             params = {**params, **intent_obj.get("params", {})}
             # 标记意图来源，便于前端/答辩说明"这句是大模型识别的还是规则识别的"
             if intent_obj.get("intent"):
-                intent_source = "llm" if intent_obj.get("confidence") is not None else "llm"
+                intent_source = "llm"
+                raw_conf = intent_obj.get("confidence")
+                try:
+                    intent_confidence = float(raw_conf) if raw_conf is not None else None
+                except (TypeError, ValueError):
+                    intent_confidence = None
         except Exception:
             # get_intent 已内部降级到 rule_intent，此处仅做最终兜底，不抛出错误
             pass
@@ -1487,6 +1495,10 @@ def agent_chat(req: ChatRequest):
             "source": intent_source,        # rule / llm / fallback
             "rule_hit": hit,
             "llm_enabled": bool(ENABLE_LLM),
+            # 意图理解置信度：只有走大模型时才有值，且是"模型自评、未校准"，
+            # 规则命中/兜底路径为 null（不用规则分数冒充概率）
+            "confidence": intent_confidence,
+            "confidence_kind": "llm_self_reported" if intent_confidence is not None else None,
             "message": req.message,
             "parsed": {
                 "scenario": scenario,
