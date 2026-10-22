@@ -184,12 +184,41 @@ def load_spectrum():
         return
     df = _pd.read_csv(SPECTRUM_PATH, encoding="utf-8-sig")
     df["timestamp"] = _pd.to_datetime(df["timestamp"], format="%Y-%m-%d %H:%M:%S")
+    # B-3：加载时按 (AP, 时间) 排序一次，之后按 AP 取子表是 O(1)，
+    # 而不是每次请求都对 150 万行做 df[df.observation_id == ap] 全表扫描。
+    df = df.sort_values(["observation_id", "timestamp"], kind="stable").reset_index(drop=True)
     _SPEC["df"] = df
     _SPEC["max_ts"] = df["timestamp"].max()
+    # 每个 AP 一份子表 + 一个已排序的时间轴（int64 纳秒），供二分查找做区间切片
+    by_ap, ts_index = {}, {}
+    for _ap, _part in df.groupby("observation_id", sort=False):
+        by_ap[_ap] = _part.reset_index(drop=True)
+        ts_index[_ap] = _part["timestamp"].to_numpy(dtype="datetime64[ns]").astype("int64")
+    _SPEC["by_ap"] = by_ap
+    _SPEC["ts_index"] = ts_index
     bands = (df[["band_id", "lower_mhz", "upper_mhz"]].drop_duplicates()
              .sort_values("lower_mhz").to_dict("records"))
     _SPEC["bands"] = bands
     print(f"[OK] {SPECTRUM_PATH.name} 加载完成：{len(df)} 行，时间至 {_SPEC['max_ts']}, {len(bands)} 频段")
+
+
+def spectrum_window(ap: str, start_dt: datetime, end_dt: datetime, inclusive_end: bool = False):
+    """按 AP + 时间区间取频谱子表（B-3 索引）。
+
+    实现：每个 AP 的时间轴在加载时已排序，用二分查找定位区间端点，
+    再做 iloc 位置切片 —— O(log n) 定位 + O(k) 切片，不再做全表布尔筛选。
+    返回的 DataFrame 已 reset_index，调用方可直接按位索引。
+    """
+    part = (_SPEC.get("by_ap") or {}).get(ap)
+    axis = (_SPEC.get("ts_index") or {}).get(ap)
+    if part is None or axis is None or len(axis) == 0:
+        return None
+    lo = int(axis.searchsorted(_pd.Timestamp(start_dt).value, side="left"))
+    hi = int(axis.searchsorted(_pd.Timestamp(end_dt).value,
+                               side="right" if inclusive_end else "left"))
+    if hi <= lo:
+        return None
+    return part.iloc[lo:hi]
 
 
 load_spectrum()
@@ -1688,8 +1717,11 @@ def forecast_preview(req: ForecastPreviewRequest):
                   "lowerMHz": int(b["lower_mhz"]), "upperMHz": int(b["upper_mhz"])} for b in bands]
 
     for ap in ["AP-01", "AP-02", "AP-03"]:
-        ap_df = df[df.observation_id == ap]
-        hist_sub = ap_df[(ap_df.timestamp >= hist_start) & (ap_df.timestamp < hist_end)]
+        # B-3：用加载时预分好的子表 + 二分索引，替代 df[df.observation_id == ap] 全表扫描
+        ap_df = (_SPEC.get("by_ap") or {}).get(ap)
+        if ap_df is None or ap_df.empty:
+            continue
+        hist_sub = spectrum_window(ap, hist_start, hist_end)
         # 按分钟透视：ts -> {band_id: power}, {band_id: occ}
         hist_by_ts = {}
         for ts, grp in hist_sub.groupby("timestamp"):
