@@ -216,7 +216,6 @@ AI-NetTune/
 ├── forecast_model.py  # Prophet 时序预测（缺包降级 moving_average）
 ├── spatial_model.py   # Kriging 空间估计（缺包降级 grid_mean）
 ├── llm_agent.py       # LLM 意图解析 + 规则兜底
-├── realtime_simulator.py  # 仿真实时数据流（当前未启用）
 ├── requirements.txt   # 后端依赖（requirements-min.txt 为不含 prophet/pykrige 的最小集）
 ├── DEPLOY.md          # 部署手册：数据准备 / 环境变量 / 反向代理 / 故障排查
 ├── scripts/
