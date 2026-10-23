@@ -26,6 +26,7 @@ except Exception:
     pass
 
 import main  # noqa: E402
+import llm_agent  # noqa: E402
 
 # 单元测试必须**确定性**：无论宿主机有没有配 LLM_API_KEY，这里都强制关闭大模型。
 # 原因（实测）：配了 key 后 ENABLE_LLM=True，条条请求都会真的调一次大模型，
@@ -112,6 +113,65 @@ def test_anomaly_conclusion_has_evidence():
             scenario=SCENARIO, window_start=start, window_end=end)))
         if d["is_anomaly"]:
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
+
+
+def test_forecast_analyze_uses_question_and_target_window():
+    """forecast/analyze 必须真正使用 question 与 targetWindow。
+
+    实测缺陷：前端（forecast/api.ts）一直会发这两个字段，但
+    ForecastAnalyzeRequest 没声明 → Pydantic 静默忽略 → 研判只能输出通用文案，
+    "用户问什么"和"关注哪个时段"完全没参与研判。
+
+    风险规避：只在**有值**时追加，未传时提示词与文案与旧版逐字节一致。
+    """
+    prev = main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime="2026-01-02 14:12:00",
+        history=main._TimeRange(start="2026-01-02 13:12:00", end="2026-01-02 14:12:00"),
+        horizonMinutes=30))
+    prev = _data(prev)
+    fid = prev["id"]
+    alert = (prev.get("alerts") or [{}])[0]
+    base = dict(forecastId=fid, scenario=SCENARIO, baseTime="2026-01-02 14:12:00",
+                alertId=alert.get("id"),
+                history=main._TimeRange(start="2026-01-02 13:12:00", end="2026-01-02 14:12:00"),
+                forecast=main._TimeRange(start=prev["forecast"]["start"], end=prev["forecast"]["end"]))
+
+    # ① 不传：与旧行为一致（规则文案里没有"关于你的问题"，回显为空）
+    plain = _data(main.forecast_analyze(main.ForecastAnalyzeRequest(**base)))
+    assert "关于你的问题" not in plain["reply"]
+    assert plain["question"] == "" and plain["targetWindow"] is None
+
+    # ② 传：规则文案必须回应用户的问题与关注时段，并回显
+    asked = _data(main.forecast_analyze(main.ForecastAnalyzeRequest(
+        **base, question="这段会不会影响视频会议？",
+        targetWindow=main._TimeRange(start="2026-01-02 14:15:00", end="2026-01-02 14:35:00"))))
+    assert "这段会不会影响视频会议？" in asked["reply"]
+    assert "14:15:00" in asked["reply"] and "14:35:00" in asked["reply"]
+    assert asked["question"] == "这段会不会影响视频会议？"
+    assert asked["targetWindow"] == {"start": "2026-01-02 14:15:00", "end": "2026-01-02 14:35:00"}
+
+    # ③ LLM 提示词：用桩捕获 prompt，确认只在有值时注入
+    captured = []
+    orig_call, orig_key = main.call_llm_chat, llm_agent.LLM_API_KEY
+
+    def fake_call(system_prompt, user_message, **kwargs):
+        captured.append(user_message)
+        return "【桩】研判文字"
+
+    try:
+        main.call_llm_chat = fake_call
+        llm_agent.LLM_API_KEY = "sk-test"
+        main.forecast_analyze(main.ForecastAnalyzeRequest(**base))
+        main.forecast_analyze(main.ForecastAnalyzeRequest(
+            **base, question="会不会影响视频会议？",
+            targetWindow=main._TimeRange(start="2026-01-02 14:15:00", end="2026-01-02 14:35:00")))
+    finally:
+        main.call_llm_chat, llm_agent.LLM_API_KEY = orig_call, orig_key
+
+    assert len(captured) == 2
+    assert "用户的问题" not in captured[0], "未传问题时不应改变提示词"
+    assert "用户的问题：会不会影响视频会议？" in captured[1]
+    assert "用户关注时段：2026-01-02 14:15:00 ~ 2026-01-02 14:35:00" in captured[1]
 
 
 def test_bare_time_range_routes_to_diagnosis():

@@ -2297,6 +2297,11 @@ class ForecastAnalyzeRequest(BaseModel):
     alertId: str | None = None
     history: _TimeRange
     forecast: _TimeRange
+    # 前端一直会发这两个字段（forecast/api.ts），但模型原先没声明 →
+    # Pydantic 默认忽略多余字段，于是"用户的问题"和"关注时段"被静默丢弃，
+    # 研判只能输出通用文案。这里补上声明并真正使用。
+    question: str | None = None
+    targetWindow: _TimeRange | None = None
 
 
 def _parse_ts(value: str):
@@ -2805,6 +2810,16 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
                 alert_detail = a
                 break
 
+    # 用户的问题与关注时段（v3）：只在**有值**时参与，未传时输出与旧行为逐字节一致。
+    question_text = (req.question or "").strip()
+    target_window = req.targetWindow
+    # 未指定 alertId 但给了关注时段时，挑与该时段相交的预警来研判（否则整窗）
+    if target_window is not None and alert_detail is None:
+        for a in cached.get("alerts", []):
+            if (a.get("start") or "") <= target_window.end and (a.get("end") or "") >= target_window.start:
+                alert_detail = a
+                break
+
     # 拉历史窗口真实数据，算 KPI 现状与近窗口趋势（供 prompt 使用）
     try:
         hist_rows = filter_rows(req.scenario, req.history.start, req.history.end)
@@ -2847,12 +2862,24 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
         "④影响范围；⑤预防/处置方案与预期效果；⑥不确定性说明（这条预测的可信边界）。"
         "语气克制专业，不喊口号，不要编造未给出的数值。"
     )
+    # 仅在用户确实给了问题/关注时段时才追加，未传时 user_message 与旧版逐字节一致，
+    # 因此不会影响既有调用方的输出（这是"改提示词有风险"的规避方式）。
+    extra_ctx = ""
+    if question_text or target_window is not None:
+        lines = []
+        if question_text:
+            lines.append(f"用户的问题：{question_text}")
+        if target_window is not None:
+            lines.append(f"用户关注时段：{target_window.start} ~ {target_window.end}")
+        lines.append("请优先直接回应用户的问题与关注时段；与该问题无关的通用建议可以压缩。")
+        extra_ctx = "\n" + "\n".join(lines) + "\n"
+
     user_message = (
         f"场景：{req.scenario}\n预测基准时刻：{req.baseTime}\n"
         f"预测窗口：{req.forecast.start} ~ {req.forecast.end}\n"
         f"历史观测窗口：{req.history.start} ~ {req.history.end}（共 {n_rows} 条采样）\n"
         f"历史均值：RSRP={rsrp_text} dBm，SINR={sinr_text} dB，吞吐量={thr_text} Mbps\n"
-        f"{trend_text}\n{alert_desc}\n请按系统要求输出研判文字。"
+        f"{trend_text}\n{alert_desc}\n{extra_ctx}请按系统要求输出研判文字。"
     )
 
     reply = None
@@ -2885,6 +2912,12 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
             + advice
             + "不确定性：当前 LLM 研判不可用，以上为基于历史均值的规则提示，未结合频谱细节。"
         )
+        # 规则兜底也要回应用户的问题与关注时段，否则"问了等于没问"。
+        if target_window is not None:
+            reply += f"（已按关注时段 {target_window.start} ~ {target_window.end} 收敛分析范围。）"
+        if question_text:
+            reply += f"关于你的问题「{question_text}」：上面已给出该时段的风险判断与处置建议；" \
+                     "若涉及具体业务类型，可结合第③项证据判断影响程度。"
 
     return success_response({
         "forecastId": req.forecastId,
@@ -2892,6 +2925,10 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
         "alertId": req.alertId,
         "source": source,
         "reply": reply,
+        # 回显用户输入，便于前端确认"它确实读到了这句话/这个时段"
+        "question": question_text,
+        "targetWindow": ({"start": target_window.start, "end": target_window.end}
+                         if target_window is not None else None),
     })
 
 
