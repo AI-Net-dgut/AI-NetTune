@@ -114,6 +114,44 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_anomaly_state_semantics():
+    """四种状态必须能区分：当前故障 / 窗口内已恢复 / 性能提示 / 正常。
+
+    队友反馈：默认分析"过去 N 分钟"，窗口里出现过异常 ≠ 此刻仍在故障；
+    且"标签 normal 但指标偏低"既不该报故障，也不该被吞成"正常"。
+    """
+    def state(start, end):
+        return _data(main.analyze_anomaly(main.AnomalyRequest(
+            scenario=SCENARIO, window_start=start, window_end=end)))
+
+    # 1) 当前仍在故障：窗口末尾仍在异常区间内
+    active = state("2026-01-01 10:00:00", "2026-01-01 11:59:59")
+    assert active["is_anomaly"] is True
+    assert active["current_state"] == "fault_active", active["current_state"]
+    assert active["last_anomaly_at"], "应给出最后一次异常时刻"
+
+    # 2) 窗口内曾发生、末尾已恢复（故障 10:00~12:00，窗口 11:30~13:30）
+    recovered = state("2026-01-01 11:30:00", "2026-01-01 13:30:00")
+    assert recovered["is_anomaly"] is True, "窗口内确实出现过故障"
+    assert recovered["current_state"] == "recovered_in_window", recovered["current_state"]
+    assert recovered["anomaly_spans"], "应保留异常区间用于展示"
+
+    # 3) 正常窗口
+    normal = state("2026-01-02 10:17:41", "2026-01-02 11:17:41")
+    assert normal["current_state"] == "normal"
+    assert normal["performance_hints"] == []
+
+    # 4) 性能提示：整窗标签 normal，但过半采样 SINR<5（01-01 02:00 实测）
+    hint = state("2026-01-01 02:00:00", "2026-01-01 03:00:00")
+    assert hint["is_anomaly"] is False, "性能提示不应算作异常"
+    if hint["current_state"] == "performance_warning":
+        assert hint["performance_hints"], "标了性能提示就必须给出提示项"
+        item = hint["performance_hints"][0]
+        assert item["metric"] == "sinr_low_share"
+        assert 0.0 < item["value"] <= 1.0
+        assert item["cause"] and item["suggestion"]
+
+
 def test_anomaly_coverage_window():
     d = _data(main.analyze_anomaly(main.AnomalyRequest(
         scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)))

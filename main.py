@@ -523,6 +523,27 @@ def judge_ap(ap, ap_rows):
                 "cause": f"{ap}RSRP均值{rsrp_avg:.1f}dBm偏低（<-100）且吞吐均值{thr_avg:.1f}Mbps低于50，判定为边缘弱用户",
                 "suggestion": "建议用户靠近信号源或调整波束",
                 "candidates": build_candidates(ap, base, "边缘弱用户")}
+    # 「性能提示」：整窗标签 normal，但**过半采样**的信号质量已偏低 —— 单独一类，不算异常。
+    # 起因：队友指出"CSV 标签正常不代表指标都优良"。
+    #
+    # 判据为什么用"过半采样 SINR<5"而不是均值区间（两次实测否决）：
+    #   · 吞吐 < 50Mbps：正常样本中 53% 都满足（那是中位数）→ 一半窗口会亮提示，等于噪声
+    #   · 均值接近阈值（RSRP -105~-95 / PRB 80~90）：全 7 天 1972 个干净窗口里命中 **0 个**
+    #     （数据是双峰分布：正常 RSRP≈-92，故障≈-111，中间几乎没有样本）
+    #   · 采样级 SINR<5 占比 >50%：命中 14.8% 的干净窗口，稀少但可达，语义是
+    #     "过半数采样质量偏低却没被标成故障" —— 这正是"提示而非故障"的定位
+    _sinr_low_share = sum(1 for r in ap_rows if float(r["sinr"]) < 5) / len(ap_rows)
+    if _sinr_low_share > 0.5:
+        return {**base, "evidence": evidence + [
+                    {"metric": "sinr_low_share", "avg_value": round(_sinr_low_share, 3),
+                     "threshold": 0.5, "status": "提示"}],
+                "anomaly_type": "性能提示", "level": "提示", "network_status": "normal",
+                "cause": (f"{ap}有 {_sinr_low_share*100:.0f}% 的采样 SINR 低于 5dB，"
+                          f"但整窗标签为 normal（均值 RSRP {rsrp_avg:.1f}dBm、SINR {sinr_avg:.1f}dB），"
+                          f"属性能偏低而非确诊故障"),
+                "suggestion": "持续观察；若弱覆盖采样占比升高或 SINR 继续下降，再升级为覆盖故障",
+                "candidates": []}
+
     return {**base, "anomaly_type": "正常", "level": "低", "network_status": "normal",
             "cause": f"{ap}各项指标均在正常范围", "suggestion": "无需处理",
             "candidates": build_candidates(ap, base, "正常")}
@@ -586,7 +607,9 @@ def analyze_anomaly(req: AnomalyRequest):
     for r in rows:
         by_ap.setdefault(r["ap_id"], []).append(r)
     ap_results = [judge_ap(ap, ap_rows) for ap, ap_rows in sorted(by_ap.items())]
-    findings = [res for res in ap_results if res["anomaly_type"] != "正常"]
+    # 故障类 findings（不含"性能提示"）：性能提示只作为 hint 展示，不计入异常
+    findings = [res for res in ap_results if res["anomaly_type"] not in ("正常", "性能提示")]
+    perf_hints = [res for res in ap_results if res["anomaly_type"] == "性能提示"]
 
     # 2) 按小时切片 → 趋势 + 时段级异常（回答"什么时候开始变差的"）
     by_hour = {}
@@ -603,7 +626,7 @@ def analyze_anomaly(req: AnomalyRequest):
         # 起因：18:xx 这类被窗口截断的小时只切到十几行，均值抖动大，
         # 曾把 16 行、标签全 normal 的切片判成"边缘弱用户"，与整窗结论矛盾。
         if len(by_hour[hour]) >= MIN_HOUR_ROWS:
-            hour_findings = [x for x in hour_res if x["anomaly_type"] != "正常"]
+            hour_findings = [x for x in hour_res if x["anomaly_type"] not in ("正常", "性能提示")]
         else:
             hour_findings = []
         hour_findings_all.extend(hour_findings)
@@ -701,6 +724,27 @@ def analyze_anomaly(req: AnomalyRequest):
         print(f"[Main] 方案生成失败（不影响研判）：{exc}")
         plans = []
 
+    # ===== 状态语义计算（队友反馈第4点）=====
+    # 窗口是"过去 N 分钟"，出现过的异常不等于**此刻**仍在故障，必须分开表达：
+    #   fault_active          窗口末尾 5 分钟内仍有异常 → 当前仍在故障
+    #   recovered_in_window   窗口内有异常区间，但末尾已恢复
+    #   performance_warning   指标偏低但未达故障判据（不算异常，给提示）
+    #   normal                都没有
+    _spans = _anomaly_spans(rows)
+    _last_anomaly_at = _spans[-1]["end"] if _spans else None
+    _RECOVER_GRACE_SEC = 600   # 10 分钟：数据是分钟级且故障有 ramp-out，5 分钟太紧
+    if is_anomaly and _last_anomaly_at:
+        try:
+            _gap = (datetime.strptime(req.window_end, "%Y-%m-%d %H:%M:%S")
+                    - datetime.strptime(_last_anomaly_at, "%Y-%m-%d %H:%M:%S")).total_seconds()
+        except (ValueError, TypeError):
+            _gap = 0
+        _current_state = "fault_active" if _gap <= _RECOVER_GRACE_SEC else "recovered_in_window"
+    elif perf_hints:
+        _current_state = "performance_warning"
+    else:
+        _current_state = "normal"
+
     return {
         "code": 0,
         "message": "success",
@@ -729,7 +773,20 @@ def analyze_anomaly(req: AnomalyRequest):
             "alarm_history": alarm_history,      # 新增：告警历史
             # 分钟级异常区间：申报书 L17 要求"定位异常的起止时间"，
             # alarm_history 只有小时粒度，这里给出精确到分钟的连续区间
-            "anomaly_spans": _anomaly_spans(rows),
+            "anomaly_spans": _spans,
+            # ===== 状态语义（队友反馈：必须区分"当前故障/窗口内已恢复/性能提示"）=====
+            # 默认分析是"过去 N 分钟"，窗口里出现过的异常 ≠ 此刻仍在故障。
+            "current_state": _current_state,
+            "last_anomaly_at": _last_anomaly_at,
+            "performance_hints": [
+                {"ap_id": h["ap_id"],
+                 "metric": ((h.get("evidence") or [{}])[-1]).get("metric", "sinr_low_share"),
+                 "value": ((h.get("evidence") or [{}])[-1]).get("avg_value"),
+                 "threshold": ((h.get("evidence") or [{}])[-1]).get("threshold", 0.5),
+                 "cause": h["cause"], "suggestion": h["suggestion"],
+                 "evidence": h.get("evidence") or []}
+                for h in perf_hints
+            ],
             "plans": plans,                      # 新增：处理方案 + 对比仿真（闭环"方案制定"）
             # 方案的自然语言说明（阶段2）：LLM 可用时改写，否则用模板；只引用方案内已有数值
             "plan_narrative": explain_plans(plans, anomaly_type),
