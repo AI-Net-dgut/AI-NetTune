@@ -2310,6 +2310,12 @@ def forecast_preview(req: ForecastPreviewRequest):
         if ap_df is None or ap_df.empty:
             continue
         hist_sub = spectrum_window(ap, hist_start, hist_end)
+        # spectrum_window 在"窗口内没有任何频谱行"时返回 None。
+        # 原先没有这个保护，选一个太早的基准（历史窗口落在数据集起点之前）会直接
+        # AttributeError → 500。这里跳过该 AP；若所有 AP 都无数据，下面统一返回
+        # insufficient_data，而不是抛异常。
+        if hist_sub is None or hist_sub.empty:
+            continue
         # 按分钟透视：ts -> {band_id: power}, {band_id: occ}
         hist_by_ts = {}
         for ts, grp in hist_sub.groupby("timestamp"):
@@ -2568,6 +2574,22 @@ def forecast_preview(req: ForecastPreviewRequest):
                             "history": hist_pts, "predicted": pred_pts})
     except Exception:
         pass
+
+    # 所有 AP 在历史窗口内都没有频谱行（例如基准太早，历史窗口落在数据集起点之前）
+    # → 明确返回"数据不足"，而不是给一张空图或抛异常。
+    if not spectra:
+        empty = {
+            "id": fid, "scenario": req.scenario, "baseTime": req.baseTime,
+            "history": {"start": req.history.start, "end": req.history.end},
+            "forecast": {"start": req.baseTime, "end": fmt(fore_end)},
+            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "simulation", "status": "insufficient_data",
+            "message": (f"参考历史窗口（{req.history.start} ~ {req.history.end}）内没有频谱数据；"
+                        f"频谱表覆盖至 {_SPEC['max_ts']:%Y-%m-%d %H:%M}，请把基准时刻调到该区间内。"),
+            "alerts": [], "spectra": [], "impacts": [],
+        }
+        _remember_forecast(fid, empty)
+        return success_response(empty)
 
     views_ap = alerts[0]["target"] if alerts else "AP-01"
     result = {
