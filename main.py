@@ -1686,6 +1686,12 @@ def agent_chat(req: ChatRequest):
     if intent not in TOOLS:
         intent = "chat"                 # 未知意图一律走闲聊，而不是 query_kpi
 
+    # 只给了一个时间区间、没有任何动作词时，默认按"该时段研判"处理。
+    # 否则会掉进闲聊：实测用户输入 "01-01 10:00–11:59" 得到的是帮助文案，
+    # 而这块面板就叫"问题研判与证据"，给一段时间最可能就是"分析这段时间"。
+    if intent == "chat" and params.get("time_range"):
+        intent = "fault_diagnosis"
+
     # 4. 执行工具：窗口跟随前端（未传则用动态最近 24h，贴近当前，回放漏传不穿帮）
     scenario = resolve_scenario(params.get("scenario"), req.scenario)
     if not req.window_start or not req.window_end:

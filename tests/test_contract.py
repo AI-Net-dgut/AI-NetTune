@@ -114,6 +114,27 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_bare_time_range_routes_to_diagnosis():
+    """只给一个时间区间、没有动作词时，应默认做"该时段研判"而不是闲聊。
+
+    实测反馈：用户只输入 "01-01 10:00–11:59" 时，返回的是帮助文案
+    「你好，我是 AI-NetTune 网络运维助手…」；而这块面板叫"问题研判与证据"，
+    给一段时间最可能就是"分析这段时间"。
+    """
+    for i, msg in enumerate(("01-01 10:00–11:59", "01-01 10:00到11:59")):
+        d = _data(main.agent_chat(main.ChatRequest(
+            message=msg, session_id=f"bare-range-{i}", scenario=SCENARIO,
+            window_start=WEAK_START, window_end=WEAK_END)))
+        assert d["intent_debug"]["intent"] == "fault_diagnosis", \
+            f"「{msg}」应走研判，实得 {d['intent_debug']['intent']}"
+        assert d["reply"] and "AI-NetTune 网络运维助手" not in d["reply"], "不应返回帮助文案"
+
+    # 真正的闲聊仍要走 chat，不能被这条规则吞掉
+    chatter = _data(main.agent_chat(main.ChatRequest(
+        message="你好", session_id="bare-range-chat", scenario=SCENARIO)))
+    assert chatter["intent_debug"]["intent"] == "chat"
+
+
 def test_time_range_accepts_various_dashes():
     """时间区间分隔符必须兼容各种破折号/连字符。
 
