@@ -2304,6 +2304,17 @@ def _parse_ts(value: str):
 # 因此用「阻尼外推」：前几分钟体现趋势，之后按 1-e^(-k/tau) 指数饱和，
 # 再把总偏移夹在 ±max_drift 与指标物理范围内，保证任何 horizon 都落在可信区间。
 FORECAST_TREND_WINDOW = 30        # 用最近多少分钟拟合斜率
+
+# 预测曲线的"参考时长"：τ 与归一化峰值都按它算，**不随请求的 horizonMinutes 变化**。
+# 目的：同一个未来时刻（例如基准 14:12 的 14:22）在任何预测时长下都得到同一数值；
+# 请求时长只决定截取到第几帧，而不是改变曲线本身。
+#
+# 取 30 的理由（实测对比）：参考值越大 → τ 越大 → 外推越保守、预警越晚。
+#   参考 120（τ=72 分钟）：8 个事件提前 1 / 晚 7（EV-005 晚 10 分、EV-007 提前量 21→4 分）
+#   参考  30（τ=18 分钟）：提前 2 / 晚 6 —— 与"按请求时长算"的旧行为一致，命中与提前量不变
+# 所以取 30：既不牺牲验收指标，又保证"值与请求时长无关"。
+# 代价：请求 120 分钟时后段更接近饱和（曲线偏平），属观感问题，不影响结论。
+FORECAST_CANONICAL_HORIZON = 30
 FORECAST_DAMPING_TAU_MIN = 15.0   # 趋势饱和时间常数（分钟）
 FORECAST_PROFILES = {
     # 每个指标：物理范围 + 允许的最大偏移（None 表示按末值 25% 动态算）
@@ -2525,10 +2536,13 @@ def forecast_preview(req: ForecastPreviewRequest):
                                                      [v if v else None for v in _last_values])
                 if max((abs(x) for x in slopes_field), default=0.0) < _sf.ENERGY_EPS:
                     slopes_field = [0.0] * len(bands)
-                # τ 必须随预测长度伸缩：固定 20 分钟时，120 分钟预测在 t=60 就已饱和到
-                # 95%，后半段等于把平台值复制一遍 → 图上又是一块平色。
-                _tau = max(_sf.TAU_MINUTES, req.horizonMinutes * 0.6)
-                _total_factor = _tau * (1.0 - math.exp(-req.horizonMinutes / _tau))
+                # τ 与归一化都必须**与请求的预测时长无关**，否则同一个未来时刻会因
+                # 用户切换"预测时长"而得到不同数值（实测 14:12 基准的 14:22：
+                # horizon=30 给 -102.25、horizon=120 给 -100.83）。
+                # 改法：用固定参考时长 FORECAST_CANONICAL_HORIZON 计算 τ 与归一化峰值，
+                # 这样"未来 t 分钟的值"只由历史决定；请求时长只决定**截取到第几帧**。
+                _tau = max(_sf.TAU_MINUTES, FORECAST_CANONICAL_HORIZON * 0.6)
+                _total_factor = _tau * (1.0 - math.exp(-FORECAST_CANONICAL_HORIZON / _tau))
                 # 归一化：若场外推到末端会整体撞上 max_drift 上限，所有频段会被夹到同一
                 # 个值（实测末帧各频段变化跨度 = 0），形态又消失。这里按峰值等比缩放，
                 # 让最大值落在上限的 80%，频段间差异得以保留。

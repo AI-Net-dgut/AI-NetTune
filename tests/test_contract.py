@@ -114,6 +114,27 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_forecast_horizon_independent():
+    """同一基准下，重叠的未来时刻必须得到相同的预测值。
+
+    实测缺陷：τ 与归一化峰值原先按请求的 horizonMinutes 计算，导致
+    基准 14:12 的同一个 14:22 —— horizon=30 给 -102.25、horizon=120 给 -100.83，
+    越阈时刻也从 14:33 变成 15:30。用户切换"预测时长"就会看到两套结果。
+    """
+    def value_at(horizon: int, clock: str) -> float:
+        d = _preview("2026-01-02 14:12:00", minutes=horizon, history=60)
+        spec = next(s for s in d["spectra"]
+                    if s["observationId"] == "AP-03" and s["metric"] == "power")
+        point = next(p for p in spec["predicted"] if p["start"].endswith(clock))
+        return point["values"][0]
+
+    for clock in ("14:22:00", "14:30:00"):
+        short = value_at(30, clock)
+        long = value_at(120, clock)
+        assert abs(short - long) < 1e-9, \
+            f"{clock} 在不同预测时长下应一致，实得 {short} vs {long}"
+
+
 def test_forecast_rejects_future_history():
     """历史窗口不得晚于基准（否则等于用未来观测预测过去）。
 
