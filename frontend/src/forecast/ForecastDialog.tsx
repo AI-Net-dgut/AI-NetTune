@@ -91,6 +91,10 @@ export default function ForecastDialog({ request, result, pending, error, onClos
               <div><h3>{alert ? `${alert.target} · ${alert.title}` : request.targetWindow ? '关注时段未触发风险提示' : result.integrationNotice ? "当前未触发风险提示" : "预测范围内未发现明显风险"}</h3>{alert && <span data-level={alert.severity}>{level[alert.severity]}风险</span>}</div>
               <p>{alert?.summary || (request.targetWindow ? '没有与关注时段相交的预警；这不表示未来一定没有故障。' : result.message) || "可继续查看频谱态势和指标变化，定期刷新预测。"}</p>
               {alert && <small>预计时段：{alert.start} — {alert.end} · 详细原因与建议可交给AI研判</small>}
+              {/* 无风险时给出"判定依据 + 交叉指引"：用户常把"图偏蓝但无预警"当成 bug，
+                  或以为"没预警=没问题"。这里说明预警只覆盖频率维度，KPI 维度要找 AI 研判。 */}
+              {!alert && <small>判定依据：频谱表逐频段功率 &lt; −95 dBm（要求 ≥40/50 频段越阈且连续 ≥3 分钟）或占用率 &gt; 85%。
+                本提示仅覆盖<b>频率维度</b>；KPI 维度（弱覆盖 / 拥塞）的异常请<b>交给 AI 研判核对</b>。</small>}
             </section>
             <div className="ain-forecast-chart-stack">
               {/* 区域电磁态势序列提到弹窗层级、放在频谱三视图之前：

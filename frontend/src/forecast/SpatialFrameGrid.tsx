@@ -70,12 +70,20 @@ function FrameCanvas({ frame, min, max, big = false }: {
 /** 未来帧数固定 6 帧；每帧时长由上层"预测时长"换算而来 */
 const FUTURE_FRAMES = 6;
 
+/** 可切换的态势指标（接口15 已支持，只是原先写死 rsrp、没有入口） */
+const METRIC_OPTIONS = [
+  { id: "rsrp", label: "RSRP（覆盖）" },
+  { id: "sinr", label: "SINR（质量）" },
+  { id: "throughput", label: "吞吐（速率）" },
+];
+
 export default function SpatialFrameGrid({
-  scenario, baseTime, pastFrames = 8, metric = "rsrp", horizonMinutes = 60,
+  scenario, baseTime, pastFrames = 8, metric: initialMetric = "rsrp", horizonMinutes = 60,
 }: {
   scenario: string;
   baseTime: string;
   pastFrames?: number;
+  /** 初始指标（rsrp / sinr / throughput）；组件内可用「指标」下拉切换 */
   metric?: string;
   /** 预测总时长（分钟），由弹窗的「预测时长」下拉统一控制，本组件不再单独提供开关 */
   horizonMinutes?: number;
@@ -84,6 +92,9 @@ export default function SpatialFrameGrid({
   const [error, setError] = useState("");
   const [index, setIndex] = useState(-1);       // -1 表示"跟随数据默认值"
   const [playing, setPlaying] = useState(false);
+  // 指标可切换：接口15 本来就支持 rsrp / sinr / throughput，切换后色阶、单位、
+  // "最低/最高/较上一帧"全部自动跟着变（都由 metric 推导），无需额外处理
+  const [metric, setMetric] = useState(initialMetric);
 
   // 每帧时长按预测总时长反算，让未来帧数保持在 6 帧左右、又不超接口上限：
   //   30分→5分/帧，60→10，120→20，240→40，1440→240（6 帧正好覆盖 24 小时）
@@ -145,6 +156,16 @@ export default function SpatialFrameGrid({
     <section className="ain-spatial-grid" aria-label="区域电磁态势序列">
       <header>
         <h4>区域电磁态势序列</h4>
+        <span className="ain-spatial-dim">空间维度 · 网络表</span>
+        <label className="ain-spatial-metric">
+          指标
+          <select aria-label="选择态势指标" value={metric}
+            onChange={(event) => { setPlaying(false); setIndex(-1); setMetric(event.target.value); }}>
+            {METRIC_OPTIONS.map(o => (
+              <option key={o.id} value={o.id}>{o.label}</option>
+            ))}
+          </select>
+        </label>
         <span>
           {metric.toUpperCase()} · 色阶 {min.toFixed(0)}~{max.toFixed(0)}{unit} · 每帧 {series.frameMinutes} 分钟 ·
           <strong className="ain-spatial-cover">
@@ -155,6 +176,13 @@ export default function SpatialFrameGrid({
         {/* 预测时长不在这里单独提供下拉：弹窗顶部那一个才是权威控件（它驱动接口11
             重新预测），本组件只按它换算每帧时长，避免两个下拉各说各话。 */}
       </header>
+      {/* 口径说明：这张图和上方预警看的是两个不同指标，必须写清楚，
+          否则"图偏蓝却没有预警"会被当成 bug（实测队友与多人第一反应都是这样）。 */}
+      <p className="ain-spatial-scope">
+        本图是<b>空间维度</b>（网络表插值）：每个格子是该位置用户 KPI 的估计值，用来看<b>哪个区域</b>在变化。
+        上方预警是<b>频率维度</b>（频谱表逐频段）：功率 &lt; −95 dBm 或占用率 &gt; 85% 且满足频段数与持续时间才触发。
+        两者指标不同，<b>“图偏蓝但未触发预警”属正常现象</b>。
+      </p>
 
       <div className="ain-spatial-stage">
         <figure className={`ain-spatial-main${isFuture ? " is-future" : ""}`}>

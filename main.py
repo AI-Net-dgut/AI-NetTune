@@ -820,11 +820,20 @@ TOOL_WINDOW_END = max(_TOOL_TIMESTAMPS) if _TOOL_TIMESTAMPS else "2026-01-03 23:
 
 def _default_window(scenario: str):
     """AI 工具默认窗口（方案B）：跟随场景数据最新时刻往前推 24 小时。
-    回放/普通场景漏传时间时，默认值永远贴近当前，避免拿到写死的 01-01~01-03 与页面口径不一致。"""
+    回放/普通场景漏传时间时，默认值永远贴近当前，避免拿到写死的 01-01~01-03 与页面口径不一致。
+
+    注意（数据双区间问题）：网络表覆盖 30 天（至 01-30），频谱表只覆盖 7 天（至 01-07）。
+    若默认窗口取网络表末端（01-29~01-30），它落在频谱覆盖之外，
+    用户一进预测预警就会看到"参考数据不足"。所以这里把末端夹到
+    **网络表 ∩ 频谱表** 的交集内 —— 预测链路始终可用，KPI 查询也不受影响。
+    """
     rows = filter_rows(scenario, "2026-01-01 00:00:00", "2026-12-31 23:59:59")
     if not rows:
         return TOOL_WINDOW_START, TOOL_WINDOW_END
     end = max(r["timestamp"] for r in rows)
+    if _SPEC.get("max_ts") is not None:
+        spec_end = _SPEC["max_ts"].strftime("%Y-%m-%d %H:%M:%S")
+        end = min(end, spec_end)
     start = (datetime.fromisoformat(end) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
     return start, end
 

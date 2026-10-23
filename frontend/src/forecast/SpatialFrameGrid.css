@@ -48,6 +48,51 @@
   font-weight: 600;
 }
 
+/* 维度标签：说明本图来自网络表、属于"空间维度" */
+.ain-spatial-dim {
+  padding: 1px 6px;
+  border: 1px solid #bdd7f5;
+  border-radius: 10px;
+  background: #eef5fd;
+  color: #2f6fb3 !important;
+  font-size: 10px !important;
+  white-space: nowrap;
+}
+
+.ain-spatial-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #52657d;
+}
+
+.ain-spatial-metric select {
+  font-size: 11px;
+  padding: 2px 4px;
+  border: 1px solid #cfdcec;
+  border-radius: 3px;
+  background: #fff;
+  color: #1f3a5f;
+}
+
+/* 口径说明：空间维度 vs 频率维度，避免"图偏蓝却无预警"被当成 bug */
+.ain-spatial-scope {
+  margin: 0 0 8px;
+  padding: 6px 9px;
+  border-left: 3px solid #bdd7f5;
+  border-radius: 4px;
+  background: #f7fbff;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #52657d;
+}
+
+.ain-spatial-scope b {
+  color: #2f6fb3;
+  font-weight: 600;
+}
+
 /* ---- 大图 + 右侧控制栏 ---- */
 /* 大图放大到 320px、右侧栏放宽到 480px，整块 820px：
    之前 240+420=674 在 940px 宽的卡片里右侧空出一大块（实测很难看）。 */
