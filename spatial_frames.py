@@ -58,8 +58,17 @@ def _idw(points: list[tuple[float, float, float]], xs: list[float], ys: list[flo
     return grid
 
 
-def build_grid(rows: list[dict], metric: str = "rsrp", grid: int = GRID) -> dict:
-    """把一组采样行插成二维场，返回 {values, x_range, y_range, grid, points}。"""
+def build_grid(rows: list[dict], metric: str = "rsrp", grid: int = GRID,
+               extent: tuple[float, float, float, float] | None = None) -> dict:
+    """把一组采样行插成二维场，返回 {values, x_range, y_range, grid, points}。
+
+    extent=(x0, x1, y0, y1) 传入时使用**给定范围**，而不是按本组采样点重新计算。
+
+    为什么需要它：序号图要把多帧放在同一坐标系里比较、并对"同一格子"做趋势外推。
+    原先每帧各自按当帧采样点算 min/max，导致各帧 X 范围不同
+    （实测 08:58 帧是 14.3~494.3，09:58 帧是 1.6~484.1）——
+    同一个格子在不同帧里代表不同物理位置，"恶化区域扩张"的物理基础就断了。
+    """
     pts = [(float(r["ue_x"]), float(r["ue_y"]), float(r[metric]))
            for r in rows if r.get(metric) is not None]
     if not pts:
@@ -74,13 +83,16 @@ def build_grid(rows: list[dict], metric: str = "rsrp", grid: int = GRID) -> dict
         step = total_points / MAX_IDW_POINTS
         pts = [pts[int(i * step)] for i in range(MAX_IDW_POINTS)]
 
-    xs_all = [p[0] for p in pts]
-    ys_all = [p[1] for p in pts]
-    # 采样点分布范围外留 5% 边距，避免边缘插值外推
-    pad_x = max(1.0, (max(xs_all) - min(xs_all)) * 0.05)
-    pad_y = max(1.0, (max(ys_all) - min(ys_all)) * 0.05)
-    x0, x1 = min(xs_all) - pad_x, max(xs_all) + pad_x
-    y0, y1 = min(ys_all) - pad_y, max(ys_all) + pad_y
+    if extent is not None:
+        x0, x1, y0, y1 = extent
+    else:
+        xs_all = [p[0] for p in pts]
+        ys_all = [p[1] for p in pts]
+        # 采样点分布范围外留 5% 边距，避免边缘插值外推
+        pad_x = max(1.0, (max(xs_all) - min(xs_all)) * 0.05)
+        pad_y = max(1.0, (max(ys_all) - min(ys_all)) * 0.05)
+        x0, x1 = min(xs_all) - pad_x, max(xs_all) + pad_x
+        y0, y1 = min(ys_all) - pad_y, max(ys_all) + pad_y
     xs = [x0 + (x1 - x0) * i / (grid - 1) for i in range(grid)]
     ys = [y0 + (y1 - y0) * i / (grid - 1) for i in range(grid)]
     values = _idw(pts, xs, ys)

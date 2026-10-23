@@ -466,6 +466,27 @@ MIN_HOUR_ROWS = 20
 MIN_HOUR_ROWS_PER_AP = 5
 
 
+# 场景坐标范围缓存：同一场景的所有空间帧共用这个范围（见 spatial_frames.build_grid 的说明）。
+# 只按场景算一次并缓存，避免每个请求都全表扫描。
+_SCENE_EXTENTS: dict[str, tuple[float, float, float, float]] = {}
+
+
+def _scene_extent(scenario: str) -> tuple[float, float, float, float] | None:
+    """该场景的固定坐标范围 (x0, x1, y0, y1)，取自场景内全部采样的包络 + 5% 边距。"""
+    if scenario in _SCENE_EXTENTS:
+        return _SCENE_EXTENTS[scenario]
+    rows = filter_rows(scenario, "2026-01-01 00:00:00", "2026-12-31 23:59:59")
+    xs = [float(r["ue_x"]) for r in rows if r.get("ue_x") not in (None, "")]
+    ys = [float(r["ue_y"]) for r in rows if r.get("ue_y") not in (None, "")]
+    if not xs or not ys:
+        return None
+    pad_x = max(1.0, (max(xs) - min(xs)) * 0.05)
+    pad_y = max(1.0, (max(ys) - min(ys)) * 0.05)
+    extent = (min(xs) - pad_x, max(xs) + pad_x, min(ys) - pad_y, max(ys) + pad_y)
+    _SCENE_EXTENTS[scenario] = extent
+    return extent
+
+
 def _spec_verdict(ap: str, start: str, end: str) -> dict:
     """频谱维度判定，供「现状研判」使用（与「预测预警」共用同一套门槛）。
 
@@ -1788,10 +1809,15 @@ def spatial_frame_series(
 
     past, grids = [], []
     meta = {"grid": _spf.GRID, "x_range": [0, 0], "y_range": [0, 0]}
+    # 场景统一坐标范围：所有帧用同一 extent 建场，保证"同一个格子 = 同一个位置"。
+    # 原先每帧各自按当帧采样点算范围（实测 X 从 14.3~494.3 变到 1.6~484.1），
+    # 逐格点趋势外推就作用在了不同物理位置上，序列图的"扩张"不成立。
+    scene_extent = _scene_extent(scenario)
     for i in range(pastFrames):
         end = base_dt - timedelta(minutes=(pastFrames - 1 - i) * frameMinutes)
         start = end - timedelta(minutes=frameMinutes)
-        built = _spf.build_grid(filter_rows(scenario, fmt(start), fmt(end)), metric)
+        built = _spf.build_grid(filter_rows(scenario, fmt(start), fmt(end)),
+                                metric, extent=scene_extent)
         meta = {"grid": built["grid"], "x_range": built["x_range"], "y_range": built["y_range"]}
         past.append({"start": fmt(start), "end": fmt(end),
                      "points": built["points"], "values": built["values"]})

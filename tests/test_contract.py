@@ -342,6 +342,46 @@ def test_chat_multi_turn_inherit():
     assert other["multi_turn"]["turns"] == 1
 
 
+def test_spatial_frames_share_extent():
+    """空间序列的所有帧必须共用同一坐标范围（同一格子 = 同一物理位置）。
+
+    实测缺陷：原先每帧各自按当帧采样点算范围，X 从 14.3~494.3 变到 1.6~484.1，
+    逐格点趋势外推就作用在不同物理位置上，序列图的"扩张"不成立。
+    """
+    d = _data(main.spatial_frame_series(
+        scenario=SCENARIO, baseTime="2026-01-02 10:08:00", historyMinutes=90,
+        frameMinutes=10, pastFrames=8, futureFrames=6, metric="rsrp"))
+    extent = (round(d["x_range"][0], 3), round(d["x_range"][1], 3),
+              round(d["y_range"][0], 3), round(d["y_range"][1], 3))
+    # 顶层范围应等于场景固定范围（响应里保留 1 位小数）
+    scene = main._scene_extent(SCENARIO)
+    assert scene is not None
+    assert extent == (round(scene[0], 1), round(scene[1], 1),
+                      round(scene[2], 1), round(scene[3], 1)), \
+        f"顶层范围应取场景固定范围，实得 {extent} vs {scene}"
+
+    # 用同一 extent 重建任意两帧，范围必须完全一致
+    import spatial_frames as spf
+    from datetime import datetime, timedelta
+    base = datetime(2026, 1, 2, 10, 8)
+    ranges = []
+    for i in range(2):
+        end = base - timedelta(minutes=(7 - i) * 10)
+        start = end - timedelta(minutes=10)
+        built = spf.build_grid(
+            main.filter_rows(SCENARIO, start.strftime(ISO), end.strftime(ISO)),
+            "rsrp", extent=scene)
+        ranges.append((tuple(round(v, 3) for v in built["x_range"]),
+                       tuple(round(v, 3) for v in built["y_range"])))
+    assert ranges[0] == ranges[1], f"各帧坐标范围应一致，实得 {ranges}"
+
+    # 统一坐标后，"恶化区域扩张"仍应可见：未来末帧的空间落差 ≥ 当前帧
+    def spread(frame):
+        vals = [v for row in frame["values"] for v in row if v is not None]
+        return max(vals) - min(vals)
+    assert spread(d["future"][-1]) >= spread(d["past"][-1]) - 1.0
+
+
 def test_spatial_frames_series():
     """接口15：区域态势帧序列——过去N帧+未来N帧，未来帧必须比当前帧"更糟"且形态保留。"""
     d = _data(main.spatial_frame_series(
