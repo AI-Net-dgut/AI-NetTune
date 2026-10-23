@@ -142,6 +142,21 @@
 .ain-ai-v3 .ain-ai-diagnosis-column, .ain-ai-v3 .ain-management-integrated { align-self: start; min-width: 0; padding: 10px !important; border: 1px solid #e1eaf4 !important; border-radius: 8px !important; background: #fff !important; }
 .ain-ai-v3 .ain-ai-column-heading { margin-bottom: 7px; padding-bottom: 6px; border-bottom: 1px solid #e7eef6; }
 .ain-ai-v3 .ain-ai-column-heading > span { padding: 2px 6px; font-size: 10px; }
+/* 研判状态徽标配色：四种语义状态各一色（只上色，不改尺寸与布局）。
+   目的：让"当前故障中 / 窗口内有故障·已恢复 / 性能提示（未确诊）"一眼可辨，
+   避免用户把"过去 60 分钟里发生过"误读成"现在还在故障"。 */
+.ain-ai-v3 .ain-ai-column-heading > span[data-state="fault_active"] {
+  background: #fff0ef; color: #b23c3c; border: 1px solid #f0c3bd;
+}
+.ain-ai-v3 .ain-ai-column-heading > span[data-state="recovered_in_window"] {
+  background: #fff6e6; color: #a8661c; border: 1px solid #f0d9a8;
+}
+.ain-ai-v3 .ain-ai-column-heading > span[data-state="performance_warning"] {
+  background: #f2f5f9; color: #5b7391; border: 1px solid #dbe4ee;
+}
+.ain-ai-v3 .ain-ai-column-heading > span[data-state="normal"] {
+  background: #eefaf3; color: #267550; border: 1px solid #b7e2cb;
+}
 .ain-ai-v3 .ain-ai-subheading { gap: 5px; margin-bottom: 6px; }
 .ain-ai-v3 .ain-ai-user-question { margin-bottom: 6px; font-size: 11px; }
 .ain-ai-v3 .ain-ai-result-scope { margin: 3px 0 6px; font-size: 10px; }
