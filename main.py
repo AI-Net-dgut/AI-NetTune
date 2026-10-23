@@ -459,6 +459,11 @@ def build_candidates(ap, base, anomaly_type):
 # 小时切片单独判异常所需的最小样本行数。
 # 窗口被截断时最后那个小时可能只有十几行，均值抖动大 → 不单独下"异常"结论。
 MIN_HOUR_ROWS = 20
+# 单个 (小时, AP) 切片单独下"异常"结论所需的最小行数。
+# 为什么需要它：MIN_HOUR_ROWS 盯的是整个小时的总行数（跨 AP 合计）。
+# 实测构造"某 AP 只有 1 条采样、其他 AP 凑够总行数"时，那条孤零零的采样
+# 仍会被判成"覆盖故障/中等"——样本不足时均值没有统计意义。
+MIN_HOUR_ROWS_PER_AP = 5
 
 
 def _spec_verdict(ap: str, start: str, end: str) -> dict:
@@ -719,7 +724,13 @@ def analyze_anomaly(req: AnomalyRequest):
         # 起因：18:xx 这类被窗口截断的小时只切到十几行，均值抖动大，
         # 曾把 16 行、标签全 normal 的切片判成"边缘弱用户"，与整窗结论矛盾。
         if len(by_hour[hour]) >= MIN_HOUR_ROWS:
-            hour_findings = [x for x in hour_res if x["anomaly_type"] not in ("正常", "性能提示")]
+            # 除了整小时总行数，还要**逐 AP** 检查样本量：
+            # 该 AP 在本小时只有寥寥几条采样时，均值不可信，不单独下异常结论。
+            hour_findings = [
+                x for x in hour_res
+                if x["anomaly_type"] not in ("正常", "性能提示")
+                and len(hour_by_ap.get(x["ap_id"], [])) >= MIN_HOUR_ROWS_PER_AP
+            ]
         else:
             hour_findings = []
         hour_findings_all.extend(hour_findings)
@@ -2377,6 +2388,22 @@ def forecast_preview(req: ForecastPreviewRequest):
         return error_response(ERROR_CODE["PARAM_INVALID"], "baseTime 格式应为 yyyy-MM-dd HH:mm:ss")
     if req.horizonMinutes <= 0 or req.horizonMinutes > 1440:
         return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "horizonMinutes 需在 1~1440 分钟之间")
+
+    # 历史窗口必须整体落在基准之前（防未来数据混入）。
+    # 原先没有这条校验：实测 baseTime=13:30 却传 history=13:35~14:35 时接口照常返回 ready，
+    # 等于用"未来的观测"去预测"过去"，任何准确率结论都会失真。
+    try:
+        hist_start_dt, hist_end_dt = _parse_ts(req.history.start), _parse_ts(req.history.end)
+    except (ValueError, TypeError):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "history 起止格式应为 yyyy-MM-dd HH:mm:ss")
+    if hist_end_dt > base_dt:
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            f"history.end（{req.history.end}）不得晚于 baseTime（{req.baseTime}），否则会读到未来数据")
+    if hist_start_dt >= hist_end_dt:
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            f"history.start（{req.history.start}）必须早于 history.end（{req.history.end}）")
 
     fid = "FC_" + base_dt.strftime("%Y%m%d%H%M%S")
     fore_end = base_dt + timedelta(minutes=req.horizonMinutes)

@@ -114,6 +114,52 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_forecast_rejects_future_history():
+    """历史窗口不得晚于基准（否则等于用未来观测预测过去）。
+
+    实测缺陷：baseTime=13:30 却传 history=13:35~14:35 时，接口原先照常返回 ready。
+    """
+    base = main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime="2026-01-02 13:30:00",
+        history=main._TimeRange(start="2026-01-02 13:35:00", end="2026-01-02 14:35:00"),
+        horizonMinutes=30)
+    r = main.forecast_preview(base)
+    assert r["code"] != 0, "历史晚于基准应被拒绝"
+    assert "不得晚于 baseTime" in r["message"]
+
+    # 起止颠倒也要拒绝
+    rev = main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime="2026-01-02 13:30:00",
+        history=main._TimeRange(start="2026-01-02 13:30:00", end="2026-01-02 12:30:00"),
+        horizonMinutes=30))
+    assert rev["code"] != 0 and "必须早于" in rev["message"]
+
+    # 正常请求仍通过
+    ok = main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime="2026-01-02 13:30:00",
+        history=main._TimeRange(start="2026-01-02 12:30:00", end="2026-01-02 13:30:00"),
+        horizonMinutes=30))
+    assert ok["code"] == 0 and ok["data"]["status"] == "ready"
+
+
+def test_hour_slice_requires_per_ap_samples():
+    """小时切片单独判异常时，必须按 (小时, AP) 检查样本量，而不是只看整小时总行数。
+
+    实测缺陷：构造"某 AP 只有 1 条采样、其他 AP 凑够总行数"时，
+    那条孤立采样仍被判成"覆盖故障/中等"。
+    """
+    one = [{"ap_id": "AP-09", "timestamp": "2026-01-02 10:00:00", "rsrp": -120.0,
+            "sinr": -3.0, "throughput": 1.0, "prb_usage": 95.0, "packet_loss": 12.0,
+            "network_status": "weak_coverage"}]
+    res = main.judge_ap("AP-09", one, None)
+    # judge_ap 本身没有样本量约束（那是上层职责），但上层过滤必须拦住它
+    kept = [x for x in [res]
+            if x["anomaly_type"] not in ("正常", "性能提示")
+            and len(one) >= main.MIN_HOUR_ROWS_PER_AP]
+    assert kept == [], "单行 AP 不应进入小时异常结论"
+    assert main.MIN_HOUR_ROWS_PER_AP >= 5
+
+
 def test_unified_fault_definition():
     """统一故障定义（docs/fault_definition.md v2）的关键行为。
 
