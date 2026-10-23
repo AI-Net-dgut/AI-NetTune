@@ -41,6 +41,14 @@ export default function ForecastDialog({ request, result, pending, error, onClos
   const shownBaseTime = result?.baseTime ?? request.baseTime;
   const shownHistory = result?.history ?? request.history;
   const ageMinutes = currentTime && result ? Math.max(0, Math.floor((toEpoch(currentTime) - toEpoch(result.baseTime)) / 60_000)) : 0;
+  /* 提前量：alert.start 是后端算出的"预计越阈起始时刻"（= 基准 + first_minute）。
+     它相对**基准时刻**的差值就是这个预警的提前量——这才是"提前预警"的直接证据，
+     之前只显示"预计时段"，用户看不出这是几十分钟后的预测而非事后确认。 */
+  const leadMinutes = alert && result
+    ? Math.round((toEpoch(alert.start) - toEpoch(result.baseTime)) / 60_000) : null;
+  const leadText = leadMinutes == null ? ""
+    : leadMinutes > 0 ? `按当前趋势约 ${leadMinutes} 分钟后越阈（预计 ${alert?.start?.slice(11, 16)}）`
+    : "基准时刻已越阈，以下为持续性预测";
   useEffect(() => {
     if (typeof document === "undefined") return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -90,7 +98,7 @@ export default function ForecastDialog({ request, result, pending, error, onClos
             <section className={`ain-forecast-summary${alert ? "" : " is-normal"}`} aria-label="预警摘要">
               <div><h3>{alert ? `${alert.target} · ${alert.title}` : request.targetWindow ? '关注时段未触发风险提示' : result.integrationNotice ? "当前未触发风险提示" : "预测范围内未发现明显风险"}</h3>{alert && <span data-level={alert.severity}>{level[alert.severity]}风险</span>}</div>
               <p>{alert?.summary || (request.targetWindow ? '没有与关注时段相交的预警；这不表示未来一定没有故障。' : result.message) || "可继续查看频谱态势和指标变化，定期刷新预测。"}</p>
-              {alert && <small>预计时段：{alert.start} — {alert.end} · 详细原因与建议可交给AI研判</small>}
+              {alert && <small>预计时段：{alert.start} — {alert.end} · {leadText} · 详细原因与建议可交给AI研判</small>}
               {/* 无风险时给出"判定依据 + 交叉指引"：用户常把"图偏蓝但无预警"当成 bug，
                   或以为"没预警=没问题"。这里说明预警只覆盖频率维度，KPI 维度要找 AI 研判。 */}
               {!alert && <small>判定依据：频谱表逐频段功率 &lt; −95 dBm（要求 ≥40/50 频段越阈且连续 ≥3 分钟）或占用率 &gt; 80%。
