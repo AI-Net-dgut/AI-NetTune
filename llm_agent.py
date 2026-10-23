@@ -142,7 +142,7 @@ def extract_time_range(message: str) -> dict | None:
         return None
     # ① 带日期区间："01-02 09:30 到 11:30" / "1月2日09:30分-11:30分"
     m = re.search(
-        r"(\d{1,2})[-/月](\d{1,2})(?:日)?\s*(\d{1,2}):(\d{2})分?\s*(?:到|至|~|—|－|-)\s*(\d{1,2}):(\d{2})分?",
+        r"(\d{1,2})[-/月](\d{1,2})(?:日)?\s*(\d{1,2}):(\d{2})分?\s*(?:到|至|~|—|－|–|−|-)\s*(\d{1,2}):(\d{2})分?",
         message,
     )
     if m:
@@ -151,11 +151,11 @@ def extract_time_range(message: str) -> dict | None:
             "end": f"{m.group(1)}-{m.group(2)} {m.group(5)}:{m.group(6)}",
         }
     # ② 纯时分区间："12:34到12:50" / "12:34分到12:50分" / "12:34-12:50"
-    m = re.search(r"(\d{1,2}):(\d{2})分?\s*(?:到|至|~|—|－|-)\s*(\d{1,2}):(\d{2})分?", message)
+    m = re.search(r"(\d{1,2}):(\d{2})分?\s*(?:到|至|~|—|－|–|−|-)\s*(\d{1,2}):(\d{2})分?", message)
     if m:
         return {"start": f"{m.group(1)}:{m.group(2)}", "end": f"{m.group(3)}:{m.group(4)}"}
     # ③ 钟点区间："14点到15点"
-    m = re.search(r"(\d{1,2})点(?:钟)?\s*(?:到|至|~|-)\s*(\d{1,2})点(?:钟)?", message)
+    m = re.search(r"(\d{1,2})点(?:钟)?\s*(?:到|至|~|—|－|–|−|-)\s*(\d{1,2})点(?:钟)?", message)
     if m:
         return {"start": f"{m.group(1)}:00", "end": f"{m.group(2)}:59"}
     # ④ 相对时间："最近1小时" / "过去30分钟" / "最近半小时"

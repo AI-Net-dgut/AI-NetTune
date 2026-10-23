@@ -92,7 +92,7 @@ export function resolveForecastQuestion(message: string, context: ForecastQuesti
     if (clockTokens.length === 2) {
       const between = normalized.slice((clockTokens[0].index ?? 0) + clockTokens[0][0].length, clockTokens[1].index)
         .replace(/(?:(\d{4})[-/年])?\d{1,2}[-/月]\d{1,2}(?:日|号)?/g, '').replace(/的|当天/g, '');
-      if (!/^\s*(?:到|至|~|—|－|-)\s*$/.test(between)) return fail('请用“到”明确一个连续未来时段。');
+      if (!/^\s*(?:到|至|~|—|－|–|−|-)\s*$/.test(between)) return fail('请用“到”明确一个连续未来时段。');
     }
     const start = stamps[0], end = stamps.at(-1)!;
     if (start < base || end <= base) return fail('指定时刻已过去或尚未超过预测基准，请写明未来日期和钟点。');

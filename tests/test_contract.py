@@ -114,6 +114,19 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_time_range_accepts_various_dashes():
+    """时间区间分隔符必须兼容各种破折号/连字符。
+
+    实测问题：前端白名单只有 到|至|~|—|－|-，不认 en dash "–"（U+2013）
+    与减号 "−"（U+2212）。用户从聊天里复制"01-01 10:00–11:59"会被判为
+    "请用'到'明确起止时间"，问题直接发不出去。
+    """
+    expect = {"start": "01-01 10:00", "end": "01-01 11:59"}
+    for sep in ("到", "至", "~", "—", "－", "–", "−", "-"):
+        got = main.llm_agent.extract_time_range(f"01-01 10:00{sep}11:59")
+        assert got == expect, f"分隔符 {sep!r} 解析失败，实得 {got}"
+
+
 def test_forecast_horizon_independent():
     """同一基准下，重叠的未来时刻必须得到相同的预测值。
 

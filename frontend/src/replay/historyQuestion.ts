@@ -87,7 +87,7 @@ export function resolveHistoryQuestion(message: string, context: HistoryTimeCont
     if (tokens.length === 2) {
       const between = normalized.slice((tokens[0].index ?? 0) + tokens[0][0].length, tokens[1].index)
         .replace(datePattern, "").replace(/的|当天|这天/g, "");
-      if (!/^\s*(?:到|至|~|—|－|-)\s*$/.test(between))
+      if (!/^\s*(?:到|至|~|—|－|–|−|-)\s*$/.test(between))
         return { kind: "error", message: "请用“到”明确起止时间；两个独立时刻请分别提问。" };
       const a = parseToken(tokens[0]), b = parseToken(tokens[1]);
       if (dates.some(item => !usedDates.has(item.index)))
@@ -97,14 +97,14 @@ export function resolveHistoryQuestion(message: string, context: HistoryTimeCont
     if (tokens.length === 1) {
       if (dates.length > 1) return { kind: "error", message: "多个日期对应一个钟点，请写明完整起止时间。" };
       const rest = normalized.slice((tokens[0].index ?? 0) + tokens[0][0].length);
-      if (/^\s*(?:到|至|~|—|－|-)\s*\d/.test(rest))
+      if (/^\s*(?:到|至|~|—|－|–|−|-)\s*\d/.test(rest))
         return { kind: "error", message: "结束时间不完整，请写成HH:mm。" };
       return pointRange(parseToken(tokens[0]));
     }
     if (/点|:/.test(normalized)) return { kind: "error", message: "请使用数字钟点，例如昨天14:00或01-02 09:30到11:30。" };
     if (dates.length === 2) {
       const between = normalized.slice(dates[0].end, dates[1].index).replace(/的/g, "");
-      if (!/^\s*(?:到|至|~|—|－|-)\s*$/.test(between))
+      if (!/^\s*(?:到|至|~|—|－|–|−|-)\s*$/.test(between))
         return { kind: "error", message: "多个日期的对比请分开提问；连续日期范围请使用“到”。" };
       return finish(toEpoch(`${dates[0].date} 00:00:00`), toEpoch(`${dates[1].date} 23:59:59`));
     }
