@@ -93,7 +93,7 @@ export default function ForecastDialog({ request, result, pending, error, onClos
               {alert && <small>预计时段：{alert.start} — {alert.end} · 详细原因与建议可交给AI研判</small>}
               {/* 无风险时给出"判定依据 + 交叉指引"：用户常把"图偏蓝但无预警"当成 bug，
                   或以为"没预警=没问题"。这里说明预警只覆盖频率维度，KPI 维度要找 AI 研判。 */}
-              {!alert && <small>判定依据：频谱表逐频段功率 &lt; −95 dBm（要求 ≥40/50 频段越阈且连续 ≥3 分钟）或占用率 &gt; 85%。
+              {!alert && <small>判定依据：频谱表逐频段功率 &lt; −95 dBm（要求 ≥40/50 频段越阈且连续 ≥3 分钟）或占用率 &gt; 80%。
                 本提示仅覆盖<b>频率维度</b>；KPI 维度（弱覆盖 / 拥塞）的异常请<b>交给 AI 研判核对</b>。</small>}
             </section>
             <div className="ain-forecast-chart-stack">

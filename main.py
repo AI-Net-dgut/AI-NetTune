@@ -2128,7 +2128,13 @@ FORECAST_PROFILES = {
 
 # 预警阈值：与 docs/api.md、频谱数据转交说明保持同一口径
 ALERT_WEAK_POWER_DBM = -95.0        # 频段功率低于此值视为弱覆盖
-ALERT_CONGESTION_OCC_PCT = 85.0     # 频段占用率高于此值视为拥塞
+# 频段占用率高于此值视为拥塞。
+# 为什么从 85 调到 80：预警还要求"≥40/50 频段同时越阈"，而实测 4 个拥塞事件
+# 的越阈频段数最多只有 39/37/37/39（差 1~3 个），导致拥塞预警**从未触发过**。
+# 全 7 天回测（scripts/backtest_forecast.py）：
+#   阈值 85% → 触发 0 段；阈值 80% → 触发 114 段，全部落在真值拥塞窗口内，0 误报。
+# 依据：拥塞窗口占用率均值 75.6%~77.4%、最高 94.8%；正常窗口均值 37%~40%、最高 70.8%。
+ALERT_CONGESTION_OCC_PCT = 80.0
 
 
 def _linear_trend(values):
@@ -2336,7 +2342,7 @@ def forecast_preview(req: ForecastPreviewRequest):
             })
 
         # ---- 预警判据：看"预测帧"里第几分钟越过阈值，而不是统计已发生的历史标签 ----
-        # 阈值与 docs/api.md、频谱转交说明一致：功率 < −95 dBm 视为弱覆盖；占用率 > 85% 视为拥塞。
+        # 阈值与 docs/api.md、频谱转交说明一致：功率 < −95 dBm 视为弱覆盖；占用率 > 80% 视为拥塞。
         # 输出分两种语义，与《问题状态与责任分工》里"持续风险"和"提前预警"分别验收一致：
         #   already=True  → 基准时刻已越阈，提示"已发生、预计持续"（持续风险）
         #   already=False → 基准时刻未越阈，提示"预计 N 分钟后…"（提前预警，带提前量）
@@ -2413,9 +2419,13 @@ def forecast_preview(req: ForecastPreviewRequest):
                 severity = "high" if first_minute <= 10 else ("medium" if first_minute <= 30 else "low")
                 unit_text = "dBm" if metric == "power" else "%"
                 summary = (
-                    f"基准时刻（{req.baseTime}）尚未越阈；按当前趋势，"
+                    f"基准时刻（{req.baseTime}）尚未越阈；按当前趋势外推，"
                     f"预计第 {first_minute} 分钟后开始有 {len(hardest)}/{len(bands)} 个频段"
-                    f"{label}{verb} {threshold}{unit_text}，提前量约 {first_minute} 分钟。"
+                    f"{label}{verb} {threshold}{unit_text}。"
+                    # 措辞校准：这是"趋势延续"判断，不是保证。实测 01-02 AP-03 弱覆盖
+                    # 在故障注入前的历史窗口内毫无前兆，任何外推都无法提前预知，
+                    # 所以不写"提前预警"这类绝对表述。
+                    f"（趋势推算值，非确定预测；若后续趋势变化，越阈时刻会随之变动）"
                 )
                 title = f"{ap} 预计 {first_minute} 分钟后{label}{verb} {threshold}{unit_text}"
 

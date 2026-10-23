@@ -343,6 +343,27 @@ def test_chat_tool_chain():
     assert d["worst_ap"] in (d["diagnosis"].get("affected_aps") or [d["worst_ap"]])
 
 
+def test_forecast_congestion_alert_fires():
+    """拥塞事件中途必须能报出预警。
+
+    背景：预警要求"≥40/50 频段同时越阈"，而占用率阈值原为 85% 时，
+    4 个真值拥塞事件的越阈频段数最多只有 39/37/37/39（差 1~3 个），
+    拥塞预警**从未触发过**。阈值下调到 80% 后应能正常报出。
+    """
+    d = _preview("2026-01-01 20:25:00", minutes=30)
+    assert d["status"] == "ready"
+    alerts = d.get("alerts") or []
+    assert alerts, "拥塞事件中途应报出预警"
+    first = alerts[0]
+    assert "拥塞" in first["title"], f"应为拥塞类预警，实得 {first['title']}"
+    assert "80.0%" in first["summary"], f"摘要应体现新阈值，实得 {first['summary'][:80]}"
+
+    # 正常时段不得误报（阈值下调的代价必须可控）
+    for base in ("2026-01-02 10:34:00", "2026-01-04 09:00:00", "2026-01-06 15:00:00"):
+        quiet = _preview(base, minutes=30)
+        assert not (quiet.get("alerts") or []), f"{base} 属正常时段，不应预警"
+
+
 def test_forecast_preview_early_warning():
     """渐变期必须能给出提前量 —— 这是申报书的核心里程碑。
 
