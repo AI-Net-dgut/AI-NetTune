@@ -114,6 +114,47 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_unified_fault_definition():
+    """统一故障定义（docs/fault_definition.md v2）的关键行为。
+
+    背景：研判原先只看网络表、预警只看频谱表，在故障边界窗口上结论相反
+    （56 个边界窗口有 4 个相反）。统一后要求：
+      ① 频谱维度越阈即可判故障（补上研判漏报）
+      ② 两维都满足才升级为"严重"
+      ③ 不属于主判据的"边缘弱用户"只能算提示级
+      ④ 窗口按闭区间处理（否则会漏掉最后一分钟）
+    """
+    def run(start, end):
+        return _data(main.analyze_anomaly(main.AnomalyRequest(
+            scenario=SCENARIO, window_start=start, window_end=end)))
+
+    # ① 频谱已越阈但标签还没到 → 必须报出来（改前是"正常"）
+    early = run("2026-01-01 10:00:00", "2026-01-01 10:15:00")
+    assert early["is_anomaly"] is True, "频谱维度已越阈，研判应报故障"
+    assert early["anomaly_type"] == "覆盖故障"
+
+    # ④ 闭区间：该窗口只有 20:18/19/20 三分钟达标，若切掉最后一分钟会漏判
+    cong = run("2026-01-05 20:00:00", "2026-01-05 20:20:00")
+    assert cong["anomaly_type"] == "网络拥塞", f"应判网络拥塞，实得 {cong['anomaly_type']}"
+
+    # ② 整窗两维都越阈 → 严重
+    both = run(WEAK_START, WEAK_END)
+    assert both["anomaly_type"] == "覆盖故障" and both["level"] == "严重"
+
+    # ③ 边缘弱用户（RSRP<-100 且吞吐<50）不在主判据内 → 只能算提示
+    hint = run("2026-01-04 10:00:00", "2026-01-04 10:15:00")
+    assert hint["is_anomaly"] is False, "边缘弱用户不应算故障"
+    assert hint["current_state"] == "performance_warning"
+
+    # 任何故障结论都必须带触发证据（含占比或频谱频段数）
+    for d in (early, cong, both):
+        assert d["kpi_evidence"], f"{d['anomaly_type']} 结论缺证据"
+        metrics = {e["metric"] for e in d["kpi_evidence"]}
+        assert metrics & {"weak_coverage_ratio", "congestion_ratio",
+                          "spectrum_power_bands", "spectrum_occupancy_bands"}, \
+            f"证据里缺少主判据指标，实得 {metrics}"
+
+
 def test_anomaly_state_semantics():
     """四种状态必须能区分：当前故障 / 窗口内已恢复 / 性能提示 / 正常。
 

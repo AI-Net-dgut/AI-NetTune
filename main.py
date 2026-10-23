@@ -461,8 +461,56 @@ def build_candidates(ap, base, anomaly_type):
 MIN_HOUR_ROWS = 20
 
 
-def judge_ap(ap, ap_rows):
-    """对单个AP做多KPI联合研判（通信规则 + 状态标签占比），返回研判结果dict"""
+def _spec_verdict(ap: str, start: str, end: str) -> dict:
+    """频谱维度判定，供「现状研判」使用（与「预测预警」共用同一套门槛）。
+
+    为什么要它（docs/fault_definition.md 第 2.2 节）：研判原先只看网络表
+    （RSRP/SINR/吞吐均值 + 标签占比），而预警只看频谱（越阈频段数）。
+    两套口径在故障边界窗口上会给出相反结论——实测 56 个边界窗口有 4 个相反：
+    频谱已 40/50 越阈但标签还没到（研判漏报），或反过来（研判多报）。
+    这里把频谱维度作为研判的**第二个主判据**，任一维满足即判故障。
+
+    返回 {available, weak, cong, max_power_bands, max_occ_bands, min_bands}
+    """
+    out = {"available": False, "weak": False, "cong": False,
+           "max_power_bands": 0, "max_occ_bands": 0, "min_bands": 0}
+    if _SPEC.get("df") is None:
+        return out
+    # 必须 inclusive_end=True：研判窗口与网络表 filter_rows 都是**闭区间**，
+    # 而 spectrum_window 默认不含结束那一分钟。实测 EV-006（01-05 20:00~20:20）
+    # 只有 20:18/19/20 三分钟达到门槛，被切掉一分钟就退化成 2 分钟 → 漏判。
+    part = spectrum_window(ap, start, end, inclusive_end=True)
+    if part is None or part.empty:
+        return out
+
+    min_bands = _min_crossing_bands(len(_SPEC.get("bands") or []))
+    out["available"], out["min_bands"] = True, min_bands
+
+    # 向量化：先算出每行的越阈标记，再按分钟求和（避免逐分钟 Python 循环）
+    counted = part.assign(
+        _p=(part["power_dbm"] < ALERT_WEAK_POWER_DBM).astype(int),
+        _o=(part["occupancy_pct"] > ALERT_CONGESTION_OCC_PCT).astype(int),
+    ).groupby("timestamp")[["_p", "_o"]].sum()
+
+    out["max_power_bands"] = int(counted["_p"].max())
+    out["max_occ_bands"] = int(counted["_o"].max())
+    for col, key in (("_p", "weak"), ("_o", "cong")):
+        run = 0
+        for hit in (counted[col] >= min_bands):
+            run = run + 1 if hit else 0
+            if run >= ALERT_MIN_CROSSING_MINUTES:
+                out[key] = True
+                break
+    return out
+
+
+def judge_ap(ap, ap_rows, spec=None):
+    """对单个AP做多KPI联合研判（网络维 + 频谱维 + 状态标签占比）。
+
+    spec：可选的频谱维度判定结果（_spec_verdict 的返回值）。
+    传入时，"覆盖故障/网络拥塞"的主判据变为"网络维 或 频谱维 任一满足"，
+    两维都满足则升级为"严重" —— 见 docs/fault_definition.md 第 2.2 / 2.3 节。
+    """
     rsrp_avg = avg(ap_rows, "rsrp")
     sinr_avg = avg(ap_rows, "sinr")
     thr_avg = avg(ap_rows, "throughput")
@@ -496,16 +544,50 @@ def judge_ap(ap, ap_rows):
     }
 
     # 规则优先级：覆盖故障 > 网络拥塞 > 边缘弱用户
-    if weak_ratio > 0.3 or (rsrp_avg < -105 and sinr_avg < 5):
-        level = "严重" if weak_ratio > 0.5 else "中等"
-        return {**base, "anomaly_type": "覆盖故障", "level": level, "network_status": "weak_coverage",
-                "cause": f"{ap}弱覆盖采样占比{weak_ratio*100:.0f}%、RSRP均值{rsrp_avg:.1f}dBm，判定为覆盖空洞",
+    # 统一口径（docs/fault_definition.md 2.2/2.3）：覆盖故障与网络拥塞各有两个主判据
+    # （网络维 + 频谱维），**任一维满足即判故障**；两维都满足才是"严重"。
+    # 这样既堵住"频谱已越阈但标签还没到"的漏报，又给出统一分档。
+    _spec = spec or {}
+    net_weak = weak_ratio > 0.3 or (rsrp_avg < -105 and sinr_avg < 5)
+    spec_weak = bool(_spec.get("weak"))
+    if net_weak or spec_weak:
+        both = net_weak and spec_weak
+        merged = list(evidence)
+        if weak_ratio > 0.3:
+            merged.append({"metric": "weak_coverage_ratio", "avg_value": round(weak_ratio, 3),
+                           "threshold": 0.3, "status": "异常"})
+        if spec_weak:
+            merged.append({"metric": "spectrum_power_bands",
+                           "avg_value": _spec.get("max_power_bands", 0),
+                           "threshold": _spec.get("min_bands", 0), "status": "异常"})
+        src = "两维均越阈" if both else ("频谱维度越阈" if spec_weak else "网络维度越阈")
+        return {**base, "evidence": merged,
+                "anomaly_type": "覆盖故障", "level": "严重" if both else "中等",
+                "network_status": "weak_coverage",
+                "cause": (f"{ap}弱覆盖采样占比{weak_ratio*100:.0f}%、RSRP均值{rsrp_avg:.1f}dBm"
+                          f"、频段最大越阈{_spec.get('max_power_bands', 0)}/{_spec.get('min_bands', 0)}，"
+                          f"{src}，判定为覆盖故障"),
                 "suggestion": "建议检查AP天线倾角/功率或增加补盲AP",
                 "candidates": build_candidates(ap, base, "覆盖故障")}
-    if cong_ratio > 0.25 or prb_avg > 90:
-        level = "严重" if cong_ratio > 0.5 else "中等"
-        return {**base, "anomaly_type": "网络拥塞", "level": level, "network_status": "congestion",
-                "cause": f"{ap}拥塞采样占比{cong_ratio*100:.0f}%、PRB利用率均值{prb_avg:.1f}%，判定为容量拥塞",
+    net_cong = cong_ratio > 0.25 or prb_avg > 90
+    spec_cong = bool(_spec.get("cong"))
+    if net_cong or spec_cong:
+        both = net_cong and spec_cong
+        merged = list(evidence)
+        if cong_ratio > 0.25:
+            merged.append({"metric": "congestion_ratio", "avg_value": round(cong_ratio, 3),
+                           "threshold": 0.25, "status": "异常"})
+        if spec_cong:
+            merged.append({"metric": "spectrum_occupancy_bands",
+                           "avg_value": _spec.get("max_occ_bands", 0),
+                           "threshold": _spec.get("min_bands", 0), "status": "异常"})
+        src = "两维均越阈" if both else ("频谱维度越阈" if spec_cong else "网络维度越阈")
+        return {**base, "evidence": merged,
+                "anomaly_type": "网络拥塞", "level": "严重" if both else "中等",
+                "network_status": "congestion",
+                "cause": (f"{ap}拥塞采样占比{cong_ratio*100:.0f}%、PRB均值{prb_avg:.1f}%"
+                          f"、频段最大越阈{_spec.get('max_occ_bands', 0)}/{_spec.get('min_bands', 0)}，"
+                          f"{src}，判定为容量拥塞"),
                 "suggestion": "建议负载均衡或扩容",
                 "candidates": build_candidates(ap, base, "网络拥塞")}
     if thr_avg < 50 and rsrp_avg < -100:
@@ -514,14 +596,19 @@ def judge_ap(ap, ap_rows):
         # 实测 2026-01-02 11:01~11:16（16 行、标签全 normal、RSRP -93.4dBm、
         # SINR 6.1dB、吞吐 49.1Mbps）被判"边缘弱用户/中等"，而吞吐只差 0.9。
         # 吞吐偏低既可能是边缘弱覆盖，也可能是拥塞或服务端问题，单凭它不能定性。
+        # 统一口径（docs/fault_definition.md 2.3）：这个条件**不属于**弱覆盖的两个
+        # 主判据（① 频谱 40/50 越阈 ② RSRP<−105 采样占比 ≥30%），因此只能算
+        # "指标偏低但未达主判据" → 归入**提示级**，不再算故障。
+        # 语义仍是"边缘弱用户"（用户处在覆盖边缘），只是不升级为故障结论。
         weak_evidence = evidence + [
-            {"metric": "rsrp", "avg_value": round(rsrp_avg, 2), "threshold": -100, "status": "异常"},
-            {"metric": "throughput", "avg_value": round(thr_avg, 2), "threshold": 50, "status": "异常"},
+            {"metric": "rsrp", "avg_value": round(rsrp_avg, 2), "threshold": -100, "status": "提示"},
+            {"metric": "throughput", "avg_value": round(thr_avg, 2), "threshold": 50, "status": "提示"},
         ]
         return {**base, "evidence": weak_evidence,
-                "anomaly_type": "边缘弱用户", "level": "中等", "network_status": "weak_coverage",
-                "cause": f"{ap}RSRP均值{rsrp_avg:.1f}dBm偏低（<-100）且吞吐均值{thr_avg:.1f}Mbps低于50，判定为边缘弱用户",
-                "suggestion": "建议用户靠近信号源或调整波束",
+                "anomaly_type": "性能提示", "level": "提示", "network_status": "normal",
+                "cause": (f"{ap}RSRP均值{rsrp_avg:.1f}dBm偏低（< -100）且吞吐均值{thr_avg:.1f}Mbps低于50，"
+                          f"呈边缘弱用户特征；但未达弱覆盖主判据，属性能提示而非故障"),
+                "suggestion": "建议用户靠近信号源或调整波束；若 RSRP 继续下降或频谱越阈，将升级为覆盖故障",
                 "candidates": build_candidates(ap, base, "边缘弱用户")}
     # 「性能提示」：整窗标签 normal，但**过半采样**的信号质量已偏低 —— 单独一类，不算异常。
     # 起因：队友指出"CSV 标签正常不代表指标都优良"。
@@ -606,7 +693,13 @@ def analyze_anomaly(req: AnomalyRequest):
     by_ap = {}
     for r in rows:
         by_ap.setdefault(r["ap_id"], []).append(r)
-    ap_results = [judge_ap(ap, ap_rows) for ap, ap_rows in sorted(by_ap.items())]
+    # 频谱维度判定（与预测预警共用同一套门槛）；频谱表缺失时返回 available=False
+    _spec_by_ap = {}
+    if _SPEC.get("df") is not None:
+        for _ap in by_ap:
+            _spec_by_ap[_ap] = _spec_verdict(_ap, req.window_start, req.window_end)
+    ap_results = [judge_ap(ap, ap_rows, _spec_by_ap.get(ap))
+                  for ap, ap_rows in sorted(by_ap.items())]
     # 故障类 findings（不含"性能提示"）：性能提示只作为 hint 展示，不计入异常
     findings = [res for res in ap_results if res["anomaly_type"] not in ("正常", "性能提示")]
     perf_hints = [res for res in ap_results if res["anomaly_type"] == "性能提示"]
@@ -2199,6 +2292,17 @@ ALERT_WEAK_POWER_DBM = -95.0        # 频段功率低于此值视为弱覆盖
 # 依据：拥塞窗口占用率均值 75.6%~77.4%、最高 94.8%；正常窗口均值 37%~40%、最高 70.8%。
 ALERT_CONGESTION_OCC_PCT = 80.0
 
+# 越阈门槛的"比例/持续"部分，提到模块级以便「现状研判」与「预测预警」共用同一套判据。
+# docs/fault_definition.md 第 2.2 节：≥80% 频段（即 40/50）同时越阈且连续 ≥3 分钟。
+# 只按 5/50 判定时正常时段也会因边缘频段误报；只按单分钟触发时也出现过误报。
+ALERT_MIN_CROSSING_RATIO = 0.8
+ALERT_MIN_CROSSING_MINUTES = 3
+
+
+def _min_crossing_bands(band_count: int) -> int:
+    """越阈频段数门槛（与预警、研判共用）。"""
+    return max(5, int(band_count * ALERT_MIN_CROSSING_RATIO))
+
 
 def _linear_trend(values):
     """对等间隔序列做最小二乘（可含 None，自动跳过）。
@@ -2420,11 +2524,11 @@ def forecast_preview(req: ForecastPreviewRequest):
         # 实测只按 5/50 个频段判定时，正常时段也会因为边缘频段而误报。
         # 真实弱覆盖/拥塞是 50/50 全段越阈，渐变期则是"逐渐有更多频段越阈"，
         # 用 80% 作为门槛既能滤掉边缘噪声，又能让预测阶段给出提前量。
-        min_crossing_bands = max(5, int(len(bands) * 0.8))
+        min_crossing_bands = _min_crossing_bands(len(bands))
         # 持续性约束：必须连续 N 分钟越阈才算命中。
         # 起因：KPI 有阴影衰落，单分钟噪声就可能让若干频段瞬间跌破阈值，
         # 若只按"某一分钟越阈"触发，正常时段也会冒出误报（实测出现过 1 次）。
-        min_crossing_minutes = 3
+        min_crossing_minutes = ALERT_MIN_CROSSING_MINUTES
 
         def _bands_over(values, threshold, direction):
             """返回越阈频段列表；按越阈幅度从最严重排起。"""
