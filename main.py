@@ -456,6 +456,11 @@ def build_candidates(ap, base, anomaly_type):
     return [{"rank": 1, "cause": f"{ap}各项指标正常，无需处理", "confidence": round(0.95, 2),
              "support_evidence": [], "against_evidence": [], "pending_checks": []}]
 
+# 小时切片单独判异常所需的最小样本行数。
+# 窗口被截断时最后那个小时可能只有十几行，均值抖动大 → 不单独下"异常"结论。
+MIN_HOUR_ROWS = 20
+
+
 def judge_ap(ap, ap_rows):
     """对单个AP做多KPI联合研判（通信规则 + 状态标签占比），返回研判结果dict"""
     rsrp_avg = avg(ap_rows, "rsrp")
@@ -503,9 +508,19 @@ def judge_ap(ap, ap_rows):
                 "cause": f"{ap}拥塞采样占比{cong_ratio*100:.0f}%、PRB利用率均值{prb_avg:.1f}%，判定为容量拥塞",
                 "suggestion": "建议负载均衡或扩容",
                 "candidates": build_candidates(ap, base, "网络拥塞")}
-    if thr_avg < 50:
-        return {**base, "anomaly_type": "边缘弱用户", "level": "中等", "network_status": "weak_coverage",
-                "cause": f"{ap}吞吐量均值{thr_avg:.1f}Mbps偏低、SINR均值{sinr_avg:.1f}dB，判定为边缘弱用户",
+    if thr_avg < 50 and rsrp_avg < -100:
+        # 「边缘弱用户」= 用户处在覆盖边缘 → **必须有 RSRP 佐证**。
+        # 原先只看 thr_avg < 50 就判中等异常，导致正常时段被误报：
+        # 实测 2026-01-02 11:01~11:16（16 行、标签全 normal、RSRP -93.4dBm、
+        # SINR 6.1dB、吞吐 49.1Mbps）被判"边缘弱用户/中等"，而吞吐只差 0.9。
+        # 吞吐偏低既可能是边缘弱覆盖，也可能是拥塞或服务端问题，单凭它不能定性。
+        weak_evidence = evidence + [
+            {"metric": "rsrp", "avg_value": round(rsrp_avg, 2), "threshold": -100, "status": "异常"},
+            {"metric": "throughput", "avg_value": round(thr_avg, 2), "threshold": 50, "status": "异常"},
+        ]
+        return {**base, "evidence": weak_evidence,
+                "anomaly_type": "边缘弱用户", "level": "中等", "network_status": "weak_coverage",
+                "cause": f"{ap}RSRP均值{rsrp_avg:.1f}dBm偏低（<-100）且吞吐均值{thr_avg:.1f}Mbps低于50，判定为边缘弱用户",
                 "suggestion": "建议用户靠近信号源或调整波束",
                 "candidates": build_candidates(ap, base, "边缘弱用户")}
     return {**base, "anomaly_type": "正常", "level": "低", "network_status": "normal",
@@ -584,7 +599,13 @@ def analyze_anomaly(req: AnomalyRequest):
         for r in by_hour[hour]:
             hour_by_ap.setdefault(r["ap_id"], []).append(r)
         hour_res = [judge_ap(ap, ap_rows) for ap, ap_rows in hour_by_ap.items()]
-        hour_findings = [x for x in hour_res if x["anomaly_type"] != "正常"]
+        # 小时切片样本太少时**不单独判异常**（只参与趋势与 AP 对比）。
+        # 起因：18:xx 这类被窗口截断的小时只切到十几行，均值抖动大，
+        # 曾把 16 行、标签全 normal 的切片判成"边缘弱用户"，与整窗结论矛盾。
+        if len(by_hour[hour]) >= MIN_HOUR_ROWS:
+            hour_findings = [x for x in hour_res if x["anomaly_type"] != "正常"]
+        else:
+            hour_findings = []
         hour_findings_all.extend(hour_findings)
         if hour_findings:
             hour_findings.sort(key=lambda f: sev_rank.get(f["level"], 9))

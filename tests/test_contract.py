@@ -82,6 +82,38 @@ def test_data_query():
 
 
 # ---------------------------------------------------------------- 研判
+def test_anomaly_no_false_positive_on_normal_window():
+    """研判不得把正常时段判成异常。
+
+    实测问题：2026-01-02 10:17:41~11:17:41 这窗口底层标签全部 normal（RSRP -93.4、
+    SINR 6.1、吞吐 49.1 Mbps），却因 `thr_avg < 50` 被判"边缘弱用户/中等"，
+    导致"研判说异常、预测说无风险"两个模块结论相反。
+    """
+    d = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO,
+        window_start="2026-01-02 10:17:41", window_end="2026-01-02 11:17:41")))
+    assert d["is_anomaly"] is False, f"正常窗口不应判异常，实得 {d['anomaly_type']}"
+    assert d["anomaly_type"] == "正常"
+    assert d["anomaly_scope"] == "none"
+    assert d["affected_aps"] == []
+
+    # 同一时段更短的切片也不该误报（小时切片样本过少时不下结论）
+    e = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO,
+        window_start="2026-01-02 11:00:00", window_end="2026-01-02 11:17:41")))
+    assert e["is_anomaly"] is False, f"16 行切片不应判异常，实得 {e['anomaly_type']}"
+
+
+def test_anomaly_conclusion_has_evidence():
+    """下了"异常"结论就必须有证据链，不能无证据断言。"""
+    for start, end in ((WEAK_START, WEAK_END),
+                       ("2026-01-02 10:17:41", "2026-01-02 11:17:41")):
+        d = _data(main.analyze_anomaly(main.AnomalyRequest(
+            scenario=SCENARIO, window_start=start, window_end=end)))
+        if d["is_anomaly"]:
+            assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
+
+
 def test_anomaly_coverage_window():
     d = _data(main.analyze_anomaly(main.AnomalyRequest(
         scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)))
