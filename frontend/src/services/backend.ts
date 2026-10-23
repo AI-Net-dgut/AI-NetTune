@@ -356,6 +356,12 @@ export function parseDiagnosis(value: unknown, scope: QueryScope): Diagnosis {
       return { apId: str(h.ap_id), metric: str(h.metric), value: numeric(h.value),
         threshold: numeric(h.threshold), cause: str(h.cause), suggestion: str(h.suggestion) };
     }),
+    anomalyScope: (str(d.anomaly_scope) || "none") as Diagnosis["anomalyScope"],
+    anomalySpans: arr(d.anomaly_spans).map((v) => {
+      const s = obj(v);
+      return { apId: str(s.ap_id), type: str(s.type), start: str(s.start),
+        end: str(s.end), minutes: numeric(s.minutes) };
+    }),
     anomalyType: str(d.anomaly_type), level: str(d.level), score: numeric(d.rule_score ?? d.confidence),
     cause: str(d.cause) || str(d.reason), suggestion: str(d.suggestion), affectedAps: strings(d.affected_aps),
     evidence: arr(d.kpi_evidence).map(v => { const e = obj(v); return { metric: str(e.metric), value: numeric(e.avg_value), threshold: numeric(e.threshold), status: str(e.status) }; }),

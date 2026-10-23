@@ -58,6 +58,9 @@ export interface ApComparison {
   id: string; type: string; level: string;
   rsrp: number; sinr: number; throughput: number; prb: number;
 }
+export interface AnomalySpan {
+  apId: string; type: string; start: string; end: string; minutes: number;
+}
 export interface PerformanceHint {
   apId: string; metric: string; value: number; threshold: number;
   cause: string; suggestion: string;
@@ -73,6 +76,10 @@ export interface Diagnosis {
   currentState: "fault_active" | "recovered_in_window" | "performance_warning" | "normal";
   lastAnomalyAt: string;
   performanceHints: PerformanceHint[];
+  /** 异常范围：window=整窗越阈 / hour=仅个别小时(片段)越阈、整窗均值正常 / none=正常 */
+  anomalyScope: "window" | "hour" | "none";
+  /** 分钟级异常区间（申报书要求"定位异常的起止时间"），平稳窗口为空数组 */
+  anomalySpans: AnomalySpan[];
   anomalyType: string; level: string; score: number; cause: string; suggestion: string;
   affectedAps: string[];
   evidence: { metric: string; value: number; threshold: number; status: string }[];
