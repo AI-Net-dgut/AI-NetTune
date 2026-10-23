@@ -23,8 +23,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+# 同一目录下的口径一致性度量（docs/fault_definition.md 第 7 节指标 3）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import main  # noqa: E402
+from compare_verdicts import judge_anomalous, spectrum_hit  # noqa: E402
 
 ISO = "%Y-%m-%d %H:%M:%S"
 DATA = ROOT / "data"
@@ -163,11 +166,54 @@ def accept_false_positive(events, step: int) -> None:
         print(f"\n> 误报样例：{s}")
 
 
+def accept_consistency(events) -> None:
+    """第 3 项指标：研判口径 vs 预警口径的一致率（docs/fault_definition.md 第 7 节）。
+
+    在故障边界窗口上对比「现存研判」与「频谱越阈」两个结论，
+    两者相反即说明"故障定义"没统一（v1 曾有 4/56 相反，v2 后应为 0）。
+    """
+    print("\n### 4) 两套口径一致率（研判 vs 频谱越阈）\n")
+    spec = main._pd.read_csv(DATA / "spectrum_7d.csv", encoding="utf-8-sig",
+                             usecols=["timestamp", "observation_id", "power_dbm", "occupancy_pct"])
+    same = diff = 0
+    mismatches = []
+    print("| 事件 | 窗口 | 研判 | 频谱越阈 | 一致 |")
+    print("|---|---|---|---|---|")
+    for e in events:
+        ap_id = e["ap_id"]
+        start = datetime.strptime(e["start_time"], ISO)
+        end = datetime.strptime(e["end_time"], ISO)
+        windows = [(start, start + timedelta(minutes=n)) for n in (5, 10, 15, 20, 30)]
+        windows += [(end - timedelta(minutes=n), end) for n in (5, 10)]
+        for s, t in windows:
+            ss, ee = s.strftime(ISO), t.strftime(ISO)
+            jt = judge_anomalous(ss, ee)
+            judge_anom = jt not in ("正常", "性能提示")
+            sh = spectrum_hit(spec, ap_id, ss, ee)
+            if sh is None:
+                continue
+            ok = judge_anom == sh
+            same += ok
+            diff += (not ok)
+            if not ok:
+                mismatches.append((e["event_id"], f"{ss[5:16]}~{ee[11:16]}", jt, sh))
+            print(f"| {e['event_id']} | {ss[5:16]}~{ee[11:16]} | {jt} | "
+                  f"{'是' if sh else '否'} | {'✅' if ok else '❌'} |")
+    total = same + diff
+    rate = same / total * 100 if total else 0
+    print(f"\n汇总：一致 {same} / {total} = **{rate:.1f}%**")
+    if mismatches:
+        print("\n不一致明细：")
+        for eid, win, jt, sh in mismatches:
+            print(f"  {eid} {win} 研判={jt} 频谱={'越阈' if sh else '未越阈'}")
+
+
 def main_cli() -> int:
     ap = argparse.ArgumentParser(description="预测预警能力验收")
     ap.add_argument("--fp-step", type=int, default=15, help="误报抽样间隔（分钟），默认 15")
     ap.add_argument("--no-fp", action="store_true", help="跳过误报扫描")
     ap.add_argument("--no-persist", action="store_true", help="跳过持续风险统计")
+    ap.add_argument("--no-consistency", action="store_true", help="跳过口径一致率统计")
     args = ap.parse_args()
 
     events = _load_events()
@@ -177,7 +223,7 @@ def main_cli() -> int:
     print("# 预测预警能力验收\n")
     print(f"数据：network_data_30d.csv（标签真值）+ spectrum_7d.csv（预警输入）+ fault_events.csv（{len(events)} 个注入故障）")
     print(f"判定口径：功率 < {main.ALERT_WEAK_POWER_DBM} dBm 或占用率 > {main.ALERT_CONGESTION_OCC_PCT}% ，"
-          f"且 ≥40/50 频段越阈、连续 ≥3 分钟。")
+          f"且 ≥{main._min_crossing_bands(50)}/50 频段越阈、连续 ≥{main.ALERT_MIN_CROSSING_MINUTES} 分钟。")
 
     rows = accept_events(events)
     accept_lead(rows)
@@ -185,6 +231,8 @@ def main_cli() -> int:
         accept_persist(events)
     if not args.no_fp:
         accept_false_positive(events, args.fp_step)
+    if not args.no_consistency:
+        accept_consistency(events)
 
     print("\n> 说明：本页面所有数字均由本脚本实测生成，可随时复跑。")
     return 0
