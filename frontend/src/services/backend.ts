@@ -348,6 +348,14 @@ export function parseDiagnosis(value: unknown, scope: QueryScope): Diagnosis {
   });
   return {
     scope: { ...scope }, state: d.is_anomaly ? "anomaly" : comparison.length ? "normal" : "empty",
+    // 状态语义：优先用后端 current_state；后端未给时按是否异常兜底
+    currentState: (str(d.current_state) || (d.is_anomaly ? "fault_active" : "normal")) as Diagnosis["currentState"],
+    lastAnomalyAt: str(d.last_anomaly_at),
+    performanceHints: arr(d.performance_hints).map((v) => {
+      const h = obj(v);
+      return { apId: str(h.ap_id), metric: str(h.metric), value: numeric(h.value),
+        threshold: numeric(h.threshold), cause: str(h.cause), suggestion: str(h.suggestion) };
+    }),
     anomalyType: str(d.anomaly_type), level: str(d.level), score: numeric(d.rule_score ?? d.confidence),
     cause: str(d.cause) || str(d.reason), suggestion: str(d.suggestion), affectedAps: strings(d.affected_aps),
     evidence: arr(d.kpi_evidence).map(v => { const e = obj(v); return { metric: str(e.metric), value: numeric(e.avg_value), threshold: numeric(e.threshold), status: str(e.status) }; }),

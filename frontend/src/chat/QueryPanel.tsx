@@ -148,7 +148,18 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
     <div className="ain-ai-workspace">
       <section className="ain-ai-diagnosis-column" aria-labelledby="ain-ai-diagnosis-title">
         <div className="ain-ai-column-heading"><h3 id="ain-ai-diagnosis-title">问题研判与证据</h3>
-          <span>{query.pending ? "等待本次结果" : diagnosis?.state === "anomaly" ? "发现异常" : diagnosis?.state === "normal" ? "未发现明显异常" : "助手回答"}</span></div>
+          {/* 状态徽标按后端 current_state 分档：窗口内出现过异常 ≠ 此刻仍在故障，
+              必须区分「当前故障 / 窗口内已恢复 / 性能提示 / 正常」，
+              否则用户会把"过去 60 分钟里发生过"误读成"现在还在故障"。 */}
+          <span data-state={query.pending ? "pending" : diagnosis?.currentState || ""}>
+            {query.pending ? "等待本次结果"
+              : diagnosis?.currentState === "fault_active" ? "当前故障中"
+              : diagnosis?.currentState === "recovered_in_window" ? "窗口内有故障·已恢复"
+              : diagnosis?.currentState === "performance_warning" ? "性能提示（未确诊）"
+              : diagnosis?.state === "anomaly" ? "发现异常"
+              : diagnosis?.state === "normal" ? "未发现明显异常"
+              : "助手回答"}
+          </span></div>
         <div className="ain-ai-answer" aria-live="polite" aria-busy={query.pending}>
           {forecastReview}
           {query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}

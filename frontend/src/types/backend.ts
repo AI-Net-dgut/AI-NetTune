@@ -58,8 +58,21 @@ export interface ApComparison {
   id: string; type: string; level: string;
   rsrp: number; sinr: number; throughput: number; prb: number;
 }
+export interface PerformanceHint {
+  apId: string; metric: string; value: number; threshold: number;
+  cause: string; suggestion: string;
+}
 export interface Diagnosis {
   scope: QueryScope; state: "anomaly" | "normal" | "empty";
+  /**
+   * 状态语义（后端 current_state）。默认分析是"过去 N 分钟"，
+   * 窗口里出现过异常 ≠ 此刻仍在故障，必须分开表达：
+   *   fault_active 当前仍在故障 / recovered_in_window 窗口内发生过但已恢复
+   *   performance_warning 指标偏低但未达故障判据 / normal 正常
+   */
+  currentState: "fault_active" | "recovered_in_window" | "performance_warning" | "normal";
+  lastAnomalyAt: string;
+  performanceHints: PerformanceHint[];
   anomalyType: string; level: string; score: number; cause: string; suggestion: string;
   affectedAps: string[];
   evidence: { metric: string; value: number; threshold: number; status: string }[];
