@@ -407,6 +407,30 @@ def test_chat_respects_ap_id():
     assert "补充：同窗口 AP-02" in diag["reply"]
 
 
+def test_unknown_scenario_is_rejected_not_silent():
+    """未知场景必须报 40001，而不是静默返回空数据。
+
+    实测问题（唐苗检测报告 R01）：scenario=火星 时 topoology/basic 返回 code=0 + nodes=[]，
+    前端无法区分"场景名写错"与"该窗口没数据"，会渲染空白页面。
+    修法：数据访问层（filter_rows）抛 UnknownScenarioError → 全局映射 40001。
+    同时区分"协议允许的场景"与"数据集实际覆盖的场景"（当前只有校园）。
+    """
+    # 数据访问层拦截
+    try:
+        main.filter_rows("火星", "2026-01-01 00:00:00", "2026-01-02 00:00:00")
+        raise AssertionError("未知场景应抛 UnknownScenarioError")
+    except main.UnknownScenarioError as exc:
+        assert "火星" in str(exc)
+
+    # 合法场景不受影响
+    assert main.filter_rows(SCENARIO, "2026-01-01 10:00:00", "2026-01-01 10:59:59")
+
+    # 健康检查如实区分两个概念
+    cap = main.health()["data"]["capabilities"]
+    assert cap["scenarios_supported"] == ["校园", "商场", "体育馆"]
+    assert cap["scenarios_with_data"] == ["校园"], "数据集当前只有校园"
+
+
 def test_filter_rows_index_equivalence():
     """filter_rows 的二分索引必须与逐行扫描**逐条一致**（顺序、对象、边界）。"""
     def linear(scenario, s, e, ap_id=None, user_id=None):
@@ -430,7 +454,6 @@ def test_filter_rows_index_equivalence():
         (SCENARIO, "2026-01-01 10:00:00", "2026-01-01 11:59:59", None, "UE-01"),
         (SCENARIO, "2026-01-01 10:00:00", "2026-01-01 10:00:00", None, None),   # 单分钟
         (SCENARIO, "2026-01-31 00:00:00", "2026-01-31 23:59:59", None, None),   # 无数据
-        ("不存在的场景", "2026-01-01 00:00:00", "2026-01-02 00:00:00", None, None),
     ]
     for h in range(24):     # 覆盖 24 个不同小时
         d = 1 + h % 30

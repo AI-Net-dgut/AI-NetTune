@@ -28,6 +28,13 @@ Base URL: http://localhost:8000
 成功: {"code": 0, "message": "success", "data": {...}}
 失败: {"code": 40001, "message": "参数错误：缺少scenario", "data": null}
 
+> **成功判据（唯一判据，务必按此实现客户端）**：
+> **HTTP 200 + `code == 0` 才算成功；`code != 0` 一律视为失败**，读取 `message` 展示原因。
+> 不要把 HTTP 状态码当唯一依据 —— 部分接口（如 `/api/network/topology/enhanced` 缺 `time`）
+> 有意返回 **HTTP 200 + `code=40001`**，以保持"统一响应包络"；仅参数格式在路由层就被拒时
+> 才会出现 HTTP 4xx（如非法时间格式返回 HTTP 400 + `code=40001`）。
+> 前端实现见 `frontend/src/services/backend.ts` 的 `request()`：`if (envelope.code !== 0) throw ...`。
+
 
 错误码约定:
 |错误码|类型|说明|

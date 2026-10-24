@@ -92,9 +92,11 @@ data/spectrum_7d.csv ──load_spectrum()──► _SPEC{df, bands, min_ts, max
 | 研判接口（1 小时窗口） | 45 ms | **29 ms** | 加上 60s 短缓存后重复请求 ≈2 ms |
 | 开局加载 | ~9.3 s / 396 MB | 未变（见风险 2） | 频谱 151.2 万行全量读入 |
 | 预测预警（30 分钟） | ~114 ms | ~114 ms | 主要耗时在 pandas 逐频段趋势拟合 |
+| 热力图（Kriging） | 92 ms（60 分钟窗口）| **1~3 ms（同参重复请求）** | 结果缓存 120s；7 天窗口首次计算仍约 4~6s |
 
 短缓存：`_ANOMALY_CACHE`，TTL 60 秒，上限 128 条，key 含数据文件 mtime，
 **出入均深拷贝**（调用方会就地改字典），可用 `NETTUNE_DISABLE_ANOMALY_CACHE=1` 关闭。
+热力图缓存：`_HEATMAP_CACHE`，TTL 120 秒，上限 64 条，同样深拷贝、同样带数据版本。
 
 ## 5. 工程保障
 

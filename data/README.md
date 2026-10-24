@@ -7,10 +7,15 @@
 
 | 文件名 | 行数 × 列数 | 大小 | SHA256 |
 |---|---|---|---|
-| `network_data_7d.csv` | 30,240 × 18 | 3.4 MB | `5BFD190C338802D1F903A628EAD1A8B37CFBEEF5BD9A4B0FC3F12FEAD4031019` |
-| `network_data_30d.csv` | 129,600 × 18 | 14.6 MB | `F20F798EACDEC1E7ED25441BC8EC0E49ABC8A838A539326CDF6262BAA243F24C` |
-| `spectrum_7d.csv` | 1,512,000 × 9 | 103.5 MB | `255BDDE7BB7962FC8F6E5CA28FD8FFBC37E12369906A79AA64D2339E2AFABAFE` |
-| `fault_events.csv` | 8 × 9 | 1 KB | 见下（内容随故障时间表变化，不固定哈希） |
+| `network_data_7d.csv` | 30,240 × 18 | 3.4 MB | `D4B18FC1A84BFFD73518FBB4C57BDB85D71CC8B0B30A95CB7C8826D13B0D7766` |
+| `network_data_30d.csv` | 129,600 × 18 | 14.6 MB | `8878D43BDD7BF7DADEB58662EC62BFE4AF3AFA20896154CA9F7238A7D7880CA1` |
+| `spectrum_7d.csv` | 1,512,000 × 9 | 103.4 MB | `23CA3B6D6730853F03967227B18AC641B9529DFBF5240D4B211B169B5FB86C73` |
+| `fault_events.csv` | 8 × 9 | 1 KB | `37F425FFBBFE21302A70E0FFC171016C888E42F21A0AA971341F9CFE8C890DEF` |
+
+> **哈希口径（2026-10 更新）**：上表为**仓库内当前文件**的实测 SHA256（Windows `Get-FileHash -Algorithm SHA256`）。
+> 数据包曾被替换过两版，旧版本登记哈希（`5BFD190C…` / `F20F798E…` / `255BDDE7…`）已作废。
+> **一致性判断以本表为准**：语义自洽性由 `scripts/audit_data.py` 校验（当前 一致 9 项 / 不符 0 项），
+> 逐字节一致性以本表 SHA256 为准。如果拿到的是旧包，跑一遍 `python scripts/audit_data.py` 即可确认语义是否仍自洽。
 
 **`fault_events.csv` 是"事件"的单一事实来源**（v2.8 新增，补上审查报告 D-2）：
 

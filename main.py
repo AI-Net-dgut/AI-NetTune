@@ -66,6 +66,10 @@ else:
 # ======================
 # 统一错误码定义（与api.md文档严格对齐）
 # ======================
+# 协议允许的场景枚举。必须在启动自检（data_status）之前定义 —— 自检会读它。
+# 注意与 _DATA_SCENARIOS 区分：本常量是"协议允许"，后者是"数据集实际覆盖"。
+VALID_SCENARIOS = ("校园", "商场", "体育馆")
+
 ERROR_CODE = {
     "SUCCESS": 0,
     "PARAM_MISSING": 40001,       # 必填参数缺失
@@ -136,6 +140,24 @@ async def http_exception_handler(request, exc):
     )
 
 # ========== 新增：全局服务端异常兜底 ==========
+class UnknownScenarioError(Exception):
+    """场景不在支持列表内。由 filter_rows / spectrum_window 抛出，全局映射为 40001。
+
+    为什么用异常而不是每个 handler 各判一次：数据访问是唯一入口，
+    在这里判一次就能覆盖全部 17 条路由，避免"某个接口忘了校验"。
+    """
+
+
+@app.exception_handler(UnknownScenarioError)
+async def unknown_scenario_handler(request, exc: UnknownScenarioError):
+    from fastapi.responses import JSONResponse as _JSON
+    return _JSON(status_code=200, content={
+        "code": 40001,
+        "message": f"场景 {exc} 不受支持；当前支持：{'、'.join(VALID_SCENARIOS)}",
+        "data": None,
+    })
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     return JSONResponse(
@@ -209,6 +231,10 @@ def _build_df_index():
 
 
 _DF_IDX = _build_df_index()
+# 数据集里**真正有采样**的场景（当前只有"校园"）。
+# VALID_SCENARIOS 是"协议允许的场景枚举"，与"数据是否覆盖"是两件事：
+# 前者用于拒绝非法输入（40001），后者用于解释"合法但没数据"。
+_DATA_SCENARIOS = tuple(sorted(_DF_IDX.keys()))
 
 # ============ 频谱数据（预测预警 v2 真实数据源） ============
 # 7天×1440分钟×3 AP×50频段 = 1,512,000 行；1分钟一帧，与网络数据同时间轴
@@ -299,6 +325,9 @@ def data_status():
             "llm_enabled": bool(ENABLE_LLM),
             "llm_key_configured": bool(llm_agent.LLM_API_KEY),
             "llm_model": llm_agent.LLM_MODEL,
+            # 协议允许的场景 vs 数据集实际覆盖的场景（当前只有校园）
+            "scenarios_supported": list(VALID_SCENARIOS),
+            "scenarios_with_data": list(_DATA_SCENARIOS),
         },
         "issues": list(STARTUP_ISSUES),
         "hint": "数据文件缺失时请按 DEPLOY.md 第 2 节准备 data/ 目录；"
@@ -354,7 +383,12 @@ def filter_rows(scenario, start_time, end_time, ap_id=None, user_id=None):
 
     用加载时建好的时间索引做二分定位（见 _build_df_index），不再逐行扫描 12.96 万行。
     输出与旧实现逐条一致：时间升序，同一时间戳保持原始行序（稳定）。
+
+    未知场景（如"火星"）抛 UnknownScenarioError，由全局处理器映射为 40001 —— 否则
+    调用方拿到空数组会误以为"该窗口没数据"，前端渲染空白页面却看不出是场景写错了。
     """
+    if scenario not in VALID_SCENARIOS:
+        raise UnknownScenarioError(scenario)
     idx = _DF_IDX.get(scenario)
     if idx is None:
         return []
@@ -406,13 +440,20 @@ def data_query(
         columns = ["timestamp"] + wanted
     records = [{k: r[k] for k in columns} for r in page_rows]
 
+    # 合法场景但数据集里没有它的采样时，必须说清楚"这个场景没有数据"，
+    # 否则前端只能看到 total=0，与"时间窗口选错了"无法区分（实测 商场/体育馆 均无数据）。
+    notice = ""
+    if total == 0 and scenario not in _DATA_SCENARIOS:
+        notice = (f"场景「{scenario}」当前没有采样数据；数据集实际覆盖："
+                  f"{'、'.join(_DATA_SCENARIOS)}")
     return {
         "code": 0,
-        "message": "success",
+        "message": notice or "success",
         "data": {
             "total": total,  # 修复：返回符合条件的总记录数
             "columns": columns,
             "records": records,  # 当前页数据
+            "scenarios_with_data": list(_DATA_SCENARIOS),
         },
     }
 
@@ -768,6 +809,11 @@ _ANOMALY_CACHE: dict = {}
 _ANOMALY_TTL_SEC = 60.0
 _ANOMALY_CACHE_MAX = 128
 _ANOMALY_CACHE_ON = os.getenv("NETTUNE_DISABLE_ANOMALY_CACHE", "").strip() not in ("1", "true", "on")
+
+# 热力图（Kriging）结果缓存：同参数重复请求直接复用，数值零变化。
+_HEATMAP_CACHE: dict = {}
+_HEATMAP_TTL_SEC = 120.0
+_HEATMAP_CACHE_MAX = 64
 
 
 def _data_version() -> tuple:
@@ -1142,7 +1188,7 @@ class ChatRequest(BaseModel):
     # 回放模式：前端播放器携带当前模拟时刻，作为自然语言时间的日期基准 + 防未来上限
     current_time: str | None = None
 
-VALID_SCENARIOS = ("校园", "商场", "体育馆")
+# VALID_SCENARIOS 已提前到顶部错误码区定义（启动自检需要它）
 
 # 对话工具默认窗口（前端未传时使用）；接口2/热力图/拓扑接口的默认口径不变
 # 工具默认窗口（审查报告 B-4）：原来是写死的 2026-01-01~01-03，而数据集是 7/30 天，
@@ -2188,6 +2234,22 @@ def get_heatmap(
     end_time: str | None = Query(None, description="结束时间"),
     metric: str = Query("rsrp", description="热力指标：rsrp / sinr")
 ):
+    # 热力图结果缓存（120 秒）：Kriging 的耗时随采样点立方增长
+    # （实测 60 分钟窗口 ~0.2s，7 天窗口 ~4~6s）。缓存只复用**完全相同参数**的结果，
+    # 数值零变化；回放切换时刻时窗口不同仍会重新计算。
+    _ck = (scenario, start_time or "", end_time or "", metric, _data_version())
+    _hit = _HEATMAP_CACHE.get(_ck)
+    if _hit is not None and time.monotonic() - _hit[0] < _HEATMAP_TTL_SEC:
+        return _copy.deepcopy(_hit[1])
+    result = _get_heatmap_uncached(scenario, start_time, end_time, metric)
+    if isinstance(result, dict) and result.get("code") == 0:
+        if len(_HEATMAP_CACHE) >= _HEATMAP_CACHE_MAX:
+            _HEATMAP_CACHE.pop(next(iter(_HEATMAP_CACHE)), None)
+        _HEATMAP_CACHE[_ck] = (time.monotonic(), _copy.deepcopy(result))
+    return result
+
+
+def _get_heatmap_uncached(scenario, start_time, end_time, metric):
     # 1. 复用已加载数据集，按条件过滤
     rows = filter_rows(
         scenario,
@@ -3095,6 +3157,30 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
         "④影响范围；⑤预防/处置方案与预期效果；⑥不确定性说明（这条预测的可信边界）。"
         "语气克制专业，不喊口号，不要编造未给出的数值。"
     )
+    # 频谱维度的事实数字（唐苗检测报告 R08：原先只给 RSRP/SINR/吞吐均值，
+    # 没有把"逐频段越阈情况"交给 AI，导致 AI 只能泛泛而谈）。
+    # 只在能取到数据时追加，取不到时 prompt 与旧版一致。
+    _spectrum_ctx = ""
+    try:
+        _ap = (alert_detail or {}).get("target") or ""
+        if _ap and _SPEC.get("df") is not None:
+            _part = spectrum_window(_ap, req.history.start, req.history.end, inclusive_end=True)
+            if _part is not None and not _part.empty:
+                _last_ts = _part["timestamp"].max()
+                _last = _part[_part["timestamp"] == _last_ts]
+                _n = len(_last)
+                _low = int((_last["power_dbm"] < ALERT_WEAK_POWER_DBM).sum())
+                _occ = int((_last["occupancy_pct"] > ALERT_CONGESTION_OCC_PCT).sum())
+                _imin = _last["power_dbm"].idxmin()
+                _spectrum_ctx = (
+                    f"频谱维度（{_ap}，历史窗口最后一帧 {_last_ts}）：共 {_n} 个频段，"
+                    f"功率低于 {ALERT_WEAK_POWER_DBM} dBm 的有 {_low}/{_n} 个，"
+                    f"占用率高于 {ALERT_CONGESTION_OCC_PCT}% 的有 {_occ}/{_n} 个，"
+                    f"最低功率 {float(_last.loc[_imin, 'power_dbm']):.1f} dBm "
+                    f"@ 频段 {_last.loc[_imin, 'band_id']}。")
+    except Exception:
+        _spectrum_ctx = ""
+
     # 仅在用户确实给了问题/关注时段时才追加，未传时 user_message 与旧版逐字节一致，
     # 因此不会影响既有调用方的输出（这是"改提示词有风险"的规避方式）。
     extra_ctx = ""
@@ -3106,6 +3192,8 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
             lines.append(f"用户关注时段：{target_window.start} ~ {target_window.end}")
         lines.append("请优先直接回应用户的问题与关注时段；与该问题无关的通用建议可以压缩。")
         extra_ctx = "\n" + "\n".join(lines) + "\n"
+    if _spectrum_ctx:
+        extra_ctx = extra_ctx + _spectrum_ctx + "\n"
 
     user_message = (
         f"场景：{req.scenario}\n预测基准时刻：{req.baseTime}\n"
