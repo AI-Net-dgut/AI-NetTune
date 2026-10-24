@@ -136,7 +136,9 @@ export default function ToolResultPanel({
         right: 30,
         top: 35,
         bottom: 30,
-        containLabel: true,
+        // ECharts 6：containLabel 已弃用，等价新写法；'all' 同时兜住轴名（单位）
+        outerBoundsMode: "same",
+        outerBoundsContain: "all",
       },
       tooltip: {
         trigger: "axis",

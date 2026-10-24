@@ -13,13 +13,13 @@ export default function PlanEffects({ result }: { result: SimulationResult }) {
   const m = result.metrics[metricIndex], meta = m ? METRIC_META[m.key] : null;
   const t = result.trend, tm = t ? METRIC_META[t.metric] : null;
   const option: EChartsOption = view === 'trend' && t && tm ? {
-    animation: false, backgroundColor: '#fff', grid: { left: 8, right: 12, top: 24, bottom: 8, containLabel: true },
+    animation: false, backgroundColor: '#fff', grid: { left: 8, right: 12, top: 24, bottom: 8, outerBoundsMode: 'same', outerBoundsContain: 'all' },
     tooltip: { trigger: 'axis', renderMode: 'richText' },
     xAxis: { ...LIGHT_AXIS_STYLE, type: 'time', axisLabel: { color: '#617c96', formatter: (n: number) => clock.format(n) } },
     yAxis: { ...LIGHT_AXIS_STYLE, type: 'value', name: tm.unit, scale: true },
     series: [ { type: 'line', name: '保持原配置（仿真）', connectNulls: false, showSymbol: false, itemStyle: { color: '#8da4be' }, data: t.points.map(p => [Date.parse(p.time), p.before]) },
       { type: 'line', name: '采用方案（仿真）', connectNulls: false, showSymbol: false, itemStyle: { color: '#238f90' }, lineStyle: { type: 'dashed' }, data: t.points.map(p => [Date.parse(p.time), p.after]) } ],
-  } : { animation: false, backgroundColor: '#fff', grid: { left: 8, right: 12, top: 24, bottom: 8, containLabel: true }, tooltip: { trigger: 'axis', renderMode: 'richText' },
+  } : { animation: false, backgroundColor: '#fff', grid: { left: 8, right: 12, top: 24, bottom: 8, outerBoundsMode: 'same', outerBoundsContain: 'all' }, tooltip: { trigger: 'axis', renderMode: 'richText' },
     xAxis: { ...LIGHT_AXIS_STYLE, type: 'category', data: ['保持原配置', '采用方案'] }, yAxis: { ...LIGHT_AXIS_STYLE, type: 'value', name: meta?.unit ?? '', scale: true },
     series: [{ type: 'bar', barMaxWidth: 38, data: [ { value: m?.before ?? null, itemStyle: { color: '#8da4be' } }, { value: m?.after ?? null, itemStyle: { color: '#238f90' } } ] }] };
   const c = result.coverage, projection = c ? createProjection(c.area) : null;

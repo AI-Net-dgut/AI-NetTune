@@ -96,7 +96,10 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
   const hasThreshold = Number.isFinite(threshold);
   const option: EChartsOption = {
     animation: false, backgroundColor: "#fff", textStyle: { fontFamily: CHART_FONT },
-    grid: { left: 8, right: 14, top: 26, bottom: 8, containLabel: true },
+    // containLabel 在 ECharts 6 已弃用（老算法只按样本标签估算留白），
+    // 换成等价的新机制；contain: 'all' 还会把**轴名**（如 Mbps）一起兜住 ——
+    // 正是这张图的 x 轴单位被卡片右边缘裁成 "MI" 的原因。
+    grid: { left: 8, right: 14, top: 26, bottom: 8, outerBoundsMode: "same", outerBoundsContain: "all" },
     tooltip: { trigger: "axis", renderMode: "richText", formatter: (params: unknown) => {
       const first = (Array.isArray(params) ? params[0] : params) as { dataIndex?: number } | undefined;
       const point = points[first?.dataIndex ?? -1];
@@ -118,7 +121,7 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
   const visibleComparisons = ordered.slice(0, 10);
   const focused = target.kind !== "all" && target.kind === compareKind ? ordered.find(item => item.id === target.id) : null;
   if (focused && !visibleComparisons.some(item => item.id === focused.id)) visibleComparisons[visibleComparisons.length - 1] = focused;
-  const compareOption: EChartsOption = { animation: false, backgroundColor: "#fff", grid: { left: 8, right: 20, top: 24, bottom: 8, containLabel: true },
+  const compareOption: EChartsOption = { animation: false, backgroundColor: "#fff", grid: { left: 8, right: 20, top: 24, bottom: 8, outerBoundsMode: "same", outerBoundsContain: "all" },
     tooltip: { trigger: "item", renderMode: "richText" }, xAxis: { ...LIGHT_AXIS_STYLE, type: "value", name: meta.unit, scale: true },
     yAxis: { ...LIGHT_AXIS_STYLE, type: "category", inverse: true, data: visibleComparisons.map(item => item.id) },
     series: [{ type: "bar", barMaxWidth: 16, data: visibleComparisons.map(item => ({ name: item.id, value: item.value,

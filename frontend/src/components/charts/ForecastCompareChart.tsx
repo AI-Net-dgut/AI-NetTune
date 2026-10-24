@@ -145,7 +145,9 @@ const hasValidForecast = Boolean(
                       right: 16,
                       top: 27,
                       bottom: 8,
-                      containLabel: true,
+                      // ECharts 6：containLabel 已弃用，等价新写法；'all' 同时兜住轴名（单位）
+                      outerBoundsMode: "same",
+                      outerBoundsContain: "all",
                     },
                     xAxis: {
                       type: "category",

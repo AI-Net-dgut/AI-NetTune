@@ -17,7 +17,7 @@ export function ueComparisonOption(items: UEComparisonItem[], metric: MetricKey,
   const negative = metric === 'rsrpDbm' || metric === 'sinrDb';
   return {
     animation: false, backgroundColor: '#f7fbff', textStyle: { fontFamily: CHART_FONT },
-    grid: { left: 6, right: 12, top: 6, bottom: 4, containLabel: true },
+    grid: { left: 6, right: 12, top: 6, bottom: 4, outerBoundsMode: 'same', outerBoundsContain: 'all' },
     tooltip: { trigger: 'axis', renderMode: 'richText', formatter: (params: unknown) => {
       const first = (Array.isArray(params) ? params[0] : params) as { dataIndex?: number } | undefined;
       const item = items[first?.dataIndex ?? -1];

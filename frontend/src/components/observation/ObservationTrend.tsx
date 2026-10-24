@@ -18,7 +18,8 @@ function MetricTrend({ data, target, metric, small = false }: { data: DashboardD
   const span = (raw.at(-1)?.time ?? 0) - (raw[0]?.time ?? 0);
   const option: EChartsOption = {
     animation: false, backgroundColor: CHART_BACKGROUND, textStyle: { fontFamily: CHART_FONT },
-    grid: { left: 46, right: 18, top: 25, bottom: 28, containLabel: false },
+    // containLabel 已弃用：这里原本就是 false（用固定 padding），直接去掉该键即可
+    grid: { left: 46, right: 18, top: 25, bottom: 28 },
     tooltip: { trigger: 'axis', renderMode: 'richText', formatter: (params: unknown) => {
       const first = (Array.isArray(params) ? params[0] : params) as { dataIndex?: number } | undefined;
       const point = points[first?.dataIndex ?? -1];
