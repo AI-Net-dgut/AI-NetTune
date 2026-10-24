@@ -40,18 +40,31 @@ def _sparkline(values):
 
 
 def _svg_trend(points, unit, title):
-    """内联 SVG 折线图（HTML 用）。points: [(label, value)]"""
+    """内联 SVG 折线图（HTML 用）。points: [(label, value)]
+
+    数据点少于 3 个时**不画折线**：两个点必然连成一条贯穿全宽的斜线，
+    看起来像"明确的下降趋势"，实际只是两点之差（实测报告里出现过
+    「08 → 09」两小时被画成陡降线）。改为画散点并标注点数不足。
+    """
     pts = [(label, v) for label, v in points if v is not None]
-    if len(pts) < 2:
+    if not pts:
         return ""
     width, height, pad_l, pad_b, pad_t = 660, 170, 52, 34, 18
     lo, hi = min(v for _l, v in pts), max(v for _l, v in pts)
-    if hi - lo < 1e-9:
-        hi, lo = hi + 1, lo - 1
+    # 纵轴最小跨度：避免把 3~4 dB 的正常波动拉满整幅图而放大观感。
+    # RSRP/SINR 这类 dB 量纲给 6 dB 下限，其它量纲按均值的 10% 兜底。
+    if unit in ("dBm", "dB"):
+        min_span = 6.0
+    else:
+        base = max(abs(lo), abs(hi), 1.0)
+        min_span = base * 0.1
+    if hi - lo < min_span:
+        mid = (hi + lo) / 2
+        lo, hi = mid - min_span / 2, mid + min_span / 2
     inner_w, inner_h = width - pad_l - 16, height - pad_b - pad_t
 
     def px(i):
-        return pad_l + inner_w * i / (len(pts) - 1)
+        return pad_l + (inner_w * i / (len(pts) - 1) if len(pts) > 1 else inner_w / 2)
 
     def py(v):
         return pad_t + inner_h * (1 - (v - lo) / (hi - lo))
@@ -65,16 +78,26 @@ def _svg_trend(points, unit, title):
                     f'stroke="#eaf0f7" stroke-width="1"/>')
         labels.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" text-anchor="end" '
                       f'font-size="10" fill="#607995">{val:.1f}</text>')
+    # 刻度去重：len(pts)==2 时 (0, 1, 1) 会把最后一个标签画两遍（同一位置叠字）
     ticks = []
-    for i in (0, len(pts) // 2, len(pts) - 1):
+    for i in sorted({0, len(pts) // 2, len(pts) - 1}):
         label = pts[i][0]
         ticks.append(f'<text x="{px(i):.1f}" y="{height - 12}" text-anchor="middle" '
                      f'font-size="10" fill="#607995">{escape(str(label))}</text>')
+    # 少于 3 个点时只画散点 + 明确提示，不画折线（两点连线会被误读成趋势）
+    if len(pts) >= 3:
+        series_svg = f'<polyline fill="none" stroke="#2e69d2" stroke-width="2" points="{poly}"/>'
+    else:
+        dots = "".join(f'<circle cx="{px(i):.1f}" cy="{py(v):.1f}" r="3.5" fill="#2e69d2"/>'
+                       for i, (_l, v) in enumerate(pts))
+        series_svg = (dots
+                      + f'<text x="{width - 16}" y="{pad_t + 10}" text-anchor="end" font-size="10" '
+                        f'fill="#a06a1c">仅 {len(pts)} 个数据点，不足以判断趋势</text>')
     return (
         f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" '
         f'aria-label="{escape(title)}" style="background:#fff">'
         + "".join(grid)
-        + f'<polyline fill="none" stroke="#2e69d2" stroke-width="2" points="{poly}"/>'
+        + series_svg
         + "".join(labels) + "".join(ticks)
         + f'<text x="{pad_l}" y="12" font-size="10" fill="#607995">'
           f'{escape(title)}（{escape(unit)}）</text></svg>'
@@ -214,6 +237,10 @@ def build_markdown(ctx, include_chart=True):
             L.append(f"最低 {min(vals):.1f} dBm / 最高 {max(vals):.1f} dBm")
             L.append("```")
             L.append("")
+    if len(ctx.get("hourly_trend") or []) < 3:
+        L.append(f"> 注：窗口内只有 {len(ctx.get('hourly_trend') or [])} 个小时级数据点，"
+                 f"不足以判断趋势；如需趋势请把查询窗口放长到 3 小时以上。")
+        L.append("")
 
     if s["alarms"]:
         L.append("## 五、告警历史（最近 10 条）")
@@ -313,6 +340,12 @@ def build_html(ctx, include_chart=True):
     parts.append("<h2>四、小时趋势</h2>")
     parts.append(table(["小时", "RSRP(dBm)", "SINR(dB)", "吞吐(Mbps)", "PRB(%)", "研判"],
                        s["trend"]))
+    # 窗口短于 3 小时时只有 1~2 个小时点，趋势判断意义有限，必须说明清楚，
+    # 否则读者会把"两小时的小幅下滑"当成明确趋势。
+    if len(ctx.get("hourly_trend") or []) < 3:
+        parts.append(f'<p style="color:#8a6a2a;font-size:12px">'
+                     f'注：窗口内只有 {len(ctx.get("hourly_trend") or [])} 个小时级数据点，'
+                     f'不足以判断趋势；如需趋势请把查询窗口放长到 3 小时以上。</p>')
     if include_chart:
         series = [(str(h.get("hour", ""))[-5:], h.get("rsrp_avg"))
                   for h in (ctx.get("hourly_trend") or [])]

@@ -115,6 +115,37 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_report_trend_chart_avoids_misleading_line():
+    """导出报告的小时趋势图：少于 3 个点不能画折线。
+
+    实测问题（报错来自用户截图）：2 小时窗口只产生 2 个小时点，却被画成
+    一条贯穿全宽的斜线，看起来像"明确下降趋势"；纵轴还按 2 个点的极差自适应，
+    把 3.7 dB 的正常波动铺满整幅图；x 轴刻度 (0, len//2, len-1) 在 len=2 时
+    生成 (0,1,1)，最后一个标签被画两遍。
+    """
+    import re
+    import report_model as rm
+
+    two = rm._svg_trend([("02 08", -90.5), ("02 09", -94.2)], "dBm", "RSRP 小时趋势")
+    assert "<polyline" not in two, "2 个点不应画折线"
+    assert two.count("<circle") == 2, "应改为画 2 个散点"
+    assert "不足以判断趋势" in two, "必须提示数据点不足"
+
+    # x 轴刻度去重
+    ticks = [t for t in re.findall(r'text-anchor="middle"[^>]*>([^<]+)<', two)
+             if re.match(r"^\d\d ", t)]
+    assert len(ticks) == len(set(ticks)) == 2, f"x 轴刻度应去重，实得 {ticks}"
+
+    # 纵轴最小跨度：两点只差 3.7 dB，纵轴跨度应被撑到 ≥6 dB，避免夸大波动
+    ylab = [float(x) for x in re.findall(r'text-anchor="end"[^>]*>(-?\d+\.\d+)<', two)]
+    assert ylab and abs(max(ylab) - min(ylab)) >= 5.9, f"纵轴跨度过小：{ylab}"
+
+    # 3 个点及以上仍画折线
+    three = rm._svg_trend([("02 08", -90.5), ("02 09", -94.2), ("02 10", -92.0)],
+                          "dBm", "RSRP 小时趋势")
+    assert "<polyline" in three and "不足以判断趋势" not in three
+
+
 def test_api_routes_map_to_expected_functions():
     """每个 /api 路由必须绑定到真实业务函数。
 
