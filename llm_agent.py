@@ -204,6 +204,13 @@ def rule_intent(message: str) -> dict:
         return {"intent": "get_topology", "params": params, "hit": True}
     if any(k in message for k in FORECAST_PATTERNS):
         return {"intent": "forecast", "params": params, "hit": True}
+    # ③b "分析/排查/诊断/研判"这类动作词 → 走研判（要的是结论+方案，不是指标罗列）。
+    # 但若同时出现明确的指标词（RSRP/SINR/吞吐/指标/数据…），说明用户要的是数值，
+    # 仍按 KPI 查询处理，避免把"分析一下各 AP 的 RSRP"也变成研判。
+    _DIAG_VERBS = ("分析", "排查", "诊断", "研判")
+    _METRIC_WORDS = ("rsrp", "sinr", "吞吐", "throughput", "prb", "指标", "数据", "趋势", "统计")
+    if any(v in message for v in _DIAG_VERBS) and not any(w in message.lower() for w in _METRIC_WORDS):
+        return {"intent": "fault_diagnosis", "params": params, "hit": True}
     if any(k in message for k in ANOMALY_PATTERNS):
         return {"intent": "fault_diagnosis", "params": params, "hit": True}
     return {"intent": "query_kpi", "params": params, "hit": False}

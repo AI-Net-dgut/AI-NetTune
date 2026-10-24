@@ -336,6 +336,27 @@ def test_forecast_horizon_independent():
             f"{clock} 在不同预测时长下应一致，实得 {short} vs {long}"
 
 
+def test_intent_diagnosis_verbs_route_to_diagnosis():
+    """"分析/排查/诊断/研判"应走研判（要结论与方案），但要指标时不抢。
+
+    背景：原先这类问法落到 query_kpi，只给均值不给研判与方案；
+    而"分析一下各 AP 的 RSRP"这种明显要数值的问法不能被改成研判。
+    """
+    cases = [
+        ("分析一下 AP-01 在 2026-01-01 10:00 到 12:00 的情况", "fault_diagnosis"),
+        ("排查一下 AP-01", "fault_diagnosis"),
+        ("诊断 AP-02 的问题", "fault_diagnosis"),
+        ("分析一下当前各AP的RSRP", "query_kpi"),
+        ("看看当前各AP的RSRP和吞吐量", "query_kpi"),
+        ("为什么 AP-01 这么差", "query_kpi"),
+        ("画一下这个时间窗的热力图", "get_heatmap"),
+        ("预测下一个小时的功率变化", "forecast"),
+    ]
+    for msg, want in cases:
+        got = main.llm_agent.rule_intent(msg)["intent"]
+        assert got == want, f"「{msg}」应走 {want}，实得 {got}"
+
+
 def test_analyze_anomaly_ap_filter():
     """指定 AP 时只研判该 AP；未指定时行为与原来完全一致。
 

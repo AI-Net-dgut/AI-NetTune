@@ -108,6 +108,25 @@ def accept_lead(rows) -> None:
     print(f"\n汇总：命中 {len(rows) - miss} / {len(rows)}，漏报 {miss}，"
           f"相对标签提前 {early}、晚 {late}。")
 
+    # 平均提前量：只有"提前"的那几条算正值，晚的算负值，这样能给出一个可写在
+    # 答辩材料里的单一数字（含范围与中位数，避免被极端值带偏）。
+    leads = []
+    for r in rows:
+        if r["alert_at"] is None or r["label"] is None:
+            continue
+        leads.append((r["label"] - r["alert_at"]).total_seconds() / 60)
+    if leads:
+        leads.sort()
+        avg = sum(leads) / len(leads)
+        mid = leads[len(leads) // 2]
+        print(f"平均提前量：**{avg:+.1f} 分钟**（中位 {mid:+.1f}，范围 {min(leads):+.0f} ~ {max(leads):+.0f} 分钟）")
+        print(f"其中提前（>0）{sum(1 for x in leads if x > 0)} 个、"
+              f"同步/滞后（≤0）{sum(1 for x in leads if x <= 0)} 个")
+        how = next((r["alert"] or {}).get("title", "") for r in rows if r["alert"])
+        if how:
+            print(f"\n> 口径说明：这里的\"提前量\"= 首个异常标签时刻 − 首条预警的基准时刻，"
+                  f"衡量的是**发现早晚**；预警文案里的\"预计 N 分钟后越阈\"是**预测目标时间**，两者不是一回事。")
+
 
 def accept_persist(events) -> None:
     """故障中后期（起始+20 分钟起），预测应给出"已处于…预计持续"。"""
