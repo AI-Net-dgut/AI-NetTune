@@ -202,6 +202,7 @@ def load_spectrum():
     df = df.sort_values(["observation_id", "timestamp"], kind="stable").reset_index(drop=True)
     _SPEC["df"] = df
     _SPEC["max_ts"] = df["timestamp"].max()
+    _SPEC["min_ts"] = df["timestamp"].min()      # 支撑区间起点（网络表 ∩ 频谱表 = 频谱范围）
     # 每个 AP 一份子表 + 一个已排序的时间轴（int64 纳秒），供二分查找做区间切片
     by_ap, ts_index = {}, {}
     for _ap, _part in df.groupby("observation_id", sort=False):
@@ -703,10 +704,49 @@ def _anomaly_spans(rows: list[dict], limit: int = 20) -> list[dict]:
 
 
 @app.post("/api/analyze/anomaly")
+def _supported_range() -> tuple[str, str] | None:
+    """系统实际支撑的数据区间（= 网络表 ∩ 频谱表）。
+
+    为什么需要它：网络表有 30 天、频谱表只有前 7 天，而前端回放区间本来就是
+    `2026-01-01 00:00 ~ 2026-01-07 23:59`。此前后端研判对任意 30 天窗口都答，
+    于是 01-08 之后的窗口会出现"研判报故障、预测说无数据"的矛盾
+    （实测 01-20 10:00：研判=覆盖故障/当前故障中，预测=insufficient_data）。
+    统一交集后，"支持范围"在两侧一致。
+    """
+    if _SPEC.get("max_ts") is None or _SPEC.get("min_ts") is None:
+        return None
+    # 频谱表 ⊆ 网络表，所以交集就是频谱表的范围
+    return (_SPEC["min_ts"].strftime("%Y-%m-%d %H:%M:%S"),
+            _SPEC["max_ts"].strftime("%Y-%m-%d %H:%M:%S"))
+
+
 def analyze_anomaly(req: AnomalyRequest):
     # 第2周深化版：CSV真实数据，按AP分组多KPI联合研判（可解释证据链）
     # 新增：hourly_trend 小时趋势 / ap_comparison 多AP对比 / alarm_history 告警历史
-    rows = filter_rows(req.scenario, req.window_start, req.window_end)
+    # 窗口先收敛到"支撑区间"：越界部分裁掉并明确告知，完全无交集则如实说无数据，
+    # 不再对没有频谱的数据段给出故障结论（否则与预测预警自相矛盾）。
+    _range = _supported_range()
+    window_start, window_end = req.window_start, req.window_end
+    range_notice = ""
+    if _range is not None:
+        sup_start, sup_end = _range
+        if window_end < sup_start or window_start > sup_end:
+            return {"code": 0, "message": "success",
+                    "data": {"is_anomaly": False, "reason": "请求时段超出数据范围",
+                             "cause": f"请求时段 {window_start} ~ {window_end} 超出系统支撑范围 {sup_start} ~ {sup_end}，无可研判数据",
+                             "anomaly_type": "正常", "level": "低", "current_state": "normal",
+                             "affected_aps": [], "hourly_trend": [], "ap_comparison": [],
+                             "alarm_history": [], "data_range": {"start": sup_start, "end": sup_end},
+                             "range_notice": f"本次请求超出支撑范围，未做研判；支持范围 {sup_start} ~ {sup_end}"}}
+        if window_start < sup_start:
+            window_start = sup_start
+            range_notice = f"起始时间早于支撑范围，已从 {sup_start} 开始研判"
+        if window_end > sup_end:
+            window_end = sup_end
+            range_notice = (range_notice + "；" if range_notice else "") + \
+                f"结束时间晚于支撑范围，已裁剪到 {sup_end}"
+
+    rows = filter_rows(req.scenario, window_start, window_end)
     if not rows:
         return {"code": 0, "message": "success",
                 "data": {"is_anomaly": False, "reason": "该时间窗口无数据",
@@ -896,6 +936,10 @@ def analyze_anomaly(req: AnomalyRequest):
             "hourly_trend": hourly_trend,        # 新增：小时级趋势
             "ap_comparison": ap_comparison,      # 新增：多AP横向对比
             "alarm_history": alarm_history,      # 新增：告警历史
+            # 支撑范围与裁剪说明：网络表有 30 天、频谱表只有前 7 天，
+            # 统一按交集研判；越界时明确告知，而不是静默给出结论。
+            "data_range": ({"start": _range[0], "end": _range[1]} if _range else None),
+            "range_notice": range_notice,
             # 分钟级异常区间：申报书 L17 要求"定位异常的起止时间"，
             # alarm_history 只有小时粒度，这里给出精确到分钟的连续区间
             "anomaly_spans": _spans,

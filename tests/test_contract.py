@@ -115,6 +115,43 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_anomaly_supported_range_alignment():
+    """研判与预测必须使用同一"支撑范围"（网络表 30 天 ∩ 频谱表 7 天 = 7 天）。
+
+    实测缺陷：网络表有 30 天、频谱表只有前 7 天。研判对 01-20 这类窗口会答
+    "覆盖故障/当前故障中"，而同一时刻预测返回 insufficient_data ——
+    同一时间窗里"研判说有故障、预测说没数据"，自相矛盾。
+    """
+    sup = main._supported_range()
+    assert sup == ("2026-01-01 00:00:00", "2026-01-07 23:59:00"), f"支撑范围异常：{sup}"
+
+    # ① 完全越界：不下故障结论，给出明确说明与范围回显
+    out = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-20 10:00:00", window_end="2026-01-20 11:00:00")))
+    assert out["is_anomaly"] is False and out["current_state"] == "normal"
+    assert "超出支撑范围" in out["range_notice"]
+    assert out["data_range"] == {"start": sup[0], "end": sup[1]}
+
+    # ② 部分越界：裁剪到范围内继续研判，并说明裁剪动作
+    clipped = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-05 10:00:00", window_end="2026-01-10 10:00:00")))
+    assert "裁剪到 2026-01-07 23:59:00" in clipped["range_notice"]
+    early = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2025-12-31 10:00:00", window_end="2026-01-02 10:00:00")))
+    assert "起始时间早于支撑范围" in early["range_notice"]
+
+    # ③ 范围内：不产生多余提示
+    inside = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)))
+    assert inside["range_notice"] == ""
+    # ④ 与预测侧一致：越界窗口的预测同样不可用
+    fc = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime="2026-01-20 10:00:00",
+        history=main._TimeRange(start="2026-01-20 09:00:00", end="2026-01-20 10:00:00"),
+        horizonMinutes=30)))
+    assert fc["status"] == "insufficient_data"
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 
