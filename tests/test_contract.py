@@ -407,6 +407,77 @@ def test_chat_respects_ap_id():
     assert "补充：同窗口 AP-02" in diag["reply"]
 
 
+def test_filter_rows_index_equivalence():
+    """filter_rows 的二分索引必须与逐行扫描**逐条一致**（顺序、对象、边界）。"""
+    def linear(scenario, s, e, ap_id=None, user_id=None):
+        rows = []
+        for r in main.DF:
+            if r["scenario"] != scenario:
+                continue
+            if ap_id and r["ap_id"] != ap_id:
+                continue
+            if user_id and r["user_id"] != user_id:
+                continue
+            if not (s <= r["timestamp"] <= e):
+                continue
+            rows.append(r)
+        rows.sort(key=lambda x: x["timestamp"])
+        return rows
+
+    cases = [
+        (SCENARIO, "2026-01-01 10:00:00", "2026-01-01 11:59:59", None, None),
+        (SCENARIO, "2026-01-01 10:00:00", "2026-01-01 11:59:59", "AP-02", None),
+        (SCENARIO, "2026-01-01 10:00:00", "2026-01-01 11:59:59", None, "UE-01"),
+        (SCENARIO, "2026-01-01 10:00:00", "2026-01-01 10:00:00", None, None),   # 单分钟
+        (SCENARIO, "2026-01-31 00:00:00", "2026-01-31 23:59:59", None, None),   # 无数据
+        ("不存在的场景", "2026-01-01 00:00:00", "2026-01-02 00:00:00", None, None),
+    ]
+    for h in range(24):     # 覆盖 24 个不同小时
+        d = 1 + h % 30
+        cases.append((SCENARIO, f"2026-01-{d:02d} {h % 24:02d}:00:00",
+                      f"2026-01-{d:02d} 23:59:59", None, None))
+
+    for sc, s, e, ap, uid in cases:
+        old = [id(r) for r in linear(sc, s, e, ap, uid)]
+        new = [id(r) for r in main.filter_rows(sc, s, e, ap, uid)]
+        assert old == new, f"索引与线性扫描结果不一致：{sc} {s}~{e} ap={ap} uid={uid}"
+
+
+def test_analyze_anomaly_cache_is_isolated():
+    """研判短缓存：内容一致、深拷贝隔离、不同窗口/AP 不串。"""
+    req = main.AnomalyRequest(scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)
+    first = main.analyze_anomaly(req)
+    second = main.analyze_anomaly(req)
+    assert first["data"] == second["data"]
+    assert first["data"] is not second["data"], "必须返回深拷贝，否则调用方会污染缓存"
+
+    # 调用方就地改字典（agent_chat 会 setdefault("multi_turn")），不能影响后续缓存命中
+    first["data"]["__polluted__"] = True
+    assert "__polluted__" not in main.analyze_anomaly(req)["data"]
+
+    # 不同窗口 / 不同 AP 过滤必须各自独立
+    other_window = main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-01 10:00:00",
+        window_end="2026-01-01 10:59:59"))
+    assert other_window["data"] != second["data"]
+    ap_filtered = main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END, ap_id="AP-01"))
+    assert ap_filtered["data"]["ap_filter"] == "AP-01"
+    assert second["data"].get("ap_filter") in (None, "")
+
+
+def test_report_id_is_unique():
+    """同一秒内连续导出报告不能同名覆盖（原先 RPT_YYYYMMDD_HHMMSS 秒级）。"""
+    def export():
+        return (main.export_report(main.ReportRequest(
+            scenario=SCENARIO, start_time=WEAK_START, end_time=WEAK_END,
+            format="html", include_chart=False)).get("data") or {})["report_id"]
+
+    a, b = export(), export()
+    assert a != b, f"两次导出应得到不同 report_id，实得 {a}"
+    assert a.startswith("RPT_") and len(a.split("_")[-1]) >= 4
+
+
 def test_query_kpi_verdict_matches_data():
     """KPI 查询的结论文案必须与数据一致。
 

@@ -13,6 +13,10 @@ import json as _json
 import re
 import math
 import os
+import time
+import uuid
+import copy as _copy
+import bisect as _bisect
 from pathlib import Path
 from datetime import datetime, timedelta
 import llm_agent
@@ -182,6 +186,30 @@ def load_data():
 
 DF = load_data()
 
+
+def _build_df_index():
+    """为网络表建"按场景的时间索引"，把 filter_rows 从线性扫描降到二分查找。
+
+    为什么需要：原先 filter_rows 对 129,600 行做 Python 逐行循环，
+    实测 51.5 ms/次；一次对话会调用 1~3 次，是响应时间的主要来源。
+    这里在加载时一次性建 {scenario: (排序后的时间戳列表, 对应的 DF 下标列表)}，
+    查询时 bisect 取区间，再按**原始下标升序**输出 —— 与线性扫描的行序完全一致。
+    """
+    idx = {}
+    for i, r in enumerate(DF):
+        try:
+            idx.setdefault(r["scenario"], []).append((r["timestamp"], i))
+        except (KeyError, TypeError):
+            continue
+    out = {}
+    for scenario, pairs in idx.items():
+        pairs.sort(key=lambda p: (p[0], p[1]))   # 时间相同则按下标，稳定可比
+        out[scenario] = ([p[0] for p in pairs], [p[1] for p in pairs])
+    return out
+
+
+_DF_IDX = _build_df_index()
+
 # ============ 频谱数据（预测预警 v2 真实数据源） ============
 # 7天×1440分钟×3 AP×50频段 = 1,512,000 行；1分钟一帧，与网络数据同时间轴
 # 字段：timestamp/observation_id(AP-01..03)/band_id(band-0..49)/lower_mhz/upper_mhz
@@ -322,19 +350,27 @@ def health():
 ALL_COLUMNS = list(NETWORK_COLUMNS)
 
 def filter_rows(scenario, start_time, end_time, ap_id=None, user_id=None):
-    """按场景/时间/AP/用户过滤 CSV 数据，按时间升序返回"""
+    """按场景/时间/AP/用户过滤 CSV 数据，按时间升序返回。
+
+    用加载时建好的时间索引做二分定位（见 _build_df_index），不再逐行扫描 12.96 万行。
+    输出与旧实现逐条一致：时间升序，同一时间戳保持原始行序（稳定）。
+    """
+    idx = _DF_IDX.get(scenario)
+    if idx is None:
+        return []
+    ts_list, pos_list = idx
+    lo = _bisect.bisect_left(ts_list, start_time)
+    hi = _bisect.bisect_right(ts_list, end_time)
+    if lo >= hi:
+        return []
     rows = []
-    for r in DF:
-        if r["scenario"] != scenario:
-            continue
+    for pos in pos_list[lo:hi]:
+        r = DF[pos]
         if ap_id and r["ap_id"] != ap_id:
             continue
         if user_id and r["user_id"] != user_id:
             continue
-        if not (start_time <= r["timestamp"] <= end_time):
-            continue
         rows.append(r)
-    rows.sort(key=lambda x: x["timestamp"])
     return rows
 
 def avg(rows, key):
@@ -722,8 +758,49 @@ def _supported_range() -> tuple[str, str] | None:
             _SPEC["max_ts"].strftime("%Y-%m-%d %H:%M:%S"))
 
 
+# 研判结果短缓存（60 秒）：同一窗口被反复请求时（对话 + 报告 + 前端轮询）直接复用。
+# 安全性设计（这是"零风险"的关键）：
+#   ① 入缓存与出缓存都 deepcopy —— 调用方（agent_chat 会 setdefault("multi_turn")）就地改字典，
+#      不深拷贝会把缓存污染成"带上一轮会话字段"的结果。
+#   ② key 里带数据文件 mtime，替换数据后缓存自动失效，不会返回旧数据。
+#   ③ 可用 NETTUNE_DISABLE_ANOMALY_CACHE=1 彻底关闭。
+_ANOMALY_CACHE: dict = {}
+_ANOMALY_TTL_SEC = 60.0
+_ANOMALY_CACHE_MAX = 128
+_ANOMALY_CACHE_ON = os.getenv("NETTUNE_DISABLE_ANOMALY_CACHE", "").strip() not in ("1", "true", "on")
+
+
+def _data_version() -> tuple:
+    """数据文件版本（mtime），用于让缓存随数据替换自动失效。"""
+    def _mtime(p):
+        try:
+            return p.stat().st_mtime if p else 0.0
+        except OSError:
+            return 0.0
+    return (_mtime(DATA_PATH), _mtime(SPECTRUM_PATH))
+
+
 @app.post("/api/analyze/anomaly")
 def analyze_anomaly(req: AnomalyRequest):
+    if not _ANOMALY_CACHE_ON:
+        return _analyze_anomaly_uncached(req)
+    key = (req.scenario, req.window_start, req.window_end,
+           getattr(req, "ap_id", None) or "", _data_version())
+    hit = _ANOMALY_CACHE.get(key)
+    if hit is not None:
+        ts, payload = hit
+        if time.monotonic() - ts < _ANOMALY_TTL_SEC:
+            return _copy.deepcopy(payload)
+        _ANOMALY_CACHE.pop(key, None)
+    payload = _analyze_anomaly_uncached(req)
+    if isinstance(payload, dict) and payload.get("code") == 0:
+        if len(_ANOMALY_CACHE) >= _ANOMALY_CACHE_MAX:
+            _ANOMALY_CACHE.pop(next(iter(_ANOMALY_CACHE)), None)   # FIFO 淘汰
+        _ANOMALY_CACHE[key] = (time.monotonic(), _copy.deepcopy(payload))
+    return payload
+
+
+def _analyze_anomaly_uncached(req: AnomalyRequest):
     # 第2周深化版：CSV真实数据，按AP分组多KPI联合研判（可解释证据链）
     # 新增：hourly_trend 小时趋势 / ap_comparison 多AP对比 / alarm_history 告警历史
     # 窗口先收敛到"支撑区间"：越界部分裁掉并明确告知，完全无交集则如实说无数据，
@@ -2057,7 +2134,9 @@ def export_report(req: ReportRequest):
             pass
 
     now = datetime.now()
-    report_id = "RPT_" + now.strftime("%Y%m%d_%H%M%S")
+    # 加 4 位随机后缀：原先是 RPT_YYYYMMDD_HHMMSS（秒级），
+    # 同一秒内两次导出会生成同名文件并互相覆盖（并发或连点两次即可复现）。
+    report_id = "RPT_" + now.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
     ctx = {
         "report_id": report_id,
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
