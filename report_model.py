@@ -223,6 +223,12 @@ def build_markdown(ctx, include_chart=True):
 
     L.append("## 四、小时趋势")
     L.append("")
+    _tr = ctx.get("trend_range") or {}
+    if _tr.get("extended"):
+        L.append(f"> 趋势参考区间：{_tr.get('start')} ~ {_tr.get('end')}"
+                 f"（为保证趋势可读，向前补取了窗口前的数据；其余章节严格对应所选窗口 "
+                 f"{ctx.get('start')} ~ {ctx.get('end')}）")
+        L.append("")
     L.append(_md_table(["小时", "RSRP(dBm)", "SINR(dB)", "吞吐(Mbps)", "PRB(%)", "研判"],
                        s["trend"]))
     L.append("")
@@ -338,10 +344,14 @@ def build_html(ctx, include_chart=True):
                         "弱覆盖占比", "拥塞占比", "研判"], s["comparison"]))
 
     parts.append("<h2>四、小时趋势</h2>")
+    _tr = ctx.get("trend_range") or {}
+    if _tr.get("extended"):
+        parts.append(f'<p style="color:#5b7391;font-size:12px">趋势参考区间：{_tr.get("start")} ~ {_tr.get("end")}'
+                     f'（为保证趋势可读，向前补取了窗口前的数据；其余章节严格对应所选窗口 '
+                     f'{ctx.get("start")} ~ {ctx.get("end")}）</p>')
     parts.append(table(["小时", "RSRP(dBm)", "SINR(dB)", "吞吐(Mbps)", "PRB(%)", "研判"],
                        s["trend"]))
-    # 窗口短于 3 小时时只有 1~2 个小时点，趋势判断意义有限，必须说明清楚，
-    # 否则读者会把"两小时的小幅下滑"当成明确趋势。
+    # 补取之后仍不足 3 点时，必须如实说明"不足以判断趋势"
     if len(ctx.get("hourly_trend") or []) < 3:
         parts.append(f'<p style="color:#8a6a2a;font-size:12px">'
                      f'注：窗口内只有 {len(ctx.get("hourly_trend") or [])} 个小时级数据点，'

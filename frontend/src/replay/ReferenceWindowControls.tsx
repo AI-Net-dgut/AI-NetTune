@@ -17,6 +17,9 @@ export default function ReferenceWindowControls({ state, act, scope, disabled, i
   const earliest = state.startMs;
   const blocked = disabled || state.locked || !state.ready;
   const clipped = state.customStartMs === null && cutoff - state.referenceMinutes * 60_000 < state.startMs;
+  // 窗口短于 3 小时时，小时趋势只有 1~2 个点，报告里的趋势图会向前补取数据
+  //（报告已标注"趋势参考区间"）。这里提前提示，避免用户以为报告混入了范围外数据。
+  const shortWindow = (toEpoch(scope.end) - toEpoch(scope.start)) < 3 * 3600_000;
   function apply() {
     if (blocked || state.viewMode === "live") return;
     try {
@@ -38,6 +41,7 @@ export default function ReferenceWindowControls({ state, act, scope, disabled, i
       </select>
       <span className="ain-reference-actual">参考数据：{scope.start} — {scope.end}（北京时间）</span>
       {clipped && <span className="ain-reference-hint">已按数据起点截断</span>}
+      {shortWindow && <span className="ain-reference-hint">窗口不足 3 小时：报告的趋势图会向前补取数据（报告内已标注）</span>}
     </div>
     {customOpen && state.viewMode !== "live" && <form className="ain-reference-row ain-reference-custom" onSubmit={event => { event.preventDefault(); apply(); }}>
       <label htmlFor={`${idPrefix}-start`}>开始时间</label><input id={`${idPrefix}-start`} type="datetime-local" step="1" value={draft} disabled={blocked}

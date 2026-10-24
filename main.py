@@ -1960,6 +1960,29 @@ def export_report(req: ReportRequest):
     diagnosis = analyze_anomaly(AnomalyRequest(
         scenario=req.scenario, window_start=req.start_time, window_end=req.end_time))["data"]
 
+    # 小时趋势不足 3 个点时，向**前**补取（最多 6 小时）作为"趋势参考区间"。
+    # 目的：2 小时窗口只有 2 个小时点，看不出趋势；补到 8 个点后能看出"持续下滑"。
+    # 必须标注清楚：这一段是窗口外的数据，其余章节仍严格对应所选窗口。
+    hourly_trend = diagnosis.get("hourly_trend") or []
+    trend_range = {"start": req.start_time, "end": req.end_time, "extended": False}
+    if 0 < len(hourly_trend) < 3:
+        try:
+            _ws = datetime.strptime(req.start_time, "%Y-%m-%d %H:%M:%S")
+            ext_start = (_ws - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+            _sup = _supported_range()
+            if _sup is not None and ext_start < _sup[0]:
+                ext_start = _sup[0]
+            ext_rows = filter_rows(req.scenario, ext_start, req.end_time)
+            if ext_rows:
+                ext = analyze_anomaly(AnomalyRequest(
+                    scenario=req.scenario, window_start=ext_start, window_end=req.end_time))["data"]
+                ext_trend = ext.get("hourly_trend") or []
+                if len(ext_trend) > len(hourly_trend):
+                    hourly_trend = ext_trend
+                    trend_range = {"start": ext_start, "end": req.end_time, "extended": True}
+        except Exception:
+            pass
+
     now = datetime.now()
     report_id = "RPT_" + now.strftime("%Y%m%d_%H%M%S")
     ctx = {
@@ -1973,7 +1996,8 @@ def export_report(req: ReportRequest):
         "means": {k: avg(rows, k) for k in
                   ("rsrp", "sinr", "throughput", "prb_usage", "packet_loss", "latency")},
         "diagnosis": diagnosis,
-        "hourly_trend": diagnosis.get("hourly_trend") or [],
+        "hourly_trend": hourly_trend,
+        "trend_range": trend_range,
         "ap_comparison": diagnosis.get("ap_comparison") or [],
         "alarm_history": diagnosis.get("alarm_history") or [],
         "plans": diagnosis.get("plans") or [],

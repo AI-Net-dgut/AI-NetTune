@@ -829,6 +829,38 @@ def test_fault_events_endpoint():
     assert _data(main.data_events(scenario="商场"))["count"] == 0
 
 
+def test_report_trend_extends_for_short_window():
+    """短窗口报告：小时趋势向前补取数据，并明确标注"趋势参考区间"。
+
+    背景：2 小时窗口只有 2 个小时点，趋势图没有信息量。改为向前补取最多 6 小时，
+    同时必须标注这段是窗口外数据，其余章节仍对应所选窗口。
+    """
+    import os
+    from data_layout import BASE_DIR
+    reports_dir = Path(os.getenv("NETTUNE_REPORTS_DIR") or str(BASE_DIR / "reports"))
+
+    def html_of(start: str, end: str) -> str:
+        payload = main.export_report(main.ReportRequest(
+            scenario=SCENARIO, start_time=start, end_time=end,
+            format="html", include_chart=True)).get("data") or {}
+        name = payload["file_url"].rstrip("/").split("/")[-1]
+        return (reports_dir / name).read_text(encoding="utf-8")
+
+    # ① 2 小时窗口 → 趋势段向前补取，折线点数明显多于 2，且带区间标注
+    short = html_of("2026-01-02 08:00:00", "2026-01-02 09:59:59")
+    seg = short.split("四、小时趋势")[-1][:2500]
+    assert "趋势参考区间" in seg, "补取数据时必须标注参考区间"
+    assert "其余章节严格对应所选窗口" in seg, "必须说明其余章节仍对应所选窗口"
+    import re
+    poly = re.search(r'points="([^"]+)"', seg)
+    assert poly and len(poly.group(1).split()) >= 3, "补取后应画出可读的折线"
+
+    # ② 6 小时窗口 → 不补取、不标注
+    long_html = html_of("2026-01-01 10:00:00", "2026-01-01 15:59:59")
+    seg_long = long_html.split("四、小时趋势")[-1][:2500]
+    assert "趋势参考区间" not in seg_long, "窗口本身足够长时不应补取"
+
+
 def test_report_export():
     """导出接口返回 {report_id, file_url, format, include_chart, sample_count, bytes}。"""
     def _report(include_chart: bool):
