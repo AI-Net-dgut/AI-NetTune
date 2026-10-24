@@ -336,6 +336,101 @@ def test_forecast_horizon_independent():
             f"{clock} 在不同预测时长下应一致，实得 {short} vs {long}"
 
 
+def test_analyze_anomaly_ap_filter():
+    """指定 AP 时只研判该 AP；未指定时行为与原来完全一致。
+
+    实测缺陷：意图层抽出了 ap_id（intent_debug.parsed.ap_id = AP-01），
+    但分发时不传 → 问 AP-01 得到的是"窗口内最差的 AP"。
+    """
+    base = dict(scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)
+
+    # 该窗口（01-01 10:00~11:59）采样只落在 AP-02 上
+    only = _data(main.analyze_anomaly(main.AnomalyRequest(**base, ap_id="AP-02")))
+    assert only["affected_aps"] == ["AP-02"]
+    assert only["ap_filter"] == "AP-02"
+
+    # 指定一个该窗口没有采样的 AP → 明确回答"无采样"，而不是硬答别人的异常
+    none = _data(main.analyze_anomaly(main.AnomalyRequest(**base, ap_id="AP-01")))
+    assert none["is_anomaly"] is False
+    assert none["affected_aps"] == []
+    assert "无采样" in none["reason"]
+
+    # 不指定 AP → 与改动前一致（整窗研判，AP-02 覆盖故障）
+    default = _data(main.analyze_anomaly(main.AnomalyRequest(**base)))
+    assert default["anomaly_type"] == "覆盖故障" and default["affected_aps"] == ["AP-02"]
+    assert default.get("ap_filter") in (None, "")
+
+
+def test_chat_respects_ap_id():
+    """对话里点了 AP 就必须答那台，不能答成窗口内最差的 AP。"""
+    def ask(msg: str) -> dict:
+        return _data(main.agent_chat(main.ChatRequest(
+            message=msg, session_id="ap-" + msg[:6], scenario=SCENARIO,
+            window_start=WEAK_START, window_end=WEAK_END)))
+
+    hit = ask("AP-02 在 2026-01-01 10:00 到 12:00 的情况")
+    assert hit["intent_debug"]["parsed"]["ap_id"] == "AP-02"
+    assert "AP-02" in hit["reply"] and "劣化" in hit["reply"]
+
+    # 该窗口没有 AP-01 的采样 → 必须如实说没有，而不是把 AP-02 的异常当成 AP-01 的
+    miss = ask("AP-01 在 2026-01-01 10:00 到 12:00 的情况")
+    assert miss["intent_debug"]["parsed"]["ap_id"] == "AP-01"
+    assert "未找到 AP-01" in miss["reply"], f"应明确无采样，实得：{miss['reply'][:60]}"
+    assert "覆盖故障" not in miss["reply"]
+
+    # 研判类问法：跨故障边界时，答该 AP 正常 + 补充同窗口其他 AP 异常
+    diag = main.tool_fault_diagnosis(SCENARIO, "2026-01-01 09:30:00",
+                                     "2026-01-01 10:30:00", "AP-01")
+    assert diag["reply"].startswith("已按 AP-01 过滤")
+    assert "未检测到明显异常" in diag["reply"]
+    assert "补充：同窗口 AP-02" in diag["reply"]
+
+
+def test_query_kpi_verdict_matches_data():
+    """KPI 查询的结论文案必须与数据一致。
+
+    实测问题：原实现无论数据多差都写"当前时段网络整体运行平稳"，
+    在 RSRP=-111.2 dBm、SINR=-15.0 dB 的故障窗口里照样说"平稳"，与数字直接矛盾。
+    """
+    fault = main.tool_query_kpi(SCENARIO, WEAK_START, WEAK_END)["reply"]
+    assert "当前时段运行平稳" not in fault, f"故障窗口不应说平稳：{fault[:60]}"
+    assert "明显劣化" in fault and "弱覆盖采样占比" in fault
+
+    normal = main.tool_query_kpi(SCENARIO, "2026-01-02 03:00:00", "2026-01-02 03:59:59")["reply"]
+    assert "当前时段运行平稳" in normal, f"正常窗口应说平稳：{normal[:60]}"
+
+
+def test_forecast_insufficient_data_messages_are_specific():
+    """频谱未加载 与 基准越界 必须是两条不同的说明。
+
+    实测问题：两句合并成「当前时刻超出频谱数据范围（频谱覆盖 2026-01-01 ~ 01-07）」，
+    在"频谱表缺失 + baseTime 完全合法"时也这么报，把"文件没加载"误导成"时间选错了"；
+    且范围是硬编码字符串，数据换了就过期。
+    """
+    def preview(base: str, hs: str):
+        return _data(main.forecast_preview(main.ForecastPreviewRequest(
+            scenario=SCENARIO, baseTime=base,
+            history=main._TimeRange(start=hs, end=base), horizonMinutes=30)))
+
+    # ① 真越界：说明基准时刻与真实覆盖范围（取 _SPEC，而非硬编码）
+    out = preview("2026-01-08 10:00:00", "2026-01-08 09:00:00")
+    assert out["status"] == "insufficient_data"
+    assert "超出频谱数据覆盖范围" in out["message"]
+    assert "2026-01-08 10:00:00" in out["message"], "应点名越界的基准时刻"
+    assert main._SPEC["max_ts"].strftime("%Y-%m-%d %H:%M:%S") in out["message"], "范围应来自实际数据"
+
+    # ② 频谱缺失：即便 baseTime 完全合法，也必须说"未加载"而不是"超出范围"
+    saved = main._SPEC["df"]
+    try:
+        main._SPEC["df"] = None
+        missing = preview("2026-01-02 14:10:00", "2026-01-02 13:12:00")
+    finally:
+        main._SPEC["df"] = saved
+    assert missing["status"] == "insufficient_data"
+    assert "未加载" in missing["message"] and "spectrum_7d.csv" in missing["message"]
+    assert "超出频谱数据覆盖范围" not in missing["message"], "文件缺失时不能说成时刻越界"
+
+
 def test_forecast_rejects_future_history():
     """历史窗口不得晚于基准（否则等于用未来观测预测过去）。
 
