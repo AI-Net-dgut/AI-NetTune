@@ -115,6 +115,45 @@ def test_anomaly_conclusion_has_evidence():
             assert d["kpi_evidence"], f"{start} 判了异常却没有证据"
 
 
+def test_api_routes_map_to_expected_functions():
+    """每个 /api 路由必须绑定到真实业务函数。
+
+    实测事故：把辅助函数 _supported_range() 插到了
+    `@app.post("/api/analyze/anomaly")` 与 analyze_anomaly 之间，
+    装饰器于是绑到了辅助函数上 → 接口2 返回的是 ['2026-01-01 00:00:00',
+    '2026-01-07 23:59:00']（支撑范围元组），而 analyze_anomaly 变成无人调用的普通函数。
+    单元测试全部直接调用函数，只有跑 HTTP 冒烟才发现——所以这里补一条路由断言。
+    """
+    api = {r.path: r.endpoint.__name__ for r in main.app.routes
+           if hasattr(r, "endpoint") and r.path.startswith("/api")}
+    assert len(api) == 16, f"/api 路由数量应为 16，实得 {len(api)}"
+
+    expected = {
+        "/api/data/query": "data_query",
+        "/api/analyze/anomaly": "analyze_anomaly",
+        "/api/agent/chat": "agent_chat",
+        "/api/export/report": "export_report",
+        "/api/data/heatmap": "get_heatmap",
+        "/api/network/topology/basic": "get_basic_topology",
+        "/api/data/events": "data_events",
+        "/api/predict/result": "predict_result",
+        "/api/network/topology/enhanced": "get_enhanced_topology",
+        "/api/analyze/forecast": "analyze_forecast",
+        "/api/forecast/preview": "forecast_preview",
+        "/api/forecast/analyze": "forecast_analyze",
+        "/api/health": "health",
+        "/api/plan/simulate": "plan_simulate",
+        "/api/forecast/spatial_frames": "spatial_frame_series",
+        "/api/navigate/signal": "navigate_signal",
+    }
+    for path, func in expected.items():
+        assert api.get(path) == func, f"{path} 应绑定 {func}，实得 {api.get(path)}"
+
+    # 兜底：任何 /api 路由都不能绑到下划线开头的内部辅助函数
+    bad = [(p, f) for p, f in api.items() if f.startswith("_")]
+    assert not bad, f"路由被绑定到内部辅助函数：{bad}"
+
+
 def test_anomaly_supported_range_alignment():
     """研判与预测必须使用同一"支撑范围"（网络表 30 天 ∩ 频谱表 7 天 = 7 天）。
 

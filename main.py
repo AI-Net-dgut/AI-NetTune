@@ -703,7 +703,6 @@ def _anomaly_spans(rows: list[dict], limit: int = 20) -> list[dict]:
     return spans[:limit]
 
 
-@app.post("/api/analyze/anomaly")
 def _supported_range() -> tuple[str, str] | None:
     """系统实际支撑的数据区间（= 网络表 ∩ 频谱表）。
 
@@ -720,6 +719,7 @@ def _supported_range() -> tuple[str, str] | None:
             _SPEC["max_ts"].strftime("%Y-%m-%d %H:%M:%S"))
 
 
+@app.post("/api/analyze/anomaly")
 def analyze_anomaly(req: AnomalyRequest):
     # 第2周深化版：CSV真实数据，按AP分组多KPI联合研判（可解释证据链）
     # 新增：hourly_trend 小时趋势 / ap_comparison 多AP对比 / alarm_history 告警历史
