@@ -124,7 +124,7 @@ def accept_lead(rows) -> None:
     print("| 事件 | AP | 类型 | 首条预警 | 首个网络标签 | 相对标签 | 首次频谱越阈 | 相对越阈 |")
     print("|---|---|---|---|---|---|---|---|")
     early = late = miss = 0
-    cross_early = cross_late = cross_na = 0
+    cross_early = cross_sync = cross_late = cross_na = 0
     cross_leads = []
     for r in rows:
         label = r["label"].strftime("%m-%d %H:%M") if r["label"] else "-"
@@ -138,9 +138,10 @@ def accept_lead(rows) -> None:
         if cross is not None:
             d2 = (cross - r["alert_at"]).total_seconds() / 60
             cross_txt = cross.strftime("%m-%d %H:%M")
-            rel2 = f"提前 {abs(d2):.0f} 分" if d2 > 0 else f"晚 {abs(d2):.0f} 分"
+            rel2 = f"提前 {abs(d2):.0f} 分" if d2 > 0 else ("同步" if d2 == 0 else f"晚 {abs(d2):.0f} 分")
             cross_early += d2 > 0
-            cross_late += d2 <= 0
+            cross_sync += d2 == 0
+            cross_late += d2 < 0
             cross_leads.append(d2)
         else:
             cross_txt, rel2 = "—", "未越阈"
@@ -155,7 +156,7 @@ def accept_lead(rows) -> None:
         print(f"| {r['event']} | {r['ap']} | {r['type']} | {at} | {label} | {rel} | {cross_txt} | {rel2} |")
     print(f"\n汇总：命中 {len(rows) - miss} / {len(rows)}，漏报 {miss}")
     print(f"- **相对首个网络标签**：提前 {early}、晚 {late}")
-    print(f"- **相对首次频谱越阈**：提前 {cross_early}、晚 {cross_late}、未越阈 {cross_na}")
+    print(f"- **相对首次频谱越阈**：提前 {cross_early}、同步 {cross_sync}、晚 {cross_late}、未越阈 {cross_na}")
     if cross_leads:
         cross_leads.sort()
         print(f"- 相对越阈平均提前 **{sum(cross_leads)/len(cross_leads):+.1f} 分钟**"
