@@ -48,15 +48,16 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   const historical = replay?.mode === "history";
   const busy = disabled || query.pending || followingLive;
   const currentEmpty = replay?.hasCurrentData === false;
-  const result = query.result;
-  const analysis = query.diagnosisResult;
+  const forecastMode = Boolean(forecastReview);
+  const result = forecastMode ? null : query.result;
+  const analysis = forecastMode ? null : query.diagnosisResult;
   const diagnosis = analysis?.diagnosis || null;
   const scope = data?.scope || scopeWindow;
   const mismatch = Boolean(result && scope && !sameQueryScope(result.scope, scope));
   const analysisMismatch = Boolean(diagnosis && scope && !sameQueryScope(diagnosis.scope, scope));
   const currentEvidenceSelection = evidenceSelection?.diagnosisId === query.diagnosisId && evidenceSelection?.requestId === query.requestId ? evidenceSelection : null;
   const dataStatus = dataLoading ? "数据加载中" : dataError ? "数据加载失败" : !data ? "当前范围暂无数据" : replay && !data.metrics.length ? "当前时刻暂无采样" : "";
-  const status = dataStatus || (query.pending ? "正在分析" : currentEmpty ? "当前窗口暂无采样" : followingLive ? "实时跟随" : query.error ? "请求失败" : result ? "已返回" : historical ? "历史回顾，可提问" : replay ? "已固定，可提问" : "等待提问");
+  const status = dataStatus || (forecastMode ? "预测研判" : query.pending ? "正在分析" : currentEmpty ? "当前窗口暂无采样" : followingLive ? "实时跟随" : query.error ? "请求失败" : result ? "已返回" : historical ? "历史回顾，可提问" : replay ? "已固定，可提问" : "等待提问");
   const diagnosisQuestion = query.diagnosisQuestion || (result === analysis ? query.question : "");
 
   const questionTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(draft) || needsFutureForecast(draft)));
@@ -64,7 +65,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
 
   /** 生成并打开/下载分析报告（接口4）。报告口径与当前展示范围一致。 */
   async function runExport(format: "md" | "html") {
-    if (!scope || exporting) return;
+    if (!scope || exporting || forecastMode) return;
     setExporting(true); setExportNotice("");
     try {
       const { url, reportId, bytes } = await exportReport(scope, format);
@@ -141,6 +142,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           {query.pending ? "分析中…" : followingLive && !questionTime ? "先固定时刻" : "发送"}</button></div>
       <div className="ain-query-input-meta"><span>{followingLive ? (replay?.canAnalyzeQuestionTime ? "历史时间或未来预测可直接发送；未来问题会固定查看时刻并打开预测。" : "可先编辑问题；固定当前时刻后发送，主时钟播放状态不变。") : "未来问题进入预测预警；点击示例填入后可编辑 · Ctrl / Cmd + Enter"}</span><span>{draft.length}/500</span></div>
     </form>
+    {forecastMode && <p className="ain-ai-note">当前展示预测风险研判。发送当前网络或历史分析问题时，将切换分析对象。</p>}
     {sendNotice && <p className="ain-ai-warning" role="status">{sendNotice}</p>}
     {currentEmpty && !disabled && !query.pending && <p className="ain-ai-note" role="status">当前窗口暂无采样，暂不能发起新分析；仍可查看及重试原截止时刻的分析。</p>}
     {disabled && !query.pending && <p className="ain-ai-note" role={dataError ? "alert" : "status"}>{dataLoading ? "正在读取历史数据，完成后固定时刻即可提问。" : dataError ? `${dataError}；请在顶部重载数据。` : "当前查看时刻暂无有效采样，请返回当前或查看已到达的历史数据。"}</p>}
@@ -152,7 +154,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               必须区分「当前故障 / 窗口内已恢复 / 性能提示 / 正常」，
               否则用户会把"过去 60 分钟里发生过"误读成"现在还在故障"。 */}
           <span data-state={query.pending ? "pending" : diagnosis?.currentState || ""}>
-            {query.pending ? "等待本次结果"
+            {forecastMode ? "预测研判" : query.pending ? "等待本次结果"
               : diagnosis?.currentState === "fault_active" ? "当前故障中"
               : diagnosis?.currentState === "recovered_in_window" ? "窗口内有故障·已恢复"
               : diagnosis?.currentState === "performance_warning" ? "性能提示（未确诊）"
@@ -162,9 +164,9 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           </span></div>
         <div className="ain-ai-answer" aria-live="polite" aria-busy={query.pending}>
           {forecastReview}
-          {query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
-          {query.pending && <p className="ain-ai-pending" role="status">正在查询固定分析时刻的数据…{analysis ? "下方保留此辅助查询关联的研判。" : "本次结果尚未返回，上一轮研判和方案已清空。"}</p>}
-          {query.error && <div className="ain-query-error" role="alert"><p>{query.error}</p>
+          {!forecastMode && query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
+          {!forecastMode && query.pending && <p className="ain-ai-pending" role="status">正在查询固定分析时刻的数据…{analysis ? "下方保留此辅助查询关联的研判。" : "本次结果尚未返回，上一轮研判和方案已清空。"}</p>}
+          {!forecastMode && query.error && <div className="ain-query-error" role="alert"><p>{query.error}</p>
             <button type="button" className="ain-button" disabled={busy} onClick={() => send(query.question, query.contextRequest, true)}>重试本次问题</button></div>}
           {mismatch && <p className="ain-ai-warning">本次返回范围与已加载数据不同，请核对范围后使用结果。</p>}
           {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，右侧建议暂不可采用，辅助图使用已加载数据。</p>}
@@ -182,10 +184,13 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           disabled={busy || analysisMismatch || !data} onClick={() => managementRef.current?.prepare({ source: "chat", result: diagnosis, candidate: diagnosis.candidates[0] || null })}>
           根据此研判准备方案 →</button>}
         {/* key 让范围变化时重建面板，从而丢弃旧的回测结果 */}
-        <ForecastComparePanel key={scope ? `${scope.scenario}|${scope.start}|${scope.end}` : "none"}
-          scope={scope ?? null} disabled={disabled} archiveParentId={query.archiveId} />
+        {!forecastMode && <ForecastComparePanel key={scope ? `${scope.scenario}|${scope.start}|${scope.end}` : "none"}
+          scope={scope ?? null} disabled={disabled} archiveParentId={query.archiveId} />}
       </section>
-      {data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
+      {forecastMode ? <section className="ain-ai-management-empty" aria-label="预测处理方案与仿真">
+        <h3>预测处理方案与仿真</h3>
+        <p>本次预测暂未提供可操作方案与仿真结果。以上建议为文字研判，尚未经过配置参数仿真评估。</p>
+      </section> : data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
         diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans}
         sourceQuestion={diagnosisQuestion} pending={query.pending} archiveParentId={query.archiveId} />
         : <section className="ain-ai-management-empty" aria-label="处理建议与效果"><h3>处理建议与效果</h3><p>{dataStatus}。加载数据并完成研判后，查看处理方案、配置参数和仿真预计效果。</p></section>}
@@ -200,10 +205,10 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           <ReplyText text={entry.answer} /><p className="ain-ai-note">{entry.analysisMode === "history" ? "历史回顾" : "固定时刻分析"} · 分析截至：{entry.analysisTime ?? "未记录"}（北京时间）</p><p className="ain-ai-note">{entry.scope}（北京时间）</p></article>)}</div>
     </details>
       <span className="ain-report-actions">
-        <button type="button" className="ain-ai-text-button" disabled={!scope || exporting}
-          title="按当前展示范围生成报告：研判结论、证据链、候选原因、分 AP 对比、小时趋势与处理方案"
+        <button type="button" className="ain-ai-text-button" disabled={!scope || exporting || forecastMode}
+          title={forecastMode ? "预测研判可在分析记录中查看与导出" : "按当前展示范围生成报告：研判结论、证据链、候选原因、分 AP 对比、小时趋势与处理方案"}
           onClick={() => runExport("html")}>{exporting ? "生成中…" : "导出分析报告"}</button>
-        <button type="button" className="ain-ai-text-button" disabled={!scope || exporting}
+        <button type="button" className="ain-ai-text-button" disabled={!scope || exporting || forecastMode}
           onClick={() => runExport("md")}>下载 Markdown</button>
       </span>
       <button type="button" className="ain-ai-text-button" disabled={query.pending || !query.history.length} onClick={query.clearHistory}>清空记录</button>

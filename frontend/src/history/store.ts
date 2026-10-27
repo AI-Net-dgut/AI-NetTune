@@ -1,4 +1,7 @@
 import type { QueryScope } from '../types/backend';
+import { questionEntries, isQuestionRecord } from './historyModel';
+// 容量以“问题及其关联内容”为单位；满额时不自动删除已有记录。
+export const MAX_HISTORY_QUESTIONS = 100;
 export type RecordKind = 'analysis' | 'forecast' | 'forecast-analysis' | 'parameters' | 'simulation' | 'spatial' | 'backtest';
 export interface HistoryRecord {
     id: string;
@@ -10,6 +13,7 @@ export interface HistoryRecord {
     masterTime?: string;
     mode?: string;
     parentId?: string;
+    role?: 'question' | 'evidence';
     status?: 'pending' | 'completed' | 'failed' | 'cancelled';
     payload: unknown;
 }
@@ -19,8 +23,18 @@ const unsaved = new Set<string>();
 let opening: Promise<IDBDatabase> | undefined;
 let writes: Promise<void> = Promise.resolve();
 let problem = '';
-export const historyProblem = () => problem;
-function changed() { window.dispatchEvent(new Event('aintune-history')); }
+let contentProblem = '';
+let capacityProblem = '';
+const rejectedIds = new Set<string>();
+export const historyProblem = () => [capacityProblem, contentProblem, problem].filter(Boolean).join(' ');
+function changed() {
+    try { globalThis.window?.dispatchEvent(new Event('aintune-history')); } catch { /* 通知异常不能影响分析请求。 */ }
+}
+let idSequence = 0;
+function createId() {
+    try { if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch { /* 普通内网HTTP可能不支持此API。 */ }
+    return `history-${Date.now().toString(36)}-${(++idSequence).toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 function db(): Promise<IDBDatabase> {
     if (!opening)
         opening = new Promise<IDBDatabase>((resolve, reject) => {
@@ -37,14 +51,67 @@ function db(): Promise<IDBDatabase> {
         }).catch(e => { opening = undefined; throw e; });
     return opening;
 }
-async function mutate(action: (s: IDBObjectStore) => void) {
+async function removeWithinTransaction(ids: string[]): Promise<string[]> {
     const d = await db();
-    await new Promise<void>((resolve, reject) => {
-        const tx = d.transaction('records', 'readwrite');
-        action(tx.objectStore('records'));
-        tx.oncomplete = () => resolve();
+    return new Promise((resolve, reject) => {
+        const tx = d.transaction('records', 'readwrite'), s = tx.objectStore('records');
+        const removed = new Set(ids);
+        tx.oncomplete = () => resolve([...removed]);
         tx.onerror = () => reject(tx.error);
         tx.onabort = () => reject(tx.error);
+        const req = s.getAll();
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+            try {
+                // 以事务执行时的数据为准，包含点击删除前刚返回、尚未显示的子记录。
+                const all = new Map<string, HistoryRecord>(req.result.map((row: HistoryRecord) => [row.id, row]));
+                for (const [id, row] of memory) all.set(id, row);
+                // 必须遵守页面的问题分组边界，不能顺着parentId误删另一个独立问题。
+                for (const group of questionEntries([...all.values()])) {
+                    if (removed.has(group.record.id)) for (const member of group.members) removed.add(member.id);
+                }
+                for (const id of removed) s.delete(id);
+            } catch (reason) {
+                reject(reason);
+                tx.abort?.();
+            }
+        };
+    });
+}
+function exceedsCapacity(rows: HistoryRecord[], item: HistoryRecord) {
+    const before = questionEntries(rows).length;
+    const next = new Map(rows.map(r => [r.id, r]));
+    next.set(item.id, item);
+    const after = questionEntries([...next.values()]).length;
+    return after > MAX_HISTORY_QUESTIONS && after > before;
+}
+function refuseRecord(item: HistoryRecord) {
+    rejectedIds.add(item.id);
+    memory.delete(item.id);
+    unsaved.delete(item.id);
+    capacityProblem = `已达到 ${MAX_HISTORY_QUESTIONS} 个问题的保存上限，新问题未加入记录。分析仍可继续；请先导出或删除部分记录，再保存后续新问题。`;
+}
+async function persistWithinCapacity(item: HistoryRecord): Promise<boolean> {
+    const d = await db();
+    return new Promise((resolve, reject) => {
+        // 在同一读写事务中计数与写入，多个页面同时保存也不能越过上限。
+        const tx = d.transaction('records', 'readwrite'), s = tx.objectStore('records');
+        let accepted = false;
+        tx.oncomplete = () => resolve(accepted);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+        const req = s.getAll();
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+            try {
+                if (exceedsCapacity(req.result, item)) return;
+                s.put(item);
+                accepted = true;
+            } catch (reason) {
+                reject(reason);
+                tx.abort?.();
+            }
+        };
     });
 }
 // 仅保存用户问答、处理方案和仿真效果。旧类型仍可读取，自动图表不再新增记录。
@@ -56,32 +123,49 @@ function compactPayload(kind: RecordKind, value: unknown): unknown {
     };
     const plan = (v: unknown) => {
         const r = object(v);
-        return { id: r.id, name: r.name, description: r.description, scope: r.scope, objectIds: r.objectIds, parameters: r.parameters, simulation: effect(r.simulation) };
+        return { id: r.id, name: r.name, description: r.description, scope: r.scope, objectIds: r.objectIds, parameters: r.parameters, tasks: r.tasks, conditions: r.conditions, tradeoffs: r.tradeoffs, simulation: effect(r.simulation) };
     };
     const p = object(value);
     if (kind === 'analysis') {
         const r = object(p.response);
         return { error: p.error, reply: p.reply, response: p.response ? {
-            reply: r.reply, diagnosis: r.diagnosis, plans: Array.isArray(r.plans) ? r.plans.map(plan) : [],
+            reply: r.reply, intent: r.intent, hasChart: r.hasChart ?? Boolean(r.chart), diagnosis: r.diagnosis, plans: Array.isArray(r.plans) ? r.plans.map(plan) : [],
         } : undefined };
     }
     if (kind === 'forecast-analysis') {
         const handoff = object(p.handoff);
-        return { reply: p.reply, error: p.error, handoff: { targetWindow: handoff.targetWindow, forecast: object(handoff.result).forecast } };
+        return { reply: p.reply, error: p.error, handoff: { targetWindow: handoff.targetWindow, forecast: handoff.forecast ?? object(handoff.result).forecast } };
     }
-    return { error: p.error, action: p.action, values: p.values, plan: p.plan ? plan(p.plan) : undefined, result: effect(p.result) };
+    return { error: p.error, action: p.action, inputAt: p.inputAt, completedAt: p.completedAt, values: p.values, plan: p.plan ? plan(p.plan) : undefined, result: effect(p.result) };
 }
-export function record(input: Omit<HistoryRecord, 'id' | 'createdAt'> & {
-    id?: string;
-    createdAt?: string;
-}): string {
+type RecordInput = Omit<HistoryRecord, 'id' | 'createdAt'> & { id?: string; createdAt?: string };
+export function record(input: RecordInput): string {
+    try { return saveRecord(input); }
+    catch {
+        contentProblem = '部分记录未能完整保存，分析仍可继续。请保留页面结果或导出已有记录。';
+        changed();
+        return '';
+    }
+}
+function saveRecord(input: RecordInput): string {
     if (input.kind === 'forecast' || input.kind === 'spatial' || input.kind === 'backtest') return '';
-    const item = structuredClone({ ...memory.get(input.id ?? ''), ...input, payload: compactPayload(input.kind, input.payload), id: input.id ?? crypto.randomUUID(), createdAt: input.createdAt ?? memory.get(input.id ?? '')?.createdAt ?? new Date().toISOString() });
+    if (input.role === 'evidence' && !input.parentId) return '';
+    if ((input.id && rejectedIds.has(input.id)) || (input.parentId && rejectedIds.has(input.parentId) && !isQuestionRecord(input))) return '';
+    const item = structuredClone({ ...memory.get(input.id ?? ''), ...input, payload: compactPayload(input.kind, input.payload), id: input.id || createId(), createdAt: input.createdAt ?? memory.get(input.id ?? '')?.createdAt ?? new Date().toISOString() });
+    // 内存可能没有旧父问题，不能把它的每次仿真误当成独立问题。
+    // 子记录与旧版结构交给下方完整数据库事务核对。
+    const inMemoryQuestions = [...memory.values()].filter(r => r.kind === 'analysis' || r.kind === 'forecast-analysis');
+    if (!input.id && !item.parentId && (item.kind === 'analysis' || item.kind === 'forecast-analysis') && exceedsCapacity(inMemoryQuestions, item)) { refuseRecord(item); changed(); return ''; }
     memory.set(item.id, item);
     unsaved.add(item.id);
     writes = writes.then(async () => {
         try {
-            await mutate(s => s.put(item));
+            if (rejectedIds.has(item.id) || (item.parentId && rejectedIds.has(item.parentId) && !isQuestionRecord(item))) {
+                memory.delete(item.id);
+                unsaved.delete(item.id);
+            } else if (!await persistWithinCapacity(item)) {
+                refuseRecord(item);
+            }
             if (memory.get(item.id) === item)
                 unsaved.delete(item.id);
             if (!unsaved.size)
@@ -117,10 +201,17 @@ export async function listRecords(): Promise<HistoryRecord[]> {
     return [...merged.values()].filter(r => r && typeof r.id === 'string').sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
 }
 export async function deleteRecords(ids: string[]) {
-    await writes;
-    await mutate(s => { for (const id of ids) s.delete(id); });
-    for (const id of ids) { memory.delete(id); unsaved.delete(id); }
-    changed();
+    // 删除也进入写入队列。之后到达的分析/仿真响应必须等删除完成，
+    // 再根据已删除的ID丢弃，不能重新写回。
+    const deletion = writes.then(async () => {
+        const removed = await removeWithinTransaction(ids);
+        for (const id of removed) { memory.delete(id); unsaved.delete(id); rejectedIds.add(id); }
+        capacityProblem = '';
+        if (!unsaved.size) problem = '';
+        changed();
+    });
+    writes = deletion.catch(() => { /* 调用方显示删除错误，后续分析保存仍可继续。 */ });
+    await deletion;
 }
 export async function deleteRecord(id: string) { await deleteRecords([id]); }
 export function downloadRecords(records: HistoryRecord[]) {
