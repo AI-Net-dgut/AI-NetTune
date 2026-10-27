@@ -80,23 +80,71 @@ def accept_events(events) -> list[dict]:
         first_alert, alert = _scan_first_alert(ap, start - timedelta(minutes=60),
                                                end + timedelta(minutes=10))
         rows.append({"event": e["event_id"], "ap": ap, "type": ftype,
-                     "label": label, "alert_at": first_alert, "alert": alert})
+                     "label": label, "alert_at": first_alert, "alert": alert,
+                     "start": start, "end": end})
     return rows
 
 
+def _load_spectrum():
+    """加载频谱表（仅 4 列），用于计算"首次频谱越阈"时刻。"""
+    path = DATA / "spectrum_7d.csv"
+    if not path.exists():
+        return None
+    import pandas as _pd
+    return _pd.read_csv(path, encoding="utf-8-sig",
+                        usecols=["timestamp", "observation_id", "power_dbm", "occupancy_pct"])
+
+
+def _first_spectrum_crossing(spec, ap, start, end):
+    """该 AP 在 [start, end] 内**第一次**达到"≥40/50 频段越阈"的时刻。
+
+    这是"提前预警"的另一把尺子：相对**频谱越阈**，而不是相对网络标签。
+    唐苗检测报告第 8 条要求两个口径分别统计 —— 不能把"预计 N 分钟后越阈"
+    当成"提前 N 分钟发现网络故障"。
+    """
+    if spec is None or start is None or end is None:
+        return None
+    s = start.strftime("%Y-%m-%d %H:%M:%S")
+    e = end.strftime("%Y-%m-%d %H:%M:%S")
+    seg = spec[(spec.observation_id == ap) & (spec.timestamp >= s) & (spec.timestamp <= e)]
+    if seg.empty:
+        return None
+    hit = seg.assign(_h=(seg.power_dbm < main.ALERT_WEAK_POWER_DBM)
+                     | (seg.occupancy_pct > main.ALERT_CONGESTION_OCC_PCT)
+                     ).groupby("timestamp")["_h"].sum()
+    hit = hit[hit >= max(5, int(0.8 * 50))]      # 与 main._min_crossing_bands(50) 同口径
+    if hit.empty:
+        return None
+    return datetime.strptime(str(hit.index[0]), "%Y-%m-%d %H:%M:%S")
+
+
 def accept_lead(rows) -> None:
-    print("\n### 1) 命中与提前量（相对首个异常标签）\n")
-    print("| 事件 | AP | 类型 | 首个异常标签 | 首条预警 | 相对标签 | 预警给出的越阈预测 |")
-    print("|---|---|---|---|---|---|---|")
+    print("\n### 1) 命中与提前量（两个口径并列）\n")
+    spec = _load_spectrum()
+    print("| 事件 | AP | 类型 | 首条预警 | 首个网络标签 | 相对标签 | 首次频谱越阈 | 相对越阈 |")
+    print("|---|---|---|---|---|---|---|---|")
     early = late = miss = 0
+    cross_early = cross_late = cross_na = 0
+    cross_leads = []
     for r in rows:
         label = r["label"].strftime("%m-%d %H:%M") if r["label"] else "-"
         if r["alert_at"] is None:
             miss += 1
-            print(f"| {r['event']} | {r['ap']} | {r['type']} | {label} | — | **漏报** | — |")
+            print(f"| {r['event']} | {r['ap']} | {r['type']} | — | {label} | **漏报** | — | — |")
             continue
         at = r["alert_at"].strftime("%m-%d %H:%M")
-        title = (r["alert"] or {}).get("title", "")
+        # 第二把尺子：相对"首次频谱越阈"
+        cross = _first_spectrum_crossing(spec, r["ap"], r.get("start"), r.get("end"))
+        if cross is not None:
+            d2 = (cross - r["alert_at"]).total_seconds() / 60
+            cross_txt = cross.strftime("%m-%d %H:%M")
+            rel2 = f"提前 {abs(d2):.0f} 分" if d2 > 0 else f"晚 {abs(d2):.0f} 分"
+            cross_early += d2 > 0
+            cross_late += d2 <= 0
+            cross_leads.append(d2)
+        else:
+            cross_txt, rel2 = "—", "未越阈"
+            cross_na += 1
         if r["label"]:
             delta = (r["label"] - r["alert_at"]).total_seconds() / 60
             rel = f"提前 {abs(delta):.0f} 分" if delta > 0 else f"晚 {abs(delta):.0f} 分"
@@ -104,9 +152,14 @@ def accept_lead(rows) -> None:
             late += delta <= 0
         else:
             rel = "无标签"
-        print(f"| {r['event']} | {r['ap']} | {r['type']} | {label} | {at} | {rel} | {title[:28]} |")
-    print(f"\n汇总：命中 {len(rows) - miss} / {len(rows)}，漏报 {miss}，"
-          f"相对标签提前 {early}、晚 {late}。")
+        print(f"| {r['event']} | {r['ap']} | {r['type']} | {at} | {label} | {rel} | {cross_txt} | {rel2} |")
+    print(f"\n汇总：命中 {len(rows) - miss} / {len(rows)}，漏报 {miss}")
+    print(f"- **相对首个网络标签**：提前 {early}、晚 {late}")
+    print(f"- **相对首次频谱越阈**：提前 {cross_early}、晚 {cross_late}、未越阈 {cross_na}")
+    if cross_leads:
+        cross_leads.sort()
+        print(f"- 相对越阈平均提前 **{sum(cross_leads)/len(cross_leads):+.1f} 分钟**"
+              f"（中位 {cross_leads[len(cross_leads)//2]:+.1f}）")
 
     # 平均提前量：只有"提前"的那几条算正值，晚的算负值，这样能给出一个可写在
     # 答辩材料里的单一数字（含范围与中位数，避免被极端值带偏）。
