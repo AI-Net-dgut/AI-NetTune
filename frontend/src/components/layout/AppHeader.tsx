@@ -4,9 +4,7 @@ import "./AppHeader.css";
 const navigation = [
   { to: "/", label: "首页" },
   { to: "/workbench", label: "网络工作台" },
-  // R04（唐苗检测报告）：该页是占位页（仅说明"尚未接入保存与列表"），
-  // 导航上标"（规划中）"，避免用户点进去以为功能坏了。
-  { to: "/history", label: "分析记录（规划中）" },
+  { to: "/history", label: "分析记录" },
 ];
 
 export default function AppHeader() {

@@ -25,21 +25,24 @@ export default function useNetworkQuery() {
     const token = ++revision.current, abort = new AbortController();
     const createdAt = new Date().toISOString();
     controller.current = abort;
-    const recordId=record({parentId:options?.preserveDiagnosis?archiveId:undefined,kind:"analysis",question:message.trim(),scope:window??{scenario,start:"",end:""},analysisTime:window?.end??options?.currentTime??"",masterTime:options?.currentTime,mode:options?.analysisMode,status:"pending",payload:{workspace:options?.workspaceSnapshot}});
+    const parentId = options?.preserveDiagnosis ? archiveId : undefined;
+    const role = options?.preserveDiagnosis ? "evidence" as const : "question" as const;
+    if (!options?.preserveDiagnosis) setArchiveId(undefined);
+    const recordId=record({parentId,role,kind:"analysis",question:message.trim(),scope:window??{scenario,start:"",end:""},analysisTime:window?.end??options?.currentTime??"",masterTime:options?.currentTime,mode:options?.analysisMode,status:"pending",payload:{workspace:options?.workspaceSnapshot}});
     dispatch({ type: "start", id: token, question: message.trim(), preserveDiagnosis: options?.preserveDiagnosis });
     try {
       const response = await chatNetwork(message.trim(), scenario, window, abort.signal, options?.currentTime);
       options?.validateResult?.(response);
-      record({id:recordId,kind:"analysis",question:message.trim(),scope:response.scope,analysisTime:response.scope.end,masterTime:options?.currentTime,mode:options?.analysisMode,status:"completed",payload:{response,workspace:options?.workspaceSnapshot}});
-      for(const plan of response.plans??[])if(plan.simulation)record({kind:"simulation",parentId:recordId,question:`${plan.name} · 初始预计效果`,scope:response.scope,analysisTime:response.scope.end,status:"completed",payload:{plan,values:Object.fromEntries(plan.parameters.map(p=>[p.id,String(p.suggestedValue??'')])),result:plan.simulation}});
+      record({id:recordId || undefined,parentId,role,kind:"analysis",question:message.trim(),scope:response.scope,analysisTime:response.scope.end,masterTime:options?.currentTime,mode:options?.analysisMode,status:"completed",payload:{response,workspace:options?.workspaceSnapshot}});
+      for(const plan of response.plans??[])if(plan.simulation && recordId && !options?.preserveDiagnosis)record({kind:"simulation",parentId:recordId,question:`${plan.name} · 初始预计效果`,scope:response.scope,analysisTime:response.scope.end,status:"completed",payload:{plan,values:Object.fromEntries(plan.parameters.map(p=>[p.id,String(p.suggestedValue??'')])),result:plan.simulation}});
       if (revision.current !== token) return;
-      setArchiveId(response.diagnosis ? recordId : undefined);
+      setArchiveId(options?.preserveDiagnosis && parentId ? parentId : response.diagnosis ? recordId || undefined : undefined);
       dispatch({ type: "success", id: token, result: response });
       setHistory(previous => [{ id: token, question: message.trim(), answer: response.reply,
         failed: false, scope: `${response.scope.scenario} · ${response.scope.start} — ${response.scope.end}`,
         createdAt, analysisTime: window?.end ?? response.scope.end, analysisMode: options?.analysisMode ?? "analysis" }, ...previous].slice(0, 6));
     } catch (reason) {
-      record({id:recordId,kind:"analysis",question:message.trim(),scope:window??{scenario,start:"",end:""},analysisTime:window?.end??"",masterTime:options?.currentTime,mode:options?.analysisMode,status:abort.signal.aborted?"cancelled":"failed",payload:{error:reason instanceof Error?reason.message:"分析失败",workspace:options?.workspaceSnapshot}});
+      record({id:recordId || undefined,parentId,role,kind:"analysis",question:message.trim(),scope:window??{scenario,start:"",end:""},analysisTime:window?.end??"",masterTime:options?.currentTime,mode:options?.analysisMode,status:abort.signal.aborted?"cancelled":"failed",payload:{error:reason instanceof Error?reason.message:"分析失败",workspace:options?.workspaceSnapshot}});
       if (revision.current !== token) return;
       const text = reason instanceof Error ? reason.message : "对话请求失败";
       dispatch({ type: "failure", id: token, error: text });

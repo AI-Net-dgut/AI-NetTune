@@ -46,8 +46,12 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     ? effectivePlan.simulation : null;
   const editable = selected?.parameters.some(p => p.editable) ?? false;
 
-  function archivePlan(kind: 'parameters' | 'simulation', plan: TreatmentPlan, result?: SimulationResult, error?: string) {
-    record({kind,parentId:archiveParentId,question:`${plan.name} · ${sourceQuestion||'方案配置'}`,scope:data.scope,analysisTime:data.scope.end,status:error?'failed':'completed',payload:{plan,values:{...values},result,error}});
+  function archivePlan(kind: 'parameters' | 'simulation', plan: TreatmentPlan, result?: SimulationResult, error?: string,
+    captured?: { values: Record<string, string>; scope: DashboardData['scope']; parentId?: string; question: string; inputAt: string }) {
+    const scope = captured?.scope ?? data.scope;
+    record({kind,parentId:captured ? captured.parentId : archiveParentId,question:`${plan.name} · ${captured?.question || sourceQuestion || '方案配置'}`,
+      scope,analysisTime:scope.end,status:error?'failed':'completed',
+      payload:{plan,values:captured?.values ?? {...values},result,error,inputAt:captured?.inputAt,completedAt:kind === 'simulation' ? new Date().toISOString() : undefined}});
   }
   function choose(plan: TreatmentPlan) {
     if (disabled || mismatch) return;
@@ -58,15 +62,17 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     if (!selected || disabled || mismatch || simPending) return;
     const first = errors.find(Boolean);
     if (first) { setError(first); setEditorOpen(true); return; }   // 参数非法时不要拿脏值去算
+    const captured = { values: { ...values }, scope: { ...data.scope }, parentId: archiveParentId, question: sourceQuestion, inputAt: new Date().toISOString() };
+    const capturedPlan = selected;
     setSimPending(true); setError('');
     try {
-      const result = await simulatePlan(data.scope, selected, values, selected.objectIds[0] ?? baselineAp ?? '');
+      const result = await simulatePlan(captured.scope, capturedPlan, captured.values, capturedPlan.objectIds[0] ?? baselineAp ?? '');
       if (!result) throw new Error('后端未返回有效的仿真结果');
       setRerun({ planId: selected.id, result });
-      archivePlan("simulation",selected,result);
-      setNotice('已按当前参数在同一窗口重新评估预计效果。');
+      archivePlan("simulation",capturedPlan,result,undefined,captured);
+      setNotice('本次请求参数的仿真已保存；若已修改参数，请按新参数重新评估。');
     } catch (e) {
-      archivePlan('simulation',selected,undefined,e instanceof Error?e.message:'仿真失败');
+      archivePlan('simulation',capturedPlan,undefined,e instanceof Error?e.message:'仿真失败',captured);
       setError(e instanceof Error ? e.message : '方案仿真失败，请稍后重试');
     } finally {
       setSimPending(false);

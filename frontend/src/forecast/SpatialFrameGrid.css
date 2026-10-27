@@ -257,3 +257,26 @@
     max-width: none;
   }
 }
+
+/* 加载新指标/基准时隐藏旧帧，保留紧凑且明确的状态说明。 */
+.ain-spatial-load-state {
+  padding: 12px;
+  border: 1px dashed #cbdced;
+  border-radius: 6px;
+  background: #f8fbff;
+  color: #526b87;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.ain-spatial-load-state button { margin-top: 8px; }
+.ain-spatial-empty-frame {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px dashed #d7e0ec;
+  border-radius: 4px;
+  background: #f7fafd;
+  color: #7890ab;
+  font-size: 12px;
+}
