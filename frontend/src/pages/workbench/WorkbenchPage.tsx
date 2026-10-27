@@ -155,7 +155,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     const serial = ++requestSerial.current;
     try {
       await query.submit(message, config.scenario, captured.data.scope, {
-        preserveDiagnosis, analysisMode: current.viewMode, currentTime: sentMasterTime,
+        preserveDiagnosis, analysisMode: current.viewMode, currentTime: sentMasterTime, workspaceSnapshot: captured.data,
         validateResult: response => {
           const requested = captured.data.scope;
           if (response.scope.scenario !== requested.scenario || response.scope.start !== requested.start || response.scope.end !== requested.end

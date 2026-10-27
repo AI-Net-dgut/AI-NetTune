@@ -1,3 +1,4 @@
+import { record, forecastRecordIds } from '../history/store';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReplayState } from '../replay/replayState';
 import { replayContextKey, viewScope } from '../replay/replayState';
@@ -65,7 +66,11 @@ export default function useForecastPreview({ clock, config, readClock }: {
     const valid = () => serial.current === id && !abort.signal.aborted
       && replayContextKey(readClock()) === key && readClock().viewMode !== 'history';
     void loadForecast(request, abort.signal).then(result => {
-      if (valid()) setState(previous => ({ ...previous, result, pending: false, last: { key, result } }));
+      if (valid()) {
+        const id=record({kind:'forecast',question:request.question||`预测未来${minutes}分钟网络风险`,scope:{scenario:request.scenario,start:request.history.start,end:request.history.end},analysisTime:result.baseTime,masterTime:current.currentMs?new Date(current.currentMs+8*3600000).toISOString().slice(0,19).replace('T',' '):undefined,mode:current.viewMode,status:'completed',payload:{request,result}});
+        forecastRecordIds.set(result,id);
+        setState(previous => ({ ...previous, result, pending: false, last: { key, result } }));
+      }
     }).catch(reason => {
       if (valid()) setState(previous => ({ ...previous, pending: false, error: reason instanceof Error ? reason.message : '预测加载失败' }));
     });

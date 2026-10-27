@@ -1,3 +1,4 @@
+import { record } from '../history/store';
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchSpatialFrames } from "../services/backend";
 import type { SpatialFrame, SpatialFrameSeries } from "../services/backend";
@@ -78,7 +79,7 @@ const METRIC_OPTIONS = [
 ];
 
 export default function SpatialFrameGrid({
-  scenario, baseTime, pastFrames = 8, metric: initialMetric = "rsrp", horizonMinutes = 60,
+  scenario, baseTime, pastFrames = 8, metric: initialMetric = "rsrp", horizonMinutes = 60, archiveParentId, savedSeries,
 }: {
   scenario: string;
   baseTime: string;
@@ -86,9 +87,9 @@ export default function SpatialFrameGrid({
   /** 初始指标（rsrp / sinr / throughput）；组件内可用「指标」下拉切换 */
   metric?: string;
   /** 预测总时长（分钟），由弹窗的「预测时长」下拉统一控制，本组件不再单独提供开关 */
-  horizonMinutes?: number;
+  horizonMinutes?: number; archiveParentId?: string; savedSeries?: SpatialFrameSeries;
 }) {
-  const [series, setSeries] = useState<SpatialFrameSeries | null>(null);
+  const [series, setSeries] = useState<SpatialFrameSeries | null>(savedSeries??null);
   const [error, setError] = useState("");
   const [index, setIndex] = useState(-1);       // -1 表示"跟随数据默认值"
   const [playing, setPlaying] = useState(false);
@@ -105,16 +106,18 @@ export default function SpatialFrameGrid({
   const historyMinutes = Math.max(6, Math.min(1920, frameMinutes * pastFrames));
 
   useEffect(() => {
+    if(savedSeries)return;
     const controller = new AbortController();
     fetchSpatialFrames(scenario, baseTime, controller.signal,
       { historyMinutes, frameMinutes, pastFrames, futureFrames: futureCount, metric })
-      .then((data) => { if (!controller.signal.aborted) { setSeries(data); setError(""); } })
+      .then((data) => { if (!controller.signal.aborted) { setSeries(data); setError("");
+        record({kind:'spatial',parentId:archiveParentId,question:`${metric.toUpperCase()} 空间态势序列`,scope:{scenario,start:data.past[0]?.start??baseTime,end:baseTime},analysisTime:baseTime,status:'completed',payload:{series:data}}); } })
       .catch((reason) => {
         if (controller.signal.aborted) return;
         setError(reason instanceof Error ? reason.message : "区域态势获取失败");
       });
     return () => controller.abort();
-  }, [scenario, baseTime, historyMinutes, frameMinutes, pastFrames, futureCount, metric]);
+  }, [scenario, baseTime, historyMinutes, frameMinutes, pastFrames, futureCount, metric, archiveParentId, savedSeries]);
 
   const frames = useMemo(
     () => (series ? [...series.past, ...series.future] : []),
@@ -159,7 +162,7 @@ export default function SpatialFrameGrid({
         <span className="ain-spatial-dim">空间维度 · 网络表</span>
         <label className="ain-spatial-metric">
           指标
-          <select aria-label="选择态势指标" value={metric}
+          <select aria-label="选择态势指标" value={metric} disabled={Boolean(savedSeries)}
             onChange={(event) => { setPlaying(false); setIndex(-1); setMetric(event.target.value); }}>
             {METRIC_OPTIONS.map(o => (
               <option key={o.id} value={o.id}>{o.label}</option>
@@ -184,7 +187,7 @@ export default function SpatialFrameGrid({
         两者指标不同，<b>“图偏蓝但未触发预警”属正常现象</b>。
       </p>
 
-      <div className="ain-spatial-stage">
+      <div className="ain-forecast-spatial-stage">
         <figure className={`ain-spatial-main${isFuture ? " is-future" : ""}`}>
           <FrameCanvas frame={current} min={min} max={max} big />
         </figure>

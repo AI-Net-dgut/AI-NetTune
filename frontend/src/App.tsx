@@ -1,34 +1,12 @@
-import { Link, Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import AppHeader from "./components/layout/AppHeader";
+import HistoryPage from "./history/HistoryPage";
+import HistoryNotice from "./history/HistoryNotice";
 import HomePage from "./pages/home/HomePage";
 import WorkbenchPage from "./pages/workbench/WorkbenchPage";
 import "./App.css";
 // 工作台左右分栏（数据左 / AI右）；最后导入以统一各组件的布局覆盖。
 import "./styles/WorkbenchSplitLayout.css";
-
-function PendingPage({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <main className="ain-pending-page">
-      <span className="ain-page-tag">页面框架已预留</span>
-
-      <h1>{title}</h1>
-      <p>{description}</p>
-
-      <Link
-        className="ain-button ain-primary"
-        to="/workbench"
-      >
-        进入网络工作台
-      </Link>
-    </main>
-  );
-}
 
 export default function App() {
   return (
@@ -76,6 +54,7 @@ export default function App() {
       </svg>
 
       <AppHeader />
+      <HistoryNotice />
 
       <Routes>
         <Route
@@ -95,12 +74,7 @@ export default function App() {
 
         <Route
           path="/history"
-          element={
-            <PendingPage
-              title="分析记录"
-              description="独立分析记录页尚未接入保存与列表功能。当前可在网络工作台的‘本次查询记录’中查看最近6次问题和回答摘要；离开工作台或刷新页面后，这些临时记录不保留。"
-            />
-          }
+          element={<HistoryPage />}
         />
 
         <Route

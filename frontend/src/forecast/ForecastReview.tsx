@@ -1,3 +1,4 @@
+import { record,forecastRecordIds } from '../history/store';
 import { useEffect, useState } from "react";
 import { ReplyText } from "../chat/DiagnosisAnswer";
 import { analyzeForecast } from "./api";
@@ -9,12 +10,13 @@ export default function ForecastReview({ handoff }: { handoff: ForecastHandoff }
   const { result, alertId, question, targetWindow } = handoff, alert = result.alerts.find(a => a.id === alertId);
   useEffect(() => {
     const abort = new AbortController(); let active = true;
+    const submittedAt = new Date().toISOString();
     // 组件以移交ID及重试次数为key重建；旧组件卸载后不能写入新结果。
     void analyzeForecast(result, alertId, abort.signal, undefined, undefined, { question, targetWindow }).then(reply => {
-      if (active) setState({ pending: false, result: reply, error: "" });
+      if (active) { record({kind:"forecast-analysis",createdAt:submittedAt,parentId:forecastRecordIds.get(result),question:question||alert?.title||"预测风险详细研判",scope:{scenario:result.scenario,start:result.history.start,end:result.history.end},analysisTime:result.baseTime,status:"completed",payload:{handoff,reply:reply.reply,source:reply.source}}); setState({ pending: false, result: reply, error: "" }); }
     }).catch(reason => { if (active) setState({ pending: false, result: null, error: reason instanceof Error ? reason.message : "预测研判失败" }); });
     return () => { active = false; abort.abort(); };
-  }, [result, alertId, attempt, question, targetWindow]);
+  }, [result, alertId, attempt, question, targetWindow, handoff, alert?.title]);
   return <article className="ain-forecast-review" aria-label="预测风险研判" aria-busy={state.pending}>
     <header><strong>{result.source === "demo" ? "示例 · " : ""}预测风险研判</strong><span>{alert ? `${alert.target} · ${alert.title}` : "整体预测态势"}</span></header>
     {question && <p className="ain-ai-user-question"><strong>本次未来提问</strong>{question}</p>}

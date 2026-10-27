@@ -93,26 +93,28 @@
   font-weight: 600;
 }
 
-/* ---- 大图 + 右侧控制栏 ---- */
-/* 大图放大到 320px、右侧栏放宽到 480px，整块 820px：
-   之前 240+420=674 在 940px 宽的卡片里右侧空出一大块（实测很难看）。 */
-.ain-spatial-stage {
-  display: flex;
-  align-items: flex-start;
+/* 预测专用容器：不能复用现存问题地图的 .ain-spatial-stage。
+   该公共类在 SpatialCharts / VisualCompact 中有深色背景及 block 布局。 */
+.ain-forecast-spatial-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  align-items: start;
   gap: 16px;
-  max-width: 820px;
+  width: 100%;
+  min-width: 0;
   background: #fff;
 }
 
 .ain-spatial-main {
   margin: 0;
-  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .ain-spatial-main-canvas {
   display: block;
-  width: 320px;
-  height: 320px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
   border: 1px solid #d7e0ec;
   border-radius: 4px;
   background: #f7fafd;
@@ -235,4 +237,23 @@
   margin: 8px 0 0;
   font-size: 11px;
   color: #8b9bb0;
+}
+
+/* 窄屏时允许上下排列，保持白底并避免控制栏溢出。 */
+@media (max-width: 680px) {
+  .ain-forecast-spatial-stage {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .ain-forecast-spatial-stage .ain-spatial-main {
+    width: 100%;
+    max-width: 280px;
+    justify-self: center;
+  }
+
+  .ain-forecast-spatial-stage .ain-spatial-side {
+    width: 100%;
+    max-width: none;
+  }
 }

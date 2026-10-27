@@ -183,11 +183,11 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           根据此研判准备方案 →</button>}
         {/* key 让范围变化时重建面板，从而丢弃旧的回测结果 */}
         <ForecastComparePanel key={scope ? `${scope.scenario}|${scope.start}|${scope.end}` : "none"}
-          scope={scope ?? null} disabled={disabled} />
+          scope={scope ?? null} disabled={disabled} archiveParentId={query.archiveId} />
       </section>
       {data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
         diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans}
-        sourceQuestion={diagnosisQuestion} pending={query.pending} />
+        sourceQuestion={diagnosisQuestion} pending={query.pending} archiveParentId={query.archiveId} />
         : <section className="ain-ai-management-empty" aria-label="处理建议与效果"><h3>处理建议与效果</h3><p>{dataStatus}。加载数据并完成研判后，查看处理方案、配置参数和仿真预计效果。</p></section>}
     </div>
 

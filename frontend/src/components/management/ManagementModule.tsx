@@ -1,3 +1,4 @@
+import { record } from "../../history/store";
 import { useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { Ref } from 'react';
 import type { DashboardData, Diagnosis } from '../../types/backend';
@@ -12,10 +13,10 @@ import { simulatePlan } from '../../services/backend';
 import PlanEffects from './PlanEffects';
 import './ManagementModule.css';
 
-export default function ManagementModule({ data, diagnosis, chatDiagnosis, focusedApId, disabled = false, plans: providedPlans = [], ref, sourceQuestion = '', pending = false }: {
+export default function ManagementModule({ data, diagnosis, chatDiagnosis, focusedApId, disabled = false, plans: providedPlans = [], ref, sourceQuestion = '', pending = false, archiveParentId }: {
   ref?: Ref<ManagementHandle>; data: DashboardData; diagnosis: Diagnosis | null; chatDiagnosis: Diagnosis | null;
   focusedApId: string | null; disabled?: boolean; plans?: TreatmentPlan[];
-  sourceQuestion?: string; pending?: boolean;
+  sourceQuestion?: string; pending?: boolean; archiveParentId?: string;
 }) {
   const panelRef = useRef<HTMLElement>(null);
   const active = chatDiagnosis || diagnosis;
@@ -45,8 +46,12 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     ? effectivePlan.simulation : null;
   const editable = selected?.parameters.some(p => p.editable) ?? false;
 
+  function archivePlan(kind: 'parameters' | 'simulation', plan: TreatmentPlan, result?: SimulationResult, error?: string) {
+    record({kind,parentId:archiveParentId,question:`${plan.name} · ${sourceQuestion||'方案配置'}`,scope:data.scope,analysisTime:data.scope.end,status:error?'failed':'completed',payload:{plan,values:{...values},result,error}});
+  }
   function choose(plan: TreatmentPlan) {
     if (disabled || mismatch) return;
+    record({kind:'parameters',parentId:archiveParentId,question:`${plan.name} · ${sourceQuestion||'方案配置'}`,scope:data.scope,analysisTime:data.scope.end,status:'completed',payload:{plan,values:initialParameterValues(plan),action:'选择方案'}});
     setSelectedId(plan.id); setValues(initialParameterValues(plan)); setEditorOpen(false); setNotice(''); setError(''); setRerun(null);
   }
   async function runSimulation() {
@@ -58,8 +63,10 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
       const result = await simulatePlan(data.scope, selected, values, selected.objectIds[0] ?? baselineAp ?? '');
       if (!result) throw new Error('后端未返回有效的仿真结果');
       setRerun({ planId: selected.id, result });
+      archivePlan("simulation",selected,result);
       setNotice('已按当前参数在同一窗口重新评估预计效果。');
     } catch (e) {
+      archivePlan('simulation',selected,undefined,e instanceof Error?e.message:'仿真失败');
       setError(e instanceof Error ? e.message : '方案仿真失败，请稍后重试');
     } finally {
       setSimPending(false);
@@ -76,6 +83,7 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
   function saveParameters() {
     if (disabled || mismatch) return;
     const first = errors.find(Boolean); if (first) { setError(first); return; }
+    if(selected)archivePlan('parameters',selected);
     setEditorOpen(false); setError(''); setNotice('参数已保留在当前方案中；变更后的预计效果需重新评估。');
   }
   function exportPlan() {

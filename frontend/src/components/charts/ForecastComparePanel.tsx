@@ -1,3 +1,4 @@
+import { record } from '../../history/store';
 import { useEffect, useRef, useState } from "react";
 import ForecastCompareChart from "./ForecastCompareChart";
 import { fetchForecast } from "../../services/backend";
@@ -15,8 +16,8 @@ import type { ForecastResult, QueryScope } from "../../types/backend";
  * 范围变化时由父组件用 ``key`` 重建本组件，因此这里不需要"在 effect 里重置 state"
  * （那会触发 react-hooks/set-state-in-effect）。
  */
-export default function ForecastComparePanel({ scope, disabled = false }: {
-  scope: QueryScope | null; disabled?: boolean;
+export default function ForecastComparePanel({ scope, disabled = false, archiveParentId }: {
+  scope: QueryScope | null; disabled?: boolean; archiveParentId?: string;
 }) {
   const [forecast, setForecast] = useState<ForecastResult | null>(null);
   const [pending, setPending] = useState(false);
@@ -35,6 +36,7 @@ export default function ForecastComparePanel({ scope, disabled = false }: {
     try {
       const result = await fetchForecast(scope, ac.signal);
       setForecast(result);
+      record({kind:'backtest',parentId:archiveParentId,question:'真实与预测对比（历史回测）',scope,analysisTime:scope.end,status:'completed',payload:{forecast:result}});
     } catch (e) {
       if (ac.signal.aborted) return;
       setError(e instanceof Error ? e.message : "预测对比数据获取失败");

@@ -1,0 +1,49 @@
+.history-page { max-width: 1260px; margin: auto; padding: 20px 24px; color: #24384b; font-size: 14px; }
+.history-heading, .history-toolbar, .history-actions { display: flex; align-items: center; gap: 12px; }
+.history-heading { justify-content: space-between; }
+.history-heading h1 { font-size: 24px; margin: 0 0 5px; }
+.history-heading p, .history-muted, .history-storage-note { color: #6a7e93; font-size: 12px; line-height: 1.6; }
+.history-toolbar { margin: 14px 0; }
+.history-toolbar input { flex: 1; min-width: 0; padding: 9px 12px; border: 1px solid #cedbe9; border-radius: 6px; background: #fff; }
+.history-toolbar > span { white-space: nowrap; color: #6a7e93; font-size: 12px; }
+.history-layout { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr); align-items: start; gap: 14px; }
+.history-layout > aside { max-height: 72vh; overflow-y: auto; padding-right: 4px; }
+.history-card { display: flex; flex-direction: column; text-align: left; width: 100%; padding: 11px 12px; margin: 0 0 8px; gap: 6px; background: #fff; border: 1px solid #dce5ef; border-radius: 7px; color: inherit; }
+.history-card.selected { border-color: #2780d8; background: #f0f7ff; }
+.history-card time, .history-card > span { font-size: 11px; color: #6a7e93; }
+.history-card strong { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.history-detail { min-width: 0; max-height: 74vh; overflow-y: auto; background: #fff; border: 1px solid #dce5ef; border-radius: 9px; padding: 16px 18px; }
+.history-actions { justify-content: flex-end; gap: 10px; margin-bottom: 10px; }
+.history-actions button, .history-error button { color: #3274b7; background: #fff; border: 1px solid #d3e0ee; border-radius: 5px; padding: 5px 9px; font-size: 12px; }
+.history-question-heading > span { font-size: 11px; color: #3274b7; }
+.history-question-heading h2 { margin: 5px 0 9px; font-size: 18px; line-height: 1.5; overflow-wrap: anywhere; }
+.history-question-heading p { color: #6a7e93; font-size: 12px; line-height: 1.7; }
+.history-section { border-top: 1px solid #e8eef5; margin-top: 14px; padding-top: 12px; }
+.history-section h3 { margin: 0 0 10px; font-size: 15px; }
+.history-answer { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; }
+.history-plan { padding: 11px 12px; margin-top: 10px; border: 1px solid #e0e9f3; border-radius: 6px; }
+.history-plan h4 { margin: 0 0 5px; font-size: 14px; color: #315779; }
+.history-plan > p, .history-effect > p { font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-page details { margin-top: 8px; font-size: 12px; }
+.history-page summary { color: #537a9e; cursor: pointer; line-height: 1.8; }
+.history-parameters { margin: 7px 0; }
+.history-parameters > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 14px; padding: 4px 0; border-bottom: 1px solid #edf2f7; }
+.history-parameters dd { margin: 0; color: #385b7d; }
+.history-effect { margin-top: 10px; padding-top: 8px; border-top: 1px solid #edf2f7; }
+.history-table-wrap { overflow-x: auto; }
+.history-effect table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+.history-effect th, .history-effect td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #e7eef5; white-space: nowrap; }
+.history-effect thead { background: #f5f8fc; color: #627b94; }
+.history-draft { color: #9c6d2a; background: #fff8e9; padding: 6px 8px; margin-top: 8px; }
+.history-error { padding: 10px 12px; background: #fff5ef; border: 1px solid #edd3bb; color: #945d2f; border-radius: 6px; line-height: 1.7; overflow-wrap: anywhere; }
+.history-error button { margin: 6px 0 0 8px; }
+.history-storage-note { margin-top: 10px; }
+.history-save-warning { padding: 10px 20px; background: #fff0ce; color: #704c00; }
+.history-save-warning a { margin-left: 12px; }
+@media (max-width: 720px) {
+  .history-page { padding: 14px 12px; }
+  .history-layout { grid-template-columns: minmax(0, 1fr); }
+  .history-layout > aside { max-height: 230px; }
+  .history-detail { max-height: none; padding: 13px; }
+  .history-heading h1 { font-size: 21px; }
+}
