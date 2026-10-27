@@ -468,21 +468,89 @@ class AnomalyRequest(BaseModel):
     # 因此前端/报告导出等既有调用完全不受影响。
     ap_id: str | None = None
 
+def _trigger_evidence_text(ev: dict) -> str:
+    """把一条触发证据翻译成"数值 + 阈值 + 比较方向"都正确的文案。
+
+    为什么要有它：原先 rank1 的 support_evidence 是硬编码模板
+    （`f"弱覆盖采样占比{weak_r*100:.0f}%超过30%阈值"`），当实际是由**频谱**触发时，
+    会写出"12% 超过 30% 阈值"这种自相矛盾的理由（唐苗检测报告第 3 条）。
+    现在一律按 base["evidence"] 里真实触发的那几条生成。
+    """
+    metric = ev.get("metric", "")
+    v = ev.get("avg_value")
+    t = ev.get("threshold")
+    if v is None or t is None:
+        return ""
+
+    def _f(x, digits=1):
+        return f"{float(x):.{digits}f}"
+
+    # 数值越大越差的指标用 ">"，越小越差（dBm/dB/Mbps）用 "<"。
+    # **方向不成立就返回空串**：绝不生成"12% > 30%"这种假比较。
+    try:
+        if metric in ("weak_coverage_ratio", "congestion_ratio", "spectrum_low_share"):
+            if float(v) <= float(t):
+                return ""
+            label = {"weak_coverage_ratio": "弱覆盖采样占比",
+                     "congestion_ratio": "拥塞采样占比",
+                     "spectrum_low_share": "SINR 偏低采样占比"}[metric]
+            return f"{label} {float(v)*100:.0f}% > 阈值 {float(t)*100:.0f}%"
+        if metric in ("spectrum_power_bands", "spectrum_occupancy_bands"):
+            if int(v) < int(t):
+                return ""
+            what = "频谱功率" if metric == "spectrum_power_bands" else "频谱占用"
+            return f"{what}越阈频段 {int(v)} 个 ≥ 门槛 {int(t)} 个（≥80% 频段持续越阈）"
+        if metric in ("rsrp", "sinr", "throughput"):
+            if float(v) >= float(t):
+                return ""
+            unit = {"rsrp": "dBm", "sinr": "dB", "throughput": "Mbps"}[metric]
+            label = {"rsrp": "RSRP 均值", "sinr": "SINR 均值", "throughput": "吞吐量均值"}[metric]
+            return f"{label} {_f(v)} {unit} < 阈值 {_f(t, 0)} {unit}"
+        if metric in ("prb_usage", "packet_loss"):
+            if float(v) <= float(t):
+                return ""
+            label = "PRB 利用率均值" if metric == "prb_usage" else "丢包率均值"
+            return f"{label} {_f(v)}% > 阈值 {_f(t, 0)}%"
+    except (TypeError, ValueError):
+        return ""
+    return ""
+
+
+def _support_from_evidence(base: dict, limit: int = 3) -> list[str]:
+    """从**真正触发**的异常级证据生成 support_evidence（方向不符的一律跳过）。"""
+    lines = []
+    for ev in (base.get("evidence") or []):
+        if ev.get("status") != "异常":
+            continue
+        txt = _trigger_evidence_text(ev)
+        if txt and txt not in lines:
+            lines.append(txt)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
 def build_candidates(ap, base, anomaly_type):
     """为单个AP的故障生成多候选原因与证据链（支持/反对/待验证），rank1 即主原因"""
     rsrp = base["rsrp_avg"]; sinr = base["sinr_avg"]; prb = base["prb_avg"]
     weak_r = base["weak_ratio"]; cong_r = base["cong_ratio"]
     c1 = min(0.99, 0.6 + 0.08 * len(base["evidence"]))
+    # rank1 的证据一律来自"实际触发的那几条"，保证数值/阈值/方向一致
+    trig = _support_from_evidence(base)
+    trig_weak = [x for x in trig if ("弱覆盖" in x or "频谱功率" in x or "RSRP" in x or "SINR" in x)]
+    trig_cong = [x for x in trig if ("拥塞" in x or "频谱占用" in x or "PRB" in x)]
+    spec_only = any(("频谱" in x) for x in trig) and not any(("占比" in x) for x in trig)
 
     if anomaly_type == "覆盖故障":
         return [
             {"rank": 1, "cause": f"{ap}天线倾角/发射功率不足，造成覆盖空洞",
              "confidence": round(c1, 2),
-             "support_evidence": [f"弱覆盖采样占比{weak_r*100:.0f}%超过30%阈值",
-                                  (f"RSRP均值{rsrp:.1f}dBm低于-105dBm" if rsrp < -105
-                                   else f"RSRP均值{rsrp:.1f}dBm处于偏低水平")],
-             "against_evidence": [f"SINR均值{sinr:.1f}dB正常，可排除强干扰因素" if sinr >= 5
-                                  else f"SINR均值{sinr:.1f}dB也偏低，干扰因素暂不能排除"],
+             "support_evidence": trig_weak or trig or ["本窗口按频谱/网络判据判定为覆盖故障"],
+             "against_evidence": (
+                 [f"网络表弱覆盖采样占比仅 {weak_r*100:.0f}%（未达 30% 阈值），"
+                  f"本次结论主要由频谱维度触发"] if spec_only else
+                 [f"SINR均值{sinr:.1f}dB正常，可排除强干扰因素" if sinr >= 5
+                  else f"SINR均值{sinr:.1f}dB也偏低，干扰因素暂不能排除"]),
              "pending_checks": ["现场核查天线倾角与发射功率配置"]},
             {"rank": 2, "cause": f"{ap}周边新增遮挡物/环境变化导致信号衰减",
              "confidence": round(c1 * 0.7, 2),
@@ -501,11 +569,12 @@ def build_candidates(ap, base, anomaly_type):
         return [
             {"rank": 1, "cause": f"{ap}容量不足/接入用户过多导致拥塞",
              "confidence": round(c1, 2),
-             "support_evidence": [f"拥塞采样占比{cong_r*100:.0f}%超过25%阈值",
-                                  (f"PRB利用率均值{prb:.1f}%高于90%" if prb > 90
-                                   else f"PRB利用率均值{prb:.1f}%处于偏高水平")],
-             "against_evidence": [f"RSRP均值{rsrp:.1f}dBm正常，无线环境良好" if rsrp >= -105
-                                  else f"RSRP均值{rsrp:.1f}dBm偏低，需叠加覆盖因素"],
+             "support_evidence": trig_cong or trig or ["本窗口按频谱/网络判据判定为网络拥塞"],
+             "against_evidence": (
+                 [f"网络表拥塞采样占比仅 {cong_r*100:.0f}%（未达 25% 阈值），"
+                  f"本次结论主要由频谱维度触发"] if spec_only else
+                 [f"RSRP均值{rsrp:.1f}dBm正常，无线环境良好" if rsrp >= -105
+                  else f"RSRP均值{rsrp:.1f}dBm偏低，需叠加覆盖因素"]),
              "pending_checks": ["核查活跃用户数与容量规划"]},
             {"rank": 2, "cause": f"{ap}业务突发/流量高峰导致瞬时拥塞",
              "confidence": round(c1 * 0.7, 2),
@@ -1048,6 +1117,58 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     #   performance_warning   指标偏低但未达故障判据（不算异常，给提示）
     #   normal                都没有
     _spans = _anomaly_spans(rows)
+    # 由**频谱维度**触发的故障，网络标签可能整窗都是 normal（故障期 UE 采样也可能正常）。
+    # 这种时候若只按标签算区间，就会出现"存在故障 + 当前正常 + 没有异常区间"三者互斥
+    # （唐苗检测报告第 4 条）。这里把频谱越阈的分钟也补成区间，保证状态/正文/证据一致。
+    _spec_spans = []
+    if findings:
+        try:
+            for _res in findings:
+                _ap = _res.get("ap_id")
+                _sv = _spec_verdict(_ap, window_start, window_end) if _ap else None
+                if not _sv or not _sv.get("available"):
+                    continue
+                _kind = "weak_coverage" if _res.get("network_status") == "weak_coverage" else "congestion"
+                if not (_sv.get("weak") or _sv.get("cong")):
+                    continue
+                _part = spectrum_window(_ap, window_start, window_end, inclusive_end=True)
+                if _part is None or _part.empty:
+                    continue
+                _thr = ALERT_WEAK_POWER_DBM if _sv.get("weak") else ALERT_CONGESTION_OCC_PCT
+                _col = "power_dbm" if _sv.get("weak") else "occupancy_pct"
+                _min_bands = _sv.get("min_bands") or 40
+                _counted = (_part[_col] < _thr) if _sv.get("weak") else (_part[_col] > _thr)
+                _flag = _part.assign(_hit=_counted).groupby("timestamp")["_hit"].sum()
+                _run_start = None
+                for _ts, _cnt in _flag.items():
+                    if _cnt >= _min_bands:
+                        if _run_start is None:
+                            _run_start = _ts
+                        _run_end = _ts
+                    elif _run_start is not None:
+                        _spec_spans.append({"ap_id": _ap, "type": _kind,
+                                            "start": _run_start.strftime("%Y-%m-%d %H:%M:%S"),
+                                            "end": _run_end.strftime("%Y-%m-%d %H:%M:%S"),
+                                            "minutes": int((_run_end - _run_start).total_seconds() // 60) + 1,
+                                            "source": "spectrum"})
+                        _run_start = None
+                if _run_start is not None:
+                    _spec_spans.append({"ap_id": _ap, "type": _kind,
+                                        "start": _run_start.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "end": _run_end.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "minutes": int((_run_end - _run_start).total_seconds() // 60) + 1,
+                                        "source": "spectrum"})
+        except Exception:
+            _spec_spans = []
+    if _spec_spans:
+        _merged = list(_spans or [])
+        for _s in _spec_spans:
+            # 已被网络标签区间完全覆盖的频谱区间不再重复列（否则前端会看到两条几乎一样的区间）
+            if any(m["ap_id"] == _s["ap_id"] and m["type"] == _s["type"]
+                   and m["start"] <= _s["start"] and m["end"] >= _s["end"] for m in _merged):
+                continue
+            _merged.append(_s)
+        _spans = sorted(_merged, key=lambda x: (x["start"], x["end"]))
     _last_anomaly_at = _spans[-1]["end"] if _spans else None
     _RECOVER_GRACE_SEC = 600   # 10 分钟：数据是分钟级且故障有 ramp-out，5 分钟太紧
     if is_anomaly and _last_anomaly_at:
@@ -2736,6 +2857,13 @@ def forecast_preview(req: ForecastPreviewRequest):
             f"history.start（{req.history.start}）必须早于 history.end（{req.history.end}）")
 
     fid = "FC_" + base_dt.strftime("%Y%m%d%H%M%S")
+    # 预测标识必须绑定"这一轮的完整上下文"：场景 + 基准 + 历史范围 + 预测时长。
+    # 原先只有基准时刻，导致同一基准下"先 5 分钟、再 120 分钟"两轮共用同一个
+    # _FORECAST_CACHE 键，后一轮覆盖前一轮 —— 再研判第一轮的 5 分钟结果时，
+    # 拿到的是 120 分钟那轮的风险（唐苗检测报告第 1 条）。
+    _ctx_key = abs(hash((req.scenario, req.history.start, req.history.end))) % 100000
+    fid = (f"FC_{base_dt.strftime('%Y%m%d%H%M%S')}"
+           f"_{int(req.horizonMinutes)}m_{_ctx_key:05d}")
     fore_end = base_dt + timedelta(minutes=req.horizonMinutes)
 
     # 频谱未加载 与 基准越界 是两种完全不同的原因，必须分开说明。
@@ -3097,7 +3225,39 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
     """按 forecastId + alertId 对一轮预测做文字研判。
     优先复用 preview 缓存中的预警详情；缓存缺失时用历史 KPI 趋势兜底组 prompt。
     LLM 不可用时降级 source=rule 模板文案，接口不崩。"""
+    # 与 forecast/preview 同口径的校验：历史不得晚于基准，否则会读到"未来数据"
+    # （唐苗检测报告第 6 条：preview 已拒绝、analyze 原先仍接受）。
+    try:
+        _base_dt = _parse_ts(req.baseTime)
+        _hist_end_dt = _parse_ts(req.history.end)
+        _hist_start_dt = _parse_ts(req.history.start)
+    except (ValueError, TypeError):
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "baseTime / history 时间格式应为 yyyy-MM-dd HH:mm:ss")
+    if _hist_end_dt > _base_dt:
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            f"history.end（{req.history.end}）不得晚于 baseTime（{req.baseTime}），否则会读取预测基准之后的数据")
+    if _hist_start_dt >= _hist_end_dt:
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            f"history.start（{req.history.start}）必须早于 history.end（{req.history.end}）")
+
     cached = _FORECAST_CACHE.get(req.forecastId, {})
+    # 预测记录与请求上下文必须一致：防止拿 A 轮的记录回答 B 轮的时段
+    if cached:
+        _cb = cached.get("baseTime")
+        if _cb and _cb != req.baseTime:
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"预测记录 {req.forecastId} 的基准时刻是 {_cb}，与请求的 {req.baseTime} 不一致")
+        _ch = cached.get("history") or {}
+        if _ch.get("start") and _ch.get("end") and (
+                _ch["start"] != req.history.start or _ch["end"] != req.history.end):
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"预测记录 {req.forecastId} 的历史范围是 {_ch['start']} ~ {_ch['end']}，"
+                f"与请求的 {req.history.start} ~ {req.history.end} 不一致")
     alert_detail = None
     if req.alertId:
         for a in cached.get("alerts", []):
@@ -3217,11 +3377,32 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
         # 无告警 ≠ 已检测到风险：cached.alerts 为空时要如实说"未发现越阈风险"，
         # 否则会出现"没有风险却在说检测到风险"的自相矛盾（预览页 0 项需关注时必现）。
         cached_alerts = cached.get("alerts") or []
-        if not cached_alerts:
-            head = (f"【规则研判】预测窗口 {req.forecast.start} ~ {req.forecast.end} 内"
-                    f"未检测到越阈风险（预警阈值为经验设定，未触发不代表绝对安全）。")
+        # 用户指定了关注时段时，**先按该时段筛选再回答**（唐苗检测报告第 2 条）：
+        # 4/120 分钟的风险从 14:33 开始，而用户只问 14:15~14:20 —— 不能拿它当"所问窗口的风险"。
+        if target_window is not None:
+            def _overlaps(a):
+                return ((a.get("start") or "") <= target_window.end
+                        and (a.get("end") or "") >= target_window.start)
+            in_window = [a for a in cached_alerts if _overlaps(a)]
+            out_window = [a for a in cached_alerts if not _overlaps(a)]
+        else:
+            in_window, out_window = cached_alerts, []
+
+        if not in_window:
+            if target_window is not None:
+                head = (f"【规则研判】你关注的时间段 {target_window.start} ~ {target_window.end} 内"
+                        f"未命中越阈风险（该时段本身没有达到判定门槛）。")
+            else:
+                head = (f"【规则研判】预测窗口 {req.forecast.start} ~ {req.forecast.end} 内"
+                        f"未检测到越阈风险（预警阈值为经验设定，未触发不代表绝对安全）。")
             advice = ("建议：维持当前配置，按常规巡检节奏关注窗口后半段的 SINR 变化；"
                       "如需提前量，可把预测时长拉长再看一次趋势。")
+            if out_window:
+                # 其它时段有风险时另行提示，但明确区分"不是你问的这段"
+                _first = out_window[0]
+                head += (f" 另：该轮预测在关注时段之外另有 {len(out_window)} 条风险"
+                         f"（最近一条：{_first.get('title', '见预警摘要')}），"
+                         f"如需查看请指定对应时段。")
         else:
             head = (f"【规则研判】预测窗口 {req.forecast.start} ~ {req.forecast.end} 内检测到需要关注的风险"
                     f"（{alert_detail.get('title', '见预警摘要') if alert_detail else '预警事件'}）。")
@@ -3233,8 +3414,8 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
             + advice
             + "不确定性：当前 LLM 研判不可用，以上为基于历史均值的规则提示，未结合频谱细节。"
         )
-        # 规则兜底也要回应用户的问题与关注时段，否则"问了等于没问"。
-        if target_window is not None:
+        # 只有"该时段确实命中风险"时才说"已按关注时段收敛"，否则会加重误导。
+        if target_window is not None and in_window:
             reply += f"（已按关注时段 {target_window.start} ~ {target_window.end} 收敛分析范围。）"
         if question_text:
             reply += f"关于你的问题「{question_text}」：上面已给出该时段的风险判断与处置建议；" \
