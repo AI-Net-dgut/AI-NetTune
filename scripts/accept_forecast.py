@@ -95,12 +95,16 @@ def _load_spectrum():
                         usecols=["timestamp", "observation_id", "power_dbm", "occupancy_pct"])
 
 
-def _first_spectrum_crossing(spec, ap, start, end):
+def _first_spectrum_crossing(spec, ap, start, end, kind=""):
     """该 AP 在 [start, end] 内**第一次**达到"≥40/50 频段越阈"的时刻。
 
     这是"提前预警"的另一把尺子：相对**频谱越阈**，而不是相对网络标签。
     唐苗检测报告第 8 条要求两个口径分别统计 —— 不能把"预计 N 分钟后越阈"
     当成"提前 N 分钟发现网络故障"。
+
+    审计第 12 条：**必须按故障类型分别统计**。原先把"功率越阈"与"占用率越阈"
+    在同一分钟上做"或"再求和，20 个频段功率越阈 + 20 个频段占用越阈会被算成 40，
+    但真实判据里这两类各自都要达到 ≥40 才算越阈。
     """
     if spec is None or start is None or end is None:
         return None
@@ -109,9 +113,14 @@ def _first_spectrum_crossing(spec, ap, start, end):
     seg = spec[(spec.observation_id == ap) & (spec.timestamp >= s) & (spec.timestamp <= e)]
     if seg.empty:
         return None
-    hit = seg.assign(_h=(seg.power_dbm < main.ALERT_WEAK_POWER_DBM)
-                     | (seg.occupancy_pct > main.ALERT_CONGESTION_OCC_PCT)
-                     ).groupby("timestamp")["_h"].sum()
+    if kind == "weak_coverage":
+        mask = seg.power_dbm < main.ALERT_WEAK_POWER_DBM
+    elif kind == "congestion":
+        mask = seg.occupancy_pct > main.ALERT_CONGESTION_OCC_PCT
+    else:                                    # 未给出类型时才退回"任一类越阈"
+        mask = ((seg.power_dbm < main.ALERT_WEAK_POWER_DBM)
+                | (seg.occupancy_pct > main.ALERT_CONGESTION_OCC_PCT))
+    hit = seg.assign(_h=mask).groupby("timestamp")["_h"].sum()
     hit = hit[hit >= max(5, int(0.8 * 50))]      # 与 main._min_crossing_bands(50) 同口径
     if hit.empty:
         return None
@@ -134,7 +143,7 @@ def accept_lead(rows) -> None:
             continue
         at = r["alert_at"].strftime("%m-%d %H:%M")
         # 第二把尺子：相对"首次频谱越阈"
-        cross = _first_spectrum_crossing(spec, r["ap"], r.get("start"), r.get("end"))
+        cross = _first_spectrum_crossing(spec, r["ap"], r.get("start"), r.get("end"), r.get("type"))
         if cross is not None:
             d2 = (cross - r["alert_at"]).total_seconds() / 60
             cross_txt = cross.strftime("%m-%d %H:%M")

@@ -17,6 +17,7 @@ import time
 import uuid
 import copy as _copy
 import bisect as _bisect
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 import llm_agent
@@ -1163,6 +1164,21 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                 _min_bands = _sv.get("min_bands") or 40
                 _counted = (_part[_col] < _thr) if _sv.get("weak") else (_part[_col] > _thr)
                 _flag = _part.assign(_hit=_counted).groupby("timestamp")["_hit"].sum()
+
+                def _push(_s, _e, _ap=_ap, _kind=_kind):
+                    """只有连续 ≥ ALERT_MIN_CROSSING_MINUTES 分钟才算故障区间。
+
+                    审计 5.2：原先 1 分钟的孤立越阈也会被追加成故障区间，
+                    甚至把 current_state 拉成 fault_active。这里与预警判据统一。
+                    """
+                    _mins = int((_e - _s).total_seconds() // 60) + 1
+                    if _mins < ALERT_MIN_CROSSING_MINUTES:
+                        return
+                    _spec_spans.append({"ap_id": _ap, "type": _kind,
+                                        "start": _s.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "end": _e.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "minutes": _mins, "source": "spectrum"})
+
                 _run_start = None
                 for _ts, _cnt in _flag.items():
                     if _cnt >= _min_bands:
@@ -1170,18 +1186,10 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                             _run_start = _ts
                         _run_end = _ts
                     elif _run_start is not None:
-                        _spec_spans.append({"ap_id": _ap, "type": _kind,
-                                            "start": _run_start.strftime("%Y-%m-%d %H:%M:%S"),
-                                            "end": _run_end.strftime("%Y-%m-%d %H:%M:%S"),
-                                            "minutes": int((_run_end - _run_start).total_seconds() // 60) + 1,
-                                            "source": "spectrum"})
+                        _push(_run_start, _run_end)
                         _run_start = None
                 if _run_start is not None:
-                    _spec_spans.append({"ap_id": _ap, "type": _kind,
-                                        "start": _run_start.strftime("%Y-%m-%d %H:%M:%S"),
-                                        "end": _run_end.strftime("%Y-%m-%d %H:%M:%S"),
-                                        "minutes": int((_run_end - _run_start).total_seconds() // 60) + 1,
-                                        "source": "spectrum"})
+                    _push(_run_start, _run_end)
         except Exception:
             _spec_spans = []
     if _spec_spans:
@@ -2901,9 +2909,14 @@ def forecast_preview(req: ForecastPreviewRequest):
     # 原先只有基准时刻，导致同一基准下"先 5 分钟、再 120 分钟"两轮共用同一个
     # _FORECAST_CACHE 键，后一轮覆盖前一轮 —— 再研判第一轮的 5 分钟结果时，
     # 拿到的是 120 分钟那轮的风险（唐苗检测报告第 1 条）。
-    _ctx_key = abs(hash((req.scenario, req.history.start, req.history.end))) % 100000
+    #
+    # 哈希必须**确定性**（审计 5.1）：内置 hash() 每个进程加盐、又被截断到 5 位，
+    # 同上下文重启后 ID 会变、不同上下文也可能撞。改用 md5 全上下文取 8 位十六进制。
+    _ctx_raw = "|".join((req.scenario, req.baseTime, req.history.start,
+                         req.history.end, str(int(req.horizonMinutes))))
+    _ctx_key = hashlib.md5(_ctx_raw.encode("utf-8")).hexdigest()[:8]
     fid = (f"FC_{base_dt.strftime('%Y%m%d%H%M%S')}"
-           f"_{int(req.horizonMinutes)}m_{_ctx_key:05d}")
+           f"_{int(req.horizonMinutes)}m_{_ctx_key}")
     fore_end = base_dt + timedelta(minutes=req.horizonMinutes)
 
     # 频谱未加载 与 基准越界 是两种完全不同的原因，必须分开说明。
@@ -3208,7 +3221,12 @@ def forecast_preview(req: ForecastPreviewRequest):
                 # 每个预测点的带宽完全相同，图上是等宽平带——但越往后越不确定，
                 # 等宽区间在统计上说不通（也是"预测看起来不对"的直接原因之一）。
                 # 用 √(1 + step/total) 增长：起步约 1 倍，末端约 1.41 倍。
-                growth = (1.0 + step / total_steps) ** 0.5
+                # 区间随"提前量（分钟）"扩大，而不是随请求的总步数扩大。
+                # 原写法 √(1+step/total_steps) 让同一个未来时点在不同预测时长下
+                # 得到不同带宽（审计第 10 条：14:17 的 SINR 上界在 30/120 分钟预测里
+                # 分别是 -13.62 / -13.84）。改成以 60 分钟为尺度：
+                # 起步 1 倍，1 小时后约 √2≈1.41 倍，与请求的时长无关。
+                growth = (1.0 + minutes_ahead / 60.0) ** 0.5
                 pred_pts.append({
                     "time": fmt(t), "value": value,
                     "lower": round(max(low, value - half_width * growth), 2),
