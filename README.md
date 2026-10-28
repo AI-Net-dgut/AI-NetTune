@@ -216,7 +216,7 @@ npm run dev
 
 ```
 AI-NetTune/
-├── main.py            # 后端主程序（FastAPI，16 个接口）
+├── main.py            # 后端主程序（FastAPI，17 个接口）
 ├── data_layout.py     # 数据文件定位规则（候选文件名 / 环境变量，单一定义源）
 ├── data_generator.py  # 仿真数据生成器（v2.8：多日 + 坐标 + 故障注入 + 频谱混合标注）
 ├── forecast_model.py  # Prophet 时序预测（缺包降级 moving_average）+ 真实 MAE/RMSE/MAPE 回测
@@ -244,7 +244,7 @@ AI-NetTune/
 │   ├── spectrum_7d.csv        # 7 天，1,512,000 条 × 9 列（预测预警数据源）
 │   └── fault_events.csv       # 故障事件清单（接口7 的单一事实来源，8 个事件）
 ├── docs/
-│   ├── api.md         # API 接口契约文档（16 个接口）
+│   ├── api.md         # API 接口契约文档（17 个接口）
 │   └── data_dict.md   # 数据字典契约文档（18 维字段规范）
 ├── frontend/          # React 前端
 └── README.md

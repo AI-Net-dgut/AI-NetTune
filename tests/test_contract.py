@@ -157,7 +157,7 @@ def test_api_routes_map_to_expected_functions():
     """
     api = {r.path: r.endpoint.__name__ for r in main.app.routes
            if hasattr(r, "endpoint") and r.path.startswith("/api")}
-    assert len(api) == 16, f"/api 路由数量应为 16，实得 {len(api)}"
+    assert len(api) == 17, f"/api 路由数量应为 17，实得 {len(api)}"
 
     expected = {
         "/api/data/query": "data_query",
@@ -172,6 +172,7 @@ def test_api_routes_map_to_expected_functions():
         "/api/analyze/forecast": "analyze_forecast",
         "/api/forecast/preview": "forecast_preview",
         "/api/forecast/analyze": "forecast_analyze",
+        "/api/forecast/plans": "forecast_plans",
         "/api/health": "health",
         "/api/plan/simulate": "plan_simulate",
         "/api/forecast/spatial_frames": "spatial_frame_series",
@@ -338,6 +339,56 @@ def test_plan_simulate_rejects_unknown_enum_value():
         window_start="2026-01-05 20:00:00", window_end="2026-01-05 20:20:00",
         parameter_values={"capacity": "one_carrier"}))
     assert ok.get("code") == 0
+
+
+def test_forecast_plans_generates_plans_with_basis():
+    """预测风险必须能变成方案，且方案带清来源与依据（审计第 6 条）。
+
+    不误导的三条硬约束：
+      * 方案只来自该轮预测的风险，不混入现存问题；
+      * 参数基线与效应评估窗口 = 预测基准前的实测窗口（basisWindow）；
+      * 无风险时不编造方案（plans 为空 + 说明）。
+    """
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+
+    def ask(fid, fc, scenario=SCENARIO, tw=None):
+        return main.forecast_plans(main.ForecastPlanRequest(
+            forecastId=fid, scenario=scenario, baseTime=base,
+            history=main._TimeRange(start=hs, end=he),
+            forecast=main._TimeRange(start=fc[0], end=fc[1]),
+            targetWindow=(main._TimeRange(start=tw[0], end=tw[1]) if tw else None)))
+
+    p120 = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
+    fc = (p120["forecast"]["start"], p120["forecast"]["end"])
+    r = ask(p120["id"], fc)
+    assert r.get("code") == 0, r
+    d = r["data"]
+    assert d["plans"], "有风险时必须能生成方案"
+    plan = d["plans"][0]
+    assert plan.get("origin") == "forecast"
+    assert plan["basis"]["forecastId"] == p120["id"]
+    # 评估窗口必须是基准前的实测窗口，不能是预测目标时段
+    assert d["basisWindow"] == {"start": hs, "end": he}
+    assert d["risk"]["ap"] == plan["objectIds"][0]
+    assert "预测基准前的实测窗口" in d["disclaimer"]
+
+    # 上下文不符 / 记录失效 → 拒绝
+    assert ask(p120["id"], fc, scenario="商场").get("code") == 40002
+    assert ask("FC-not-exist", fc).get("code") == 40003
+
+    # 无风险的一轮 → 明确说"不生成方案"，不编造
+    p5 = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=5)))
+    r5 = ask(p5["id"], (p5["forecast"]["start"], p5["forecast"]["end"]))
+    assert r5.get("code") == 0
+    assert r5["data"]["plans"] == [] and "不生成处置方案" in r5["data"]["message"]
+
+    # 方案可直接用于 /api/plan/simulate（窗口 = 基准前实测窗口）
+    sim = main.plan_simulate(main.PlanSimulateRequest(
+        plan_id=plan["id"], scenario=SCENARIO, window_start=hs, window_end=he,
+        parameter_values={plan["parameters"][0]["id"]: str(plan["parameters"][0]["suggestedValue"])}))
+    assert sim.get("code") == 0
 
 
 def test_forecast_analyze_uses_question_and_target_window():

@@ -23,6 +23,7 @@ Base URL: http://localhost:8000
 |14|POST|/api/plan/simulate|方案对比仿真（改参数后在同一窗口重算"原配置 vs 方案"）|
 |15|GET|/api/forecast/spatial_frames|区域电磁态势帧序列（过去N帧 + 未来N帧，二维网格场）|
 |16|GET|/api/navigate/signal|信号导航建议（位置感知 + 覆盖分析 + 移动方向/距离/预期增益）|
+|17|POST|/api/forecast/plans|预测风险→处置方案（方案带 forecastId / 风险时段 / 基准前评估窗口与免责说明；无风险时返回空列表）|
 
 ## 通用响应格式
 成功: {"code": 0, "message": "success", "data": {...}}

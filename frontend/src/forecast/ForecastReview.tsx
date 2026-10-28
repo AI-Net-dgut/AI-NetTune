@@ -2,6 +2,7 @@ import { record,forecastRecordIds } from '../history/store';
 import { useEffect, useState } from "react";
 import { ReplyText } from "../chat/DiagnosisAnswer";
 import { analyzeForecast } from "./api";
+import ForecastPlans from "./ForecastPlans";
 import type { ForecastAnalysis, ForecastHandoff } from "./types";
 
 export default function ForecastReview({ handoff }: { handoff: ForecastHandoff }) {
@@ -26,5 +27,7 @@ export default function ForecastReview({ handoff }: { handoff: ForecastHandoff }
     {state.pending && <p role="status">正在研判这份预测结果…</p>}
     {state.error && <div role="alert"><p>{state.error}</p><button type="button" onClick={() => { setState({ pending: true, result: null, error: "" }); setAttempt(n => n + 1); }}>重试预测研判</button></div>}
     {state.result && <><p className="ain-forecast-review-source">{state.result.source === "demo" ? "界面示例 · 未调用大模型" : state.result.source === "rule" ? "规则研判" : "AI研判"}</p><ReplyText text={state.result.reply} /></>}
+    {/* 预测风险的处置方案：与「处理建议与效果」里现存问题的方案分开（审计第 6 条） */}
+    <ForecastPlans handoff={handoff} />
   </article>;
 }

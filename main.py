@@ -2793,6 +2793,21 @@ class ForecastAnalyzeRequest(BaseModel):
     targetWindow: _TimeRange | None = None
 
 
+class ForecastPlanRequest(BaseModel):
+    """预测风险 → 处置方案（审计第 6 条）。
+
+    刻意与 ForecastAnalyzeRequest 分开：这是"生成方案"而不是"写研判文字"，
+    返回结构里必须带清楚**依据**，否则会被误认为"预测时段的专属实测方案"。
+    """
+    forecastId: str
+    scenario: str
+    baseTime: str
+    history: _TimeRange
+    forecast: _TimeRange
+    alertId: str | None = None
+    targetWindow: _TimeRange | None = None
+
+
 def _parse_ts(value: str):
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
 
@@ -3583,6 +3598,134 @@ def _topology_active_users(ap_rows):
     if values:
         return max(values)
     return len({r["user_id"] for r in ap_rows})
+
+
+@app.post("/api/forecast/plans", summary="预测风险→处置方案（带依据与免责说明）")
+def forecast_plans(req: ForecastPlanRequest):
+    """把一轮预测里的风险变成**可操作的处置方案**（审计第 6 条）。
+
+    为什么不能只返回文字：用户拿到"预计 21 分钟后功率跌破 -95dBm"之后，
+    下一步本来就是"那我该怎么办"。这里给出方案与可编辑参数。
+
+    **不变得不误导的四条约束**（这是本次实现的核心）：
+      1. 方案只来自**该轮预测的风险**（AP + 类型），不混入现存问题；
+      2. 参数基线取**预测基准前的实测窗口**（history），不是未来数据；
+      3. 方案自带的效应评估明确标注为"在基准前实测窗口上的等效评估"，
+         并在 `basis` 字段里写清 forecastId / 风险时段 / 评估窗口；
+      4. 无风险时不编造方案，返回空列表并说明原因。
+    """
+    # ---- 上下文校验：与 forecast/analyze 同口径（缓存有效 + 四项一致 + 目标不越界）----
+    try:
+        _base_dt = _parse_ts(req.baseTime)
+        _hist_end = _parse_ts(req.history.end)
+        _hist_start = _parse_ts(req.history.start)
+    except (ValueError, TypeError):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "baseTime / history 时间格式应为 yyyy-MM-dd HH:mm:ss")
+    if _hist_end > _base_dt:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"history.end（{req.history.end}）不得晚于 baseTime（{req.baseTime}）")
+    if _hist_start >= _hist_end:
+        return error_response(ERROR_CODE["PARAM_INVALID"], "history.start 必须早于 history.end")
+
+    cached = _FORECAST_CACHE.get(req.forecastId)
+    if not cached:
+        return error_response(
+            ERROR_CODE["PARAM_OUT_OF_RANGE"],
+            f"预测记录 {req.forecastId} 不存在或已过期（服务重启、或缓存超出 {_FORECAST_CACHE_LIMIT} 轮被淘汰）。"
+            f"请重新执行一次预测后再生成方案。")
+    if cached.get("baseTime") and cached["baseTime"] != req.baseTime:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"预测记录 {req.forecastId} 的基准时刻是 {cached['baseTime']}，与请求的 {req.baseTime} 不一致")
+    _ch = cached.get("history") or {}
+    if _ch.get("start") and (_ch["start"] != req.history.start or _ch["end"] != req.history.end):
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"预测记录 {req.forecastId} 的历史范围是 {_ch['start']} ~ {_ch['end']}，与请求不一致")
+    if cached.get("scenario") and cached["scenario"] != req.scenario:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"预测记录 {req.forecastId} 的场景是「{cached['scenario']}」，与请求的「{req.scenario}」不一致")
+    _cf = cached.get("forecast") or {}
+    if _cf.get("start") and (_cf["start"] != req.forecast.start or _cf["end"] != req.forecast.end):
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"预测记录 {req.forecastId} 的预测范围是 {_cf['start']} ~ {_cf['end']}，与请求不一致")
+
+    alerts = cached.get("alerts") or []
+    if not alerts:
+        return success_response({
+            "plans": [],
+            "risk": None,
+            "message": "该轮预测未检出越阈风险，因此不生成处置方案（不编造方案）。",
+        })
+
+    # ---- 选出要处置的风险：指定 alertId > 与关注时段相交 > 第一条 ----
+    alert = None
+    if req.alertId:
+        alert = next((a for a in alerts if a.get("id") == req.alertId), None)
+        if alert is None:
+            return error_response(ERROR_CODE["PARAM_INVALID"],
+                                  f"该轮预测里没有 alertId={req.alertId} 的风险项")
+    if alert is None and req.targetWindow is not None:
+        alert = next((a for a in alerts
+                      if (a.get("start") or "") <= req.targetWindow.end
+                      and (a.get("end") or "") >= req.targetWindow.start), None)
+        if alert is None:
+            return success_response({
+                "plans": [],
+                "risk": None,
+                "message": (f"关注时段 {req.targetWindow.start} ~ {req.targetWindow.end} 内没有命中风险，"
+                            f"不生成方案；该轮预测在别处另有 {len(alerts)} 条风险，可指定对应时段。"),
+            })
+    if alert is None:
+        alert = alerts[0]
+
+    ap = alert.get("target")
+    # 风险类型由预警 id 后缀判定（ALT-<ap>-weak / ALT-<ap>-cong）
+    _aid = str(alert.get("id") or "")
+    anomaly_type = "网络拥塞" if _aid.endswith("-cong") else "覆盖故障"
+    if not ap:
+        return error_response(ERROR_CODE["PARAM_INVALID"], "该条风险没有关联 AP，暂无法生成方案")
+
+    # ---- 参数基线：预测基准前的实测窗口（不是未来数据）----
+    plan_rows = [r for r in filter_rows(req.scenario, req.history.start, req.history.end)
+                 if r["ap_id"] == ap]
+    if not plan_rows:
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            f"{ap} 在基准前窗口 {req.history.start} ~ {req.history.end} 没有采样，无法给出可靠参数基线")
+
+    basis_window = {"start": req.history.start, "end": req.history.end}
+    plans = []
+    try:
+        plans = plan_model.build_plans(
+            ap, anomaly_type, plan_rows,
+            {"scenario": req.scenario, "start": basis_window["start"], "end": basis_window["end"]},
+            {"tilt": 8, "power": 33},
+        )
+    except Exception as exc:                       # 方案生成失败不影响其它接口
+        print(f"[Main] 预测方案生成失败：{exc}")
+        return error_response(ERROR_CODE["PARAM_INVALID"], "方案生成失败，请稍后重试")
+
+    basis = {
+        "forecastId": req.forecastId,
+        "risk": {"ap": ap, "type": anomaly_type, "start": alert.get("start"),
+                 "end": alert.get("end"), "title": alert.get("title"),
+                 "severity": alert.get("severity")},
+        "basisWindow": basis_window,               # 参数基线与效应评估用的实测窗口
+        "targetWindow": ({"start": req.targetWindow.start, "end": req.targetWindow.end}
+                         if req.targetWindow is not None else None),
+    }
+    for p in plans:
+        p["origin"] = "forecast"                   # 前端据此显示"来自预测风险"
+        p["basis"] = basis
+        _remember_plan(p)                          # 让 /api/plan/simulate 可用
+
+    disclaimer = (
+        f"方案依据：本轮预测预计 {alert.get('start')} ~ {alert.get('end')} 期间 {ap} 出现{anomaly_type}"
+        f"（{alert.get('title')}）。参数与效应基于**预测基准前的实测窗口** {basis_window['start']} ~ "
+        f"{basis_window['end']} 评估，属当前配置下的等效测算，不是该未来时段的实测结果；"
+        f"若目标时段尚无实测数据，请把结论当作处置方向而不是效果承诺。"
+    )
+    return success_response({"plans": plans, "risk": basis["risk"], "basis": basis,
+                             "basisWindow": basis_window, "disclaimer": disclaimer})
 
 
 @app.get("/api/network/topology/enhanced", summary="接口9：拓扑增强数据（契约 v1）")

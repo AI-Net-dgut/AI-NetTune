@@ -386,6 +386,33 @@ export async function simulatePlan(scope: QueryScope, plan: TreatmentPlan, value
   });
   return parseSimulation(data, scope);
 }
+/** 预测风险 → 处置方案（审计第 6 条）。
+ *
+ * 与"现存问题方案"的区别由返回值里的 origin/basis/disclaimer 标明：
+ * 方案只来自该轮预测的风险，参数基线与效应评估都在**预测基准前的实测窗口**，
+ * 不代表未来实测结果。前端必须把这个 disclaimer 显示出来。 */
+export interface ForecastPlansPayload {
+  plans: TreatmentPlan[];
+  risk: { ap: string; type: string; start: string; end: string; title: string; severity?: string } | null;
+  basisWindow?: { start: string; end: string };
+  disclaimer?: string;
+  message?: string;
+}
+export async function fetchForecastPlans(
+  ctx: { forecastId: string; scenario: string; baseTime: string; history: { start: string; end: string };
+    forecast: { start: string; end: string }; alertId?: string | null;
+    targetWindow?: { start: string; end: string } },
+  signal?: AbortSignal): Promise<ForecastPlansPayload> {
+  const data = await request("/forecast/plans", signal, ctx);
+  const plans = Array.isArray(data.plans) ? data.plans as TreatmentPlan[] : [];
+  return {
+    plans,
+    risk: (data.risk && typeof data.risk === "object" ? data.risk : null) as ForecastPlansPayload["risk"],
+    basisWindow: (data.basisWindow && typeof data.basisWindow === "object" ? data.basisWindow : undefined) as ForecastPlansPayload["basisWindow"],
+    disclaimer: typeof data.disclaimer === "string" ? data.disclaimer : undefined,
+    message: typeof data.message === "string" ? data.message : undefined,
+  };
+}
 /** 生成分析报告（接口4）。返回可直接打开的下载地址与报告编号。 */
 export async function exportReport(scope: QueryScope, format: "md" | "html" = "html",
   signal?: AbortSignal): Promise<{ url: string; reportId: string; format: string; bytes: number }> {
