@@ -222,6 +222,90 @@ def test_anomaly_supported_range_alignment():
     assert fc["status"] == "insufficient_data"
 
 
+def test_forecast_analyze_rejects_stale_or_mismatched_context():
+    """研判必须拒绝"记录已失效"和"上下文不一致"，不能把拿不到结果当没风险。
+
+    审计第 1 条：缓存淘汰后原实现返回"未检测到越阈风险 / 维持配置"（漏报式回答）。
+    审计第 5 条：场景、预测范围、关注时段越界都要拒绝。
+    """
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+    prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base,
+        history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
+    fid = prev["id"]
+    fc = (prev["forecast"]["start"], prev["forecast"]["end"])
+
+    def ask(scenario=SCENARIO, forecast=None, tw=None, forecast_id=fid):
+        return main.forecast_analyze(main.ForecastAnalyzeRequest(
+            forecastId=forecast_id, scenario=scenario, baseTime=base, alertId=None,
+            history=main._TimeRange(start=hs, end=he),
+            forecast=main._TimeRange(start=(forecast or fc)[0], end=(forecast or fc)[1]),
+            targetWindow=(main._TimeRange(start=tw[0], end=tw[1]) if tw else None)))
+
+    # ① 记录不存在（模拟缓存淘汰/重启）→ 必须报错，且不能宣称无风险
+    saved = dict(main._FORECAST_CACHE)
+    try:
+        main._FORECAST_CACHE.clear()
+        stale = ask()
+    finally:
+        main._FORECAST_CACHE.clear()
+        main._FORECAST_CACHE.update(saved)
+    assert stale.get("code") != 0, "记录失效时不应返回成功"
+    assert ("过期" in str(stale.get("message"))) or ("不存在" in str(stale.get("message")))
+    assert stale.get("data") is None
+
+    # ② 场景不一致 ③ 预测范围不一致 ④ 关注时段越界
+    assert ask(scenario="商场").get("code") == 40002
+    assert ask(forecast=("2026-01-02 14:12:00", "2026-01-02 14:17:00")).get("code") == 40002
+    assert ask(tw=("2026-01-02 17:00:00", "2026-01-02 18:00:00")).get("code") == 40003
+    # ⑤ 正常上下文仍可用
+    ok = ask(tw=("2026-01-02 14:35:00", "2026-01-02 14:45:00"))
+    assert ok.get("code") == 0 and ok["data"]["reply"]
+
+
+def test_short_window_does_not_claim_fault():
+    """样本过少时不下故障结论（审计第 3 条）。
+
+    实测 AP-01 01-02 05:52 只有 2 行采样、标签全 normal，却返回
+    is_anomaly=true + 覆盖故障 + current_state=normal + anomaly_spans=[]。
+    """
+    for ap, ts in (("AP-01", "2026-01-02 05:52:00"), ("AP-02", "2026-01-01 10:08:00")):
+        d = _data(main.analyze_anomaly(main.AnomalyRequest(
+            scenario=SCENARIO, window_start=ts, window_end=ts, ap_id=ap)))
+        assert d["is_anomaly"] is False, f"{ap} {ts} 样本不足不应判故障"
+        assert d["current_state"] != "fault_active"
+        assert d["anomaly_type"] in ("正常", "性能提示"), d["anomaly_type"]
+
+
+def test_candidates_include_spectrum_evidence():
+    """候选原因必须拿到合并后的证据（含频谱维），审计第 4 条。"""
+    d = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-01 10:00:00", window_end="2026-01-01 10:15:00")))
+    assert any(e["metric"] == "spectrum_power_bands" for e in d["kpi_evidence"])
+    support = " ".join(d["candidates"][0]["support_evidence"])
+    assert "频谱功率越阈" in support, f"候选支持证据缺频谱项：{support}"
+
+    cong = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-05 20:00:00", window_end="2026-01-05 20:20:00")))
+    csupport = " ".join(cong["candidates"][0]["support_evidence"])
+    assert "频谱占用越阈" in csupport, f"拥塞候选支持证据缺频谱项：{csupport}"
+
+
+def test_spatial_frames_early_history_returns_insufficient():
+    """最早历史附近没有采样时应返回数据不足，而不是 500（审计第 8 条）。"""
+    d = _data(main.spatial_frame_series(
+        scenario=SCENARIO, baseTime="2026-01-01 00:10:00", historyMinutes=36,
+        frameMinutes=6, pastFrames=6, futureFrames=5, metric="rsrp"))
+    assert d["status"] == "insufficient_data", d.get("status")
+    assert d["past"] == [] and d["future"] == []
+    assert "没有采样" in d["message"]
+
+    ok = _data(main.spatial_frame_series(
+        scenario=SCENARIO, baseTime="2026-01-02 10:08:00", historyMinutes=90,
+        frameMinutes=10, pastFrames=8, futureFrames=6, metric="rsrp"))
+    assert len(ok["past"]) == 8 and len(ok["future"]) == 6
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 

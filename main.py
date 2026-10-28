@@ -700,6 +700,26 @@ def judge_ap(ap, ap_rows, spec=None):
     weak_ratio = st.get("weak_coverage", 0) / len(ap_rows)
     cong_ratio = st.get("congestion", 0) / len(ap_rows)
 
+    # 「少量样本不下故障结论」（审计第 3 条）：整窗研判原先没有样本门槛，
+    # 实测只有 2 行采样（AP-01 01-02 05:52）、标签全 normal 时仍判"覆盖故障"，
+    # 而标签没有异常区间 → 最终出现 is_anomaly=true + current_state=normal + spans=[]。
+    # 与小时切片口径对齐：低于 MIN_HOUR_ROWS_PER_AP 行只给"提示"，不做故障结论。
+    if len(ap_rows) < MIN_HOUR_ROWS_PER_AP:
+        _r1 = (lambda v: round(v, 1) if isinstance(v, (int, float)) else None)
+        _short_base = {
+            "ap_id": ap,
+            "rsrp_avg": _r1(rsrp_avg), "sinr_avg": _r1(sinr_avg),
+            "thr_avg": _r1(thr_avg), "prb_avg": _r1(prb_avg),
+            "weak_ratio": round(weak_ratio, 3), "cong_ratio": round(cong_ratio, 3),
+            "evidence": [{"metric": "sample_count", "avg_value": len(ap_rows),
+                          "threshold": MIN_HOUR_ROWS_PER_AP, "status": "提示"}],
+        }
+        return {**_short_base, "anomaly_type": "性能提示", "level": "提示", "network_status": "normal",
+                "cause": (f"{ap} 本窗口仅 {len(ap_rows)} 条采样（少于 {MIN_HOUR_ROWS_PER_AP} 条），"
+                          f"均值不具统计意义，不下故障结论"),
+                "suggestion": "扩大分析窗口后重新研判（建议至少覆盖 5 分钟以上）",
+                "candidates": build_candidates(ap, _short_base, "正常")}
+
     # 逐KPI对照通信阈值，构建证据链
     evidence = []
     if rsrp_avg < -105:
@@ -737,6 +757,9 @@ def judge_ap(ap, ap_rows, spec=None):
                            "avg_value": _spec.get("max_power_bands", 0),
                            "threshold": _spec.get("min_bands", 0), "status": "异常"})
         src = "两维均越阈" if both else ("频谱维度越阈" if spec_weak else "网络维度越阈")
+        # 候选原因必须拿到**合并后**的证据（含频谱维），否则会出现
+        # "顶层证据有 50≥40 频段越阈、候选原因只说 SINR 低"的断链（审计第 4 条）。
+        _cand_base = {**base, "evidence": merged}
         return {**base, "evidence": merged,
                 "anomaly_type": "覆盖故障", "level": "严重" if both else "中等",
                 "network_status": "weak_coverage",
@@ -744,7 +767,7 @@ def judge_ap(ap, ap_rows, spec=None):
                           f"、频段最大越阈{_spec.get('max_power_bands', 0)}/{_spec.get('min_bands', 0)}，"
                           f"{src}，判定为覆盖故障"),
                 "suggestion": "建议检查AP天线倾角/功率或增加补盲AP",
-                "candidates": build_candidates(ap, base, "覆盖故障")}
+                "candidates": build_candidates(ap, _cand_base, "覆盖故障")}
     net_cong = cong_ratio > 0.25 or prb_avg > 90
     spec_cong = bool(_spec.get("cong"))
     if net_cong or spec_cong:
@@ -758,6 +781,7 @@ def judge_ap(ap, ap_rows, spec=None):
                            "avg_value": _spec.get("max_occ_bands", 0),
                            "threshold": _spec.get("min_bands", 0), "status": "异常"})
         src = "两维均越阈" if both else ("频谱维度越阈" if spec_cong else "网络维度越阈")
+        _cand_base = {**base, "evidence": merged}      # 候选原因拿合并后证据（同 A3）
         return {**base, "evidence": merged,
                 "anomaly_type": "网络拥塞", "level": "严重" if both else "中等",
                 "network_status": "congestion",
@@ -765,7 +789,7 @@ def judge_ap(ap, ap_rows, spec=None):
                           f"、频段最大越阈{_spec.get('max_occ_bands', 0)}/{_spec.get('min_bands', 0)}，"
                           f"{src}，判定为容量拥塞"),
                 "suggestion": "建议负载均衡或扩容",
-                "candidates": build_candidates(ap, base, "网络拥塞")}
+                "candidates": build_candidates(ap, _cand_base, "网络拥塞")}
     if thr_avg < 50 and rsrp_avg < -100:
         # 「边缘弱用户」= 用户处在覆盖边缘 → **必须有 RSRP 佐证**。
         # 原先只看 thr_avg < 50 就判中等异常，导致正常时段被误报：
@@ -2190,6 +2214,22 @@ def spatial_frame_series(
                      "points": built["points"], "values": built["values"]})
         grids.append(built["values"])
 
+    # 数据起点附近：某些历史帧可能没有任何采样 → build_grid 返回空网格。
+    # 原先直接把空网格喂给 predict_frames，在 spatial_frames.py:133 抛
+    # IndexError（grids[0][0] 越界）→ 接口 500（审计第 8 条）。
+    # 这里明确返回"数据不足"，而不是让用户看到一个 500。
+    _empty_frames = [p["start"] for p in past if not p["values"]]
+    if _empty_frames:
+        return success_response({
+            "status": "insufficient_data",
+            "message": (f"这些历史帧没有采样数据（{_empty_frames[0]} 起共 {len(_empty_frames)} 帧），"
+                        f"无法生成态势序列；请把基准时刻往后移，或缩短 historyMinutes。"),
+            "scenario": scenario, "baseTime": baseTime, "metric": metric,
+            "past": [], "future": [],
+            "emptyFrames": _empty_frames,
+            "grid": meta["grid"], "x_range": meta["x_range"], "y_range": meta["y_range"],
+        })
+
     # 指标量级对应的最大漂移（与接口11 的 profile 口径一致）
     drift = {"rsrp": 15.0, "sinr": 8.0, "throughput": 20.0}[metric]
     bounds = {"rsrp": (-140.0, -40.0), "sinr": (-25.0, 30.0), "throughput": (0.0, 150.0)}[metric]
@@ -3244,7 +3284,17 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
             f"history.start（{req.history.start}）必须早于 history.end（{req.history.end}）")
 
     cached = _FORECAST_CACHE.get(req.forecastId, {})
-    # 预测记录与请求上下文必须一致：防止拿 A 轮的记录回答 B 轮的时段
+    # 缓存里没有这轮预测 ≠ 这一轮没有风险（审计第 1 条）：
+    # _FORECAST_CACHE 是有上限的、重启即清空。原先拿着一个已被淘汰的 forecastId 来研判，
+    # 会走"cached_alerts 为空"的分支，输出"未检测到越阈风险 / 建议维持配置" ——
+    # 把"结果不可用"解释成了"安全"，这是最危险的漏报式回答。
+    if not cached:
+        return error_response(
+            ERROR_CODE["PARAM_OUT_OF_RANGE"],
+            f"预测记录 {req.forecastId} 不存在或已过期（服务重启、或缓存超出 "
+            f"{_FORECAST_CACHE_LIMIT} 轮被淘汰）。请重新执行一次预测后再研判，"
+            f"不要把\"拿不到结果\"当成\"没有风险\"。")
+    # 预测记录与请求上下文必须一致：防止拿 A 轮的记录回答 B 轮的时段/场景/范围
     if cached:
         _cb = cached.get("baseTime")
         if _cb and _cb != req.baseTime:
@@ -3258,6 +3308,29 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
                 ERROR_CODE["PARAM_INVALID"],
                 f"预测记录 {req.forecastId} 的历史范围是 {_ch['start']} ~ {_ch['end']}，"
                 f"与请求的 {req.history.start} ~ {req.history.end} 不一致")
+        # 场景必须一致（审计第 5 条：拿校园的记录改成商场也能返回校园风险）
+        _cs = cached.get("scenario")
+        if _cs and _cs != req.scenario:
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"预测记录 {req.forecastId} 的场景是「{_cs}」，与请求的「{req.scenario}」不一致")
+        # 预测范围必须一致（否则可以把 120 分钟那轮用于 5 分钟的问题）
+        _cf = cached.get("forecast") or {}
+        if _cf.get("start") and _cf.get("end") and (
+                _cf["start"] != req.forecast.start or _cf["end"] != req.forecast.end):
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"预测记录 {req.forecastId} 的预测范围是 {_cf['start']} ~ {_cf['end']}，"
+                f"与请求的 {req.forecast.start} ~ {req.forecast.end} 不一致；"
+                f"要问别的范围请重新执行预测")
+        # 关注时段必须落在这轮预测覆盖范围内（审计第 5 条：17:00~18:00 也回答了"未达门槛"）
+        _tw = req.targetWindow
+        if _tw is not None and _cf.get("start") and _cf.get("end"):
+            if _tw.start > _cf["end"] or _tw.end < _cf["start"]:
+                return error_response(
+                    ERROR_CODE["PARAM_OUT_OF_RANGE"],
+                    f"关注时段 {_tw.start} ~ {_tw.end} 不在本轮预测范围 "
+                    f"{_cf['start']} ~ {_cf['end']} 内，无法判断；请先重新预测覆盖该时段")
     alert_detail = None
     if req.alertId:
         for a in cached.get("alerts", []):

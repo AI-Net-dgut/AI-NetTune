@@ -130,6 +130,9 @@ def predict_frames(grids: list[list[list[float | None]]], future: int = 3,
     """
     if not grids or future <= 0:
         return []
+    # 防御：某帧没有任何采样点时 build_grid 返回 []，直接取 grids[0][0] 会 IndexError
+    if not grids[0] or not grids[0][0]:
+        return []
     rows, cols = len(grids[0]), len(grids[0][0])
     out: list[list[list[float | None]]] = []
     slopes = [[_cell_slope([g[r][c] for g in grids]) for c in range(cols)] for r in range(rows)]
