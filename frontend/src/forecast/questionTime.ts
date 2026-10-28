@@ -51,8 +51,10 @@ export function resolveForecastQuestion(message: string, context: ForecastQuesti
         });
     if (/昨天|前天|昨日|前日/.test(normalized)) return fail('未来预测不能把过去日期作为目标；请写明未来日期，参考历史可通过界面设置。');
     if (/下周|下个月|下星期|下一(?:小时|分钟|天|周)|(?:\d+|[零一二两三四五六七八九十百半]+)\s*(?:秒|周|个月)/.test(normalized)) return fail('请写明具体日期和钟点；当前预测最长支持未来24小时。');
-    const duration = normalized.match(/(?:未来|接下来(?:的)?|往后|预测(?:未来)?)\s*(\d+(?:\.\d+)?|[零一二两三四五六七八九十百半]+)\s*(分钟|小时|天)/)
-      ?? normalized.match(/(\d+(?:\.\d+)?|[零一二两三四五六七八九十百半]+)\s*(分钟|小时|天)\s*(?:之)?后/);
+    // 允许中文量词"个"："未来半个小时 / 一个小时 / 三个小时"（审计第 2 条：
+    // 这些最常见的中文表达原先一条都匹配不上，直接落回默认 120 分钟）。
+    const duration = normalized.match(/(?:未来|接下来(?:的)?|往后|预测(?:未来)?)\s*(\d+(?:\.\d+)?|[零一二两三四五六七八九十百半]+)\s*(?:个)?\s*(分钟|小时|天)/)
+      ?? normalized.match(/(\d+(?:\.\d+)?|[零一二两三四五六七八九十百半]+)\s*(?:个)?\s*(分钟|小时|天)\s*(?:之)?后/);
     const clockTokens = [...normalized.matchAll(/(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)/g)];
     if (duration && (clockTokens.length || explicitDate || /明天|后天|今晚|明早/.test(normalized)))
       return fail('一次请选择一个连续未来时段；请使用“未来N分钟”或明确起止日期和钟点。');

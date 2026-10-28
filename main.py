@@ -1320,6 +1320,22 @@ def plan_simulate(req: PlanSimulateRequest):
     if req.window_start > req.window_end:
         return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "起始时间不能晚于结束时间")
 
+    # 枚举参数白名单校验（审计 5.3）：前端下拉框不会传非法值，但接口是边界，
+    # 必须在服务端拒绝，而不是把 "garbage" 当成与某个合法选项等效。
+    _vals = req.parameter_values or {}
+    for _p in plan.get("parameters") or []:
+        if _p.get("type") != "enum":
+            continue
+        _allowed = {str(o.get("value")) for o in (_p.get("options") or [])}
+        _given = _vals.get(_p["id"], _p.get("suggestedValue"))
+        if _given is None:
+            continue
+        if str(_given) not in _allowed:
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"参数「{_p.get('label') or _p['id']}」取值 {_given!r} 不在允许范围 "
+                f"{sorted(_allowed)} 内")
+
     ap_id = req.ap_id or plan["objectIds"][0]
     rows = [r for r in filter_rows(req.scenario, req.window_start, req.window_end)
             if r["ap_id"] == ap_id]
@@ -1825,19 +1841,39 @@ def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | No
     """AI对话问"未来会怎样"时调用：以对话窗口末尾为基准时刻，跑一次预测，把预警拼成人话。"""
     import re
     win_end = win_end or TOOL_WINDOW_END
-    # 从用户消息提取预测时长（如"未来120分钟""未来2小时""接下来半小时"），默认30分钟
+    # 从用户消息提取预测时长（如"未来120分钟""未来2小时""接下来半小时"），默认30分钟。
+    # 必须支持中文数词与量词"个"：审计第 2 条实测"未来一个小时/三个小时"原先都匹配不上，
+    # 分别回落成默认值（不是用户问的时长）。
     horizon = 30
-    m = re.search(r'未来\s*(\d+)\s*(分钟|分)', message)
+    _cn_digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                  "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+    def _cn_amount(text: str) -> float | None:
+        """把 '半' / '2.5' / '十二' / '三个' 这类量词前的数字转成数值。"""
+        if text in ("半", "半个小时", "半小时"):
+            return 0.5
+        text = text.strip()
+        if re.fullmatch(r"\d+(?:\.\d+)?", text):
+            return float(text)
+        if text in _cn_digits:
+            return float(_cn_digits[text])
+        m_ = re.fullmatch(r"([一二两三四五六七八九])?十([一二三四五六七八九])?", text)
+        if m_:
+            tens = _cn_digits[m_.group(1)] if m_.group(1) else 1
+            ones = _cn_digits[m_.group(2)] if m_.group(2) else 0
+            return float(tens * 10 + ones)
+        return None
+
+    m = re.search(r'未来\s*(半|\d+(?:\.\d+)?|[零一二两三四五六七八九十]+)\s*(?:个)?\s*(分钟|分|小时|天)', message)
+    if not m:
+        m = re.search(r'接下来\s*(?:的)?\s*(半|\d+(?:\.\d+)?|[零一二两三四五六七八九十]+)\s*(?:个)?\s*(分钟|分|小时|天)', message)
     if m:
-        horizon = int(m.group(1))
-    else:
-        m = re.search(r'未来\s*(\d+)\s*小时', message)
-        if m:
-            horizon = int(m.group(1)) * 60
-        elif '半小时' in message:
-            horizon = 30
-        elif '两小时' in message or '2小时' in message or '120分钟' in message:
-            horizon = 120
+        amount = _cn_amount(m.group(1))
+        unit = m.group(2)
+        if amount is not None:
+            horizon = int(round(amount * (1440 if unit == "天" else 60 if unit == "小时" else 1)))
+    elif '半小时' in message:
+        horizon = 30
     horizon = max(5, min(horizon, 120))  # 夹到5~120分钟
     try:
         base_dt = datetime.strptime(win_end, "%Y-%m-%d %H:%M:%S")
@@ -1884,7 +1920,9 @@ def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | No
 
     return {"reply": reply, "intent": "forecast", "chart": None,
             "detail": {"alert_count": len(alerts), "status": status},
-            "query_ref": {"scenario": scenario, "end_time": win_end}}
+            # 回显实际使用的预测时长，便于核对"用户问的时长"与"真跑的时长"是否一致
+            "query_ref": {"scenario": scenario, "end_time": win_end,
+                          "horizon_minutes": horizon}}
 
 # ---- Function Calling 工具注册表：意图名 → 工具函数（新增工具在这里登记即可） ----
 def tool_chat(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:

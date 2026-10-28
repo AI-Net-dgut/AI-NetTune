@@ -62,7 +62,29 @@ export function resolveHistoryQuestion(message: string, context: HistoryTimeCont
       const minute = Math.floor(anchor / 60_000) * 60_000;
       return finish(minute, minute + 59_000);
     };
-    const ago = normalized.match(/(半|\d+(?:\.\d+)?)\s*(小时|分钟|天)前/);
+    // "X前到Y前"：两个相对锚点组成一个连续窗口（审计第 2 条）。
+    // 原实现只取第一个"X前"，把"30分钟前到10分钟前"解析成 11:30–11:30:59 的一分钟，
+    // 静默丢掉了第二个锚点。这里显式识别成窗口，且支持"个"与中文数词。
+    const agoPair = normalized.match(/(半|\d+(?:\.\d+)?|[一二两三四五六七八九十])\s*(?:个)?\s*(小时|分钟|天)\s*前\s*(?:到|至|~|—|－|–|−|-)\s*(半|\d+(?:\.\d+)?|[一二两三四五六七八九十])\s*(?:个)?\s*(小时|分钟|天)\s*前/);
+    if (agoPair) {
+      if (tokens.length || dates.length || relativeDays.size)
+        return { kind: "error", message: "多个时间锚点不明确，请直接写出起止时间。" };
+      const cn: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+      const toMs = (amount: string, unit: string): number => {
+        const n = amount === "半" ? 0.5 : (amount in cn ? cn[amount] : Number(amount));
+        return n * (unit === "天" ? 86400_000 : unit === "小时" ? 3600_000 : 60_000);
+      };
+      const a = master - toMs(agoPair[1], agoPair[2]);
+      const b = master - toMs(agoPair[3], agoPair[4]);
+      if (a >= b)
+        return { kind: "error", message: "开始时间需要早于结束时间（例如“30分钟前到10分钟前”）。" };
+      return finish(a, b);
+    }
+    const ago = normalized.match(/(半|\d+(?:\.\d+)?)\s*(?:个)?\s*(小时|分钟|天)前/);
+    // "X前与Y前"是**两时点对比**，当前只支持连续窗口 → 明确说不支持，
+    // 而不是只取第一个锚点静默忽略另一个（审计第 2 条）。
+    if (ago && /(?:与|和|、|vs\.?|VS)\s*(?:半|\d+(?:\.\d+)?)\s*(?:个)?\s*(?:小时|分钟|天)\s*前/.test(normalized))
+      return { kind: "error", message: "两时点对比暂不支持：可改用“X前到Y前”查连续窗口，或分别提问。" };
     if (ago) {
       if (tokens.length || dates.length || relativeDays.size)
         return { kind: "error", message: "多个时间锚点不明确，请直接写出起止时间。" };

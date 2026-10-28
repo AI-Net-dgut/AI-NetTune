@@ -306,6 +306,40 @@ def test_spatial_frames_early_history_returns_insufficient():
     assert len(ok["past"]) == 8 and len(ok["future"]) == 6
 
 
+def test_chat_forecast_horizon_parses_chinese_durations():
+    """对话里的预测时长必须认中文数词与量词"个"（审计第 2 条）。
+
+    原先 "未来一个小时/三个小时" 匹配不上任何正则，静默回落成默认 30 分钟。
+    """
+    cases = [("未来半个小时网络如何", 30), ("未来一个小时网络如何", 60),
+             ("未来10分钟呢", 10), ("接下来两小时怎么样", 120), ("未来2小时会怎样", 120)]
+    for msg, want in cases:
+        d = main.tool_forecast(SCENARIO, "2026-01-02 08:00:00", "2026-01-02 12:00:00", msg)
+        got = (d.get("query_ref") or {}).get("horizon_minutes")
+        assert got == want, f"{msg} 期望 {want} 分钟，实得 {got}"
+    # "三个小时"超过产品上限时夹到 120，且回复里能看到真实使用的时长
+    d = main.tool_forecast(SCENARIO, "2026-01-02 08:00:00", "2026-01-02 12:00:00", "未来三个小时网络如何")
+    assert d["query_ref"]["horizon_minutes"] == 120
+    assert "未来120分钟" in d["reply"]
+
+
+def test_plan_simulate_rejects_unknown_enum_value():
+    """仿真参数里的枚举值必须在服务端被拒绝（审计 5.3）。"""
+    d = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-05 20:00:00", window_end="2026-01-05 20:20:00")))
+    plan = next(p for p in d["plans"] if any(x["id"] == "capacity" for x in p["parameters"]))
+    bad = main.plan_simulate(main.PlanSimulateRequest(
+        plan_id=plan["id"], scenario=SCENARIO,
+        window_start="2026-01-05 20:00:00", window_end="2026-01-05 20:20:00",
+        parameter_values={"capacity": "garbage"}))
+    assert bad.get("code") == 40002, bad
+    ok = main.plan_simulate(main.PlanSimulateRequest(
+        plan_id=plan["id"], scenario=SCENARIO,
+        window_start="2026-01-05 20:00:00", window_end="2026-01-05 20:20:00",
+        parameter_values={"capacity": "one_carrier"}))
+    assert ok.get("code") == 0
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 

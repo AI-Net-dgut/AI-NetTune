@@ -169,7 +169,12 @@ def _weak_ratio(rows, d_rsrp):
 
 
 def _deltas_from_values(param_values, plan):
-    """把每个参数的变化折算成 (ΔRSRP, ΔPRB)。未知参数忽略。"""
+    """把每个参数的变化折算成 (ΔRSRP, ΔPRB)。未知参数忽略。
+
+    enum 参数必须**命中选项白名单**才生效（审计 5.3）：
+    原先 `capacity != "none"` 就发收益，传 `garbage` 与 `one_carrier` 结果相同，
+    等于把非法输入当有效方案。现在按参数自带 options 校验，非法值不产生任何增益。
+    """
     d_rsrp = 0.0
     d_prb = 0.0
     for p in plan["parameters"]:
@@ -177,6 +182,9 @@ def _deltas_from_values(param_values, plan):
         raw = param_values.get(pid, p["suggestedValue"])
         current = p["currentValue"]
         if p["type"] == "enum":
+            allowed = {str(o.get("value")) for o in (p.get("options") or [])}
+            if str(raw) not in allowed:      # 非白名单值：不产生增益（服务端已在下游报错/忽略）
+                continue
             if pid == "capacity" and str(raw) != "none":
                 d_prb -= CAPACITY_PRB_DROP
             continue
