@@ -30,6 +30,51 @@ export const historyProblem = () => [capacityProblem, contentProblem, problem].f
 function changed() {
     try { globalThis.window?.dispatchEvent(new Event('aintune-history')); } catch { /* 通知异常不能影响分析请求。 */ }
 }
+
+// ===== 跨标签页同步（审计第 9 条）=====
+// 问题：memory/unsaved/rejectedIds 都是**每个标签页私有**的，而数据库是共享的。
+// 于是 A 页在 B 页删除后仍显示旧记录；A 页迟到的分析结果还会把已删记录重新写回。
+// 做法：删除成功后广播 id（BroadcastChannel 优先，localStorage 作兼容兜底），
+// 收到广播的页面把 id 加入 rejectedIds 并从 memory 移除 —— 既同步列表，也拦住迟到写入。
+type SyncChannel = { postMessage: (message: unknown) => void; onmessage: ((event: { data: unknown }) => void) | null };
+const SYNC_NAME = 'aintune-history';
+const DELETED_KEY = 'aintune-history-deleted';
+function makeChannel(): SyncChannel | null {
+    try {
+        const Ctor = (globalThis as unknown as { BroadcastChannel?: new (name: string) => SyncChannel }).BroadcastChannel;
+        return typeof Ctor === 'function' ? new Ctor(SYNC_NAME) : null;
+    } catch { return null; }
+}
+const syncChannel = makeChannel();
+function broadcastDeleted(ids: string[]) {
+    try { syncChannel?.postMessage({ type: 'deleted', ids }); } catch { /* 广播失败不影响删除结果。 */ }
+    try { (globalThis as unknown as { localStorage?: Storage }).localStorage?.setItem(DELETED_KEY, JSON.stringify({ ids, at: Date.now() })); } catch { /* 隐私模式可能禁用。 */ }
+}
+function applyDeleted(ids: string[]) {
+    for (const id of ids) {
+        memory.delete(id);
+        unsaved.delete(id);
+        rejectedIds.add(id);        // 关键：拦住本页迟到的写入，避免"删除后复活"
+    }
+    capacityProblem = '';           // 别的页面腾出了容量，本页的满额提示要撤掉
+    changed();
+}
+if (syncChannel) {
+    syncChannel.onmessage = (event) => {
+        const data = event?.data as { type?: string; ids?: unknown } | undefined;
+        if (data?.type === 'deleted' && Array.isArray(data.ids)) applyDeleted(data.ids.filter((x): x is string => typeof x === 'string'));
+        else if (data?.type === 'saved') changed();      // 别的页面存了新记录 → 让本页重新读库
+    };
+}
+try {
+    (globalThis as unknown as { window?: Window }).window?.addEventListener?.('storage', (event: StorageEvent) => {
+        if (event.key !== DELETED_KEY || !event.newValue) return;
+        try {
+            const data = JSON.parse(event.newValue) as { ids?: unknown };
+            if (Array.isArray(data?.ids)) applyDeleted(data.ids.filter((x): x is string => typeof x === 'string'));
+        } catch { /* 非法载荷忽略。 */ }
+    });
+} catch { /* 非浏览器环境。 */ }
 let idSequence = 0;
 function createId() {
     try { if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch { /* 普通内网HTTP可能不支持此API。 */ }
@@ -170,6 +215,7 @@ function saveRecord(input: RecordInput): string {
                 unsaved.delete(item.id);
             if (!unsaved.size)
                 problem = '';
+            try { syncChannel?.postMessage({ type: 'saved' }); } catch { /* 通知别的页面刷新列表。 */ }
         }
         catch {
             problem = '记录尚未写入浏览器数据库。请重试保存或导出备份，离开页面可能丢失未保存内容。';
@@ -196,8 +242,11 @@ export async function listRecords(): Promise<HistoryRecord[]> {
         problem = '暂时无法读取本地记录，请重试；当前未保存内容仍可导出。';
     }
     const merged = new Map(items.map(r => [r.id, r]));
+    // 只把"还没落库"的条目（unsaved，等待重试的）补进来。
+    // 不能无条件用 memory 覆盖数据库：别的标签页删除后，本页 memory 仍是旧值，
+    // 会把已删记录重新显示出来（审计第 9 条场景一）。
     for (const [id, r] of memory)
-        merged.set(id, r);
+        if (!merged.has(id) && unsaved.has(id)) merged.set(id, r);
     return [...merged.values()].filter(r => r && typeof r.id === 'string').sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
 }
 export async function deleteRecords(ids: string[]) {
@@ -208,6 +257,8 @@ export async function deleteRecords(ids: string[]) {
         for (const id of removed) { memory.delete(id); unsaved.delete(id); rejectedIds.add(id); }
         capacityProblem = '';
         if (!unsaved.size) problem = '';
+        // 通知其它标签页：这些 id 已删，别再显示、也别让迟到写入复活
+        if (removed.length) broadcastDeleted(removed);
         changed();
     });
     writes = deletion.catch(() => { /* 调用方显示删除错误，后续分析保存仍可继续。 */ });
