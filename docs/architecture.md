@@ -24,7 +24,7 @@
 │                                                                  │
 │   main.py（≈3.0k 行）★ 组合根                                     │
 │     · 配置常量 / CSV 加载 / 数据索引                              │
-│     · 18 个 HTTP handler                                          │
+│     · 17 个业务接口 + /api/download/reports 静态挂载               │
 │     · 工具注册表 TOOLS + 意图分发                                 │
 │     · 报告 / 方案 / 空间 / LLM 包装                               │
 │                                                                  │
@@ -112,7 +112,7 @@ data/spectrum_7d.csv ──load_spectrum()──► _SPEC{df, bands, min_ts, max
 
 ## 6. 已知约束与风险
 
-### R1　`main.py` 是单体（≈3.7k 行，18 个 handler + 组合根）
+### R1　`main.py` 是单体（≈3.7k 行，17 个业务接口 + 报告挂载 + 组合根）
 
 一个文件同时承担：配置、加载索引、HTTP、业务编排、工具注册、LLM 包装。
 
