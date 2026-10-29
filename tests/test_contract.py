@@ -510,6 +510,38 @@ def test_forecast_analyze_respects_enable_llm():
         main.llm_agent.LLM_API_KEY = original_key
 
 
+def test_forecast_id_is_unique_per_full_context():
+    """预测标识必须唯一且确定性（审计 10-29 六-1）。
+
+    原先：① 小数分钟（30.1/30.9）被 int() 成 30，两轮不同请求撞同一 ID；
+         ② md5 截断 8 位，理论上可构造碰撞 → 合法旧结果被覆盖后无法研判。
+    现在：只接受整数分钟；哈希用完整 32 位。
+    """
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+
+    def preview(h, start=hs, end=he):
+        return main.forecast_preview(main.ForecastPreviewRequest(
+            scenario=SCENARIO, baseTime=base,
+            history=main._TimeRange(start=start, end=end), horizonMinutes=h))
+
+    # 小数分钟 → 明确拒绝（不再静默取整）
+    for bad in (30.1, 30.9):
+        r = preview(bad)
+        assert r.get("code") == 40002, (bad, r.get("code"))
+        assert "整数分钟" in str(r.get("message"))
+
+    # 整数正常，且同上下文可复现
+    first = _data(preview(30))
+    again = _data(preview(30))
+    assert first["id"] == again["id"]
+    # 完整哈希：ID 里带 32 位十六进制
+    digest = first["id"].rsplit("_", 1)[-1]
+    assert len(digest) == 32, digest
+    # 不同历史范围 → 不同 ID；同基准不同时长 → 不同 ID
+    assert _data(preview(30, "2026-01-02 13:28:00", "2026-01-02 14:06:00"))["id"] != first["id"]
+    assert _data(preview(60))["id"] != first["id"]
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 

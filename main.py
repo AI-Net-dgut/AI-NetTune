@@ -2970,6 +2970,13 @@ def forecast_preview(req: ForecastPreviewRequest):
         return error_response(ERROR_CODE["PARAM_INVALID"], "baseTime 格式应为 yyyy-MM-dd HH:mm:ss")
     if req.horizonMinutes <= 0 or req.horizonMinutes > 1440:
         return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "horizonMinutes 需在 1~1440 分钟之间")
+    # 只接受整数分钟（审计 10-29 六-1）：30.1 与 30.9 在下面会被 int() 成 30，
+    # 两轮不同的请求拿到同一个预测标识，语义上不该发生。明确拒绝而不是静默取整。
+    if abs(req.horizonMinutes - round(req.horizonMinutes)) > 1e-9:
+        return error_response(
+            ERROR_CODE["PARAM_INVALID"],
+            f"horizonMinutes 必须是整数分钟（收到 {req.horizonMinutes}）；"
+            f"小数分钟会与相邻整数取整后撞成同一轮预测")
 
     # 历史窗口必须整体落在基准之前（防未来数据混入）。
     # 原先没有这条校验：实测 baseTime=13:30 却传 history=13:35~14:35 时接口照常返回 ready，
@@ -2994,10 +3001,12 @@ def forecast_preview(req: ForecastPreviewRequest):
     # 拿到的是 120 分钟那轮的风险（唐苗检测报告第 1 条）。
     #
     # 哈希必须**确定性**（审计 5.1）：内置 hash() 每个进程加盐、又被截断到 5 位，
-    # 同上下文重启后 ID 会变、不同上下文也可能撞。改用 md5 全上下文取 8 位十六进制。
+    # 同上下文重启后 ID 会变、不同上下文也可能撞。
+    # 现在用**完整 md5**（32 位十六进制）而不是截断 8 位：审计 10-29 六-1 指出
+    # 截断后仍可构造碰撞，导致合法旧结果被新一轮覆盖后无法研判。
     _ctx_raw = "|".join((req.scenario, req.baseTime, req.history.start,
                          req.history.end, str(int(req.horizonMinutes))))
-    _ctx_key = hashlib.md5(_ctx_raw.encode("utf-8")).hexdigest()[:8]
+    _ctx_key = hashlib.md5(_ctx_raw.encode("utf-8")).hexdigest()
     fid = (f"FC_{base_dt.strftime('%Y%m%d%H%M%S')}"
            f"_{int(req.horizonMinutes)}m_{_ctx_key}")
     fore_end = base_dt + timedelta(minutes=req.horizonMinutes)
