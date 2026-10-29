@@ -394,6 +394,7 @@ export async function simulatePlan(scope: QueryScope, plan: TreatmentPlan, value
 export interface ForecastPlansPayload {
   plans: TreatmentPlan[];
   risk: { ap: string; type: string; start: string; end: string; title: string; severity?: string } | null;
+  basis?: unknown;
   basisWindow?: { start: string; end: string };
   disclaimer?: string;
   message?: string;

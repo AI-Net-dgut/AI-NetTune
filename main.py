@@ -1201,6 +1201,20 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                 continue
             _merged.append(_s)
         _spans = sorted(_merged, key=lambda x: (x["start"], x["end"]))
+    # 第三类触发事实：**KPI 判据**（非标签、非频谱门槛）。
+    # 审计 10-29 第 4 项：6 行采样窗口 RSRP -106.07 / SINR -10.64 已判覆盖故障，
+    # 但标签全 normal、频谱未达门槛 → 区间为空、current_state=normal，三者互斥。
+    # 既然故障结论确实由本窗口的 KPI 触发，就把本窗口登记为"KPI 判据异常区间"，
+    # 让结论、状态与区间来自同一事实。
+    if findings and not _spans:
+        _ap0 = findings[0].get("ap_id") or "AP"
+        _type0 = ("weak_coverage" if findings[0].get("network_status") == "weak_coverage"
+                  else "congestion" if findings[0].get("network_status") == "congestion" else "weak_coverage")
+        _spans = [{"ap_id": _ap0, "type": _type0,
+                   "start": window_start, "end": window_end,
+                   "minutes": max(1, int((datetime.strptime(window_end, "%Y-%m-%d %H:%M:%S")
+                                          - datetime.strptime(window_start, "%Y-%m-%d %H:%M:%S")).total_seconds() // 60) + 1),
+                   "source": "kpi"}]
     _last_anomaly_at = _spans[-1]["end"] if _spans else None
     _RECOVER_GRACE_SEC = 600   # 10 分钟：数据是分钟级且故障有 ramp-out，5 分钟太紧
     if is_anomaly and _last_anomaly_at:
@@ -1317,6 +1331,22 @@ def plan_simulate(req: PlanSimulateRequest):
     if req.scenario not in VALID_SCENARIOS:
         return error_response(ERROR_CODE["PARAM_INVALID"],
                               "scenario仅支持" + "/".join(VALID_SCENARIOS))
+    # 预测来源方案必须绑定自己的依据（审计 10-29 第 9 项）：
+    # 否则可以手工改请求，用"预测方案"去读基准之后真实数据、或换到别的 AP 上评估。
+    _basis = plan.get("basis") or {}
+    if plan.get("origin") == "forecast" and _basis:
+        _bw = _basis.get("basisWindow") or {}
+        if _bw.get("start") and (req.window_start != _bw["start"] or req.window_end != _bw["end"]):
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"该方案来自预测风险，评估窗口固定为预测基准前的实测窗口 "
+                f"{_bw['start']} ~ {_bw['end']}，不接受 {req.window_start} ~ {req.window_end}")
+        _expect_ap = (_basis.get("risk") or {}).get("ap")
+        _given_ap = req.ap_id or (plan.get("objectIds") or [None])[0]
+        if _expect_ap and _given_ap and _given_ap != _expect_ap:
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"该方案针对 {_expect_ap}，不能在 {_given_ap} 上评估")
     if req.window_start > req.window_end:
         return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "起始时间不能晚于结束时间")
 
@@ -3365,6 +3395,13 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
             f"预测记录 {req.forecastId} 不存在或已过期（服务重启、或缓存超出 "
             f"{_FORECAST_CACHE_LIMIT} 轮被淘汰）。请重新执行一次预测后再研判，"
             f"不要把\"拿不到结果\"当成\"没有风险\"。")
+    # 缓存存在但状态是 insufficient_data（同一分支的另一半，审计 10-29 第 7 项）：
+    # 这轮预测本身没有足够数据，不能因为 alerts 为空就说"没有风险"。
+    if str(cached.get("status") or "") == "insufficient_data":
+        return error_response(
+            ERROR_CODE["PARAM_OUT_OF_RANGE"],
+            f"该轮预测数据不足（{cached.get('message') or '基准时刻超出频谱数据覆盖范围'}），"
+            f"不能据此研判；请把基准时刻移回数据覆盖范围内重新预测。")
     # 预测记录与请求上下文必须一致：防止拿 A 轮的记录回答 B 轮的时段/场景/范围
     if cached:
         _cb = cached.get("baseTime")
@@ -3394,14 +3431,29 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
                 f"预测记录 {req.forecastId} 的预测范围是 {_cf['start']} ~ {_cf['end']}，"
                 f"与请求的 {req.forecast.start} ~ {req.forecast.end} 不一致；"
                 f"要问别的范围请重新执行预测")
-        # 关注时段必须落在这轮预测覆盖范围内（审计第 5 条：17:00~18:00 也回答了"未达门槛"）
+        # 关注时段必须**完整落在**本轮预测范围内（审计 10-29 第 8 项：
+        # 部分越界 16:00~18:00、起止反向 15:50~14:40 原先都会被接受）
         _tw = req.targetWindow
-        if _tw is not None and _cf.get("start") and _cf.get("end"):
-            if _tw.start > _cf["end"] or _tw.end < _cf["start"]:
+        if _tw is not None:
+            if _tw.start >= _tw.end:
+                return error_response(
+                    ERROR_CODE["PARAM_INVALID"],
+                    f"关注时段起止反向（{_tw.start} >= {_tw.end}），请检查")
+            if _tw.start < _cf["start"] or _tw.end > _cf["end"]:
                 return error_response(
                     ERROR_CODE["PARAM_OUT_OF_RANGE"],
-                    f"关注时段 {_tw.start} ~ {_tw.end} 不在本轮预测范围 "
-                    f"{_cf['start']} ~ {_cf['end']} 内，无法判断；请先重新预测覆盖该时段")
+                    f"关注时段 {_tw.start} ~ {_tw.end} 未完整落在本轮预测范围 "
+                    f"{_cf['start']} ~ {_cf['end']} 内，无法对整个时段下结论；"
+                    f"请缩短时段或延长预测时长后重新预测")
+        # alertId 与关注时段冲突：选中的风险不在所问时段内 → 拒绝（不能拿窗外风险回答窗内）
+        if req.alertId and _tw is not None:
+            _picked = next((a for a in (cached.get("alerts") or []) if a.get("id") == req.alertId), None)
+            if _picked and not ((_picked.get("start") or "") <= _tw.end
+                                and (_picked.get("end") or "") >= _tw.start):
+                return error_response(
+                    ERROR_CODE["PARAM_INVALID"],
+                    f"所选风险 {req.alertId}（{_picked.get('start')} ~ {_picked.get('end')}）"
+                    f"与关注时段 {_tw.start} ~ {_tw.end} 没有交集，请调整时段或改选风险")
     alert_detail = None
     if req.alertId:
         for a in cached.get("alerts", []):
@@ -3633,6 +3685,11 @@ def forecast_plans(req: ForecastPlanRequest):
             ERROR_CODE["PARAM_OUT_OF_RANGE"],
             f"预测记录 {req.forecastId} 不存在或已过期（服务重启、或缓存超出 {_FORECAST_CACHE_LIMIT} 轮被淘汰）。"
             f"请重新执行一次预测后再生成方案。")
+    if str(cached.get("status") or "") == "insufficient_data":
+        return error_response(
+            ERROR_CODE["PARAM_OUT_OF_RANGE"],
+            f"该轮预测数据不足（{cached.get('message') or '基准时刻超出频谱数据覆盖范围'}），"
+            f"不能据此生成方案。")
     if cached.get("baseTime") and cached["baseTime"] != req.baseTime:
         return error_response(ERROR_CODE["PARAM_INVALID"],
                               f"预测记录 {req.forecastId} 的基准时刻是 {cached['baseTime']}，与请求的 {req.baseTime} 不一致")
@@ -3647,6 +3704,18 @@ def forecast_plans(req: ForecastPlanRequest):
     if _cf.get("start") and (_cf["start"] != req.forecast.start or _cf["end"] != req.forecast.end):
         return error_response(ERROR_CODE["PARAM_INVALID"],
                               f"预测记录 {req.forecastId} 的预测范围是 {_cf['start']} ~ {_cf['end']}，与请求不一致")
+    # 目标时段必须**完整落在**预测范围内，且起止不能反向（审计 10-29 第 8 项：
+    # 新方案接口原先对 16:00~18:00 这种部分越界仍返回"该时段没有风险"）
+    _tw = req.targetWindow
+    if _tw is not None:
+        if _tw.start >= _tw.end:
+            return error_response(ERROR_CODE["PARAM_INVALID"],
+                                  f"关注时段起止反向（{_tw.start} >= {_tw.end}），请检查")
+        if _cf.get("start") and (_tw.start < _cf["start"] or _tw.end > _cf["end"]):
+            return error_response(
+                ERROR_CODE["PARAM_OUT_OF_RANGE"],
+                f"关注时段 {_tw.start} ~ {_tw.end} 未完整落在本轮预测范围 {_cf['start']} ~ {_cf['end']} 内，"
+                f"无法对整个时段生成方案；请缩短时段或延长预测时长后重新预测")
 
     alerts = cached.get("alerts") or []
     if not alerts:

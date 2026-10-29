@@ -242,11 +242,12 @@ export async function listRecords(): Promise<HistoryRecord[]> {
         problem = '暂时无法读取本地记录，请重试；当前未保存内容仍可导出。';
     }
     const merged = new Map(items.map(r => [r.id, r]));
-    // 只把"还没落库"的条目（unsaved，等待重试的）补进来。
-    // 不能无条件用 memory 覆盖数据库：别的标签页删除后，本页 memory 仍是旧值，
-    // 会把已删记录重新显示出来（审计第 9 条场景一）。
+    // 未落库（unsaved）的版本**覆盖**数据库里的旧版本：
+    // 典型场景是 pending 已入库、completed 更新失败（QuotaExceeded）——
+    // 若让数据库旧行胜出，用户看到的和导出的都是旧 pending（审计 10-29 第 5 项）。
+    // 其它记录仍以数据库为准（别的标签页删除后不能靠 memory 复活）。
     for (const [id, r] of memory)
-        if (!merged.has(id) && unsaved.has(id)) merged.set(id, r);
+        if (unsaved.has(id)) merged.set(id, r);
     return [...merged.values()].filter(r => r && typeof r.id === 'string').sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
 }
 export async function deleteRecords(ids: string[]) {

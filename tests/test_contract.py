@@ -391,6 +391,87 @@ def test_forecast_plans_generates_plans_with_basis():
     assert sim.get("code") == 0
 
 
+def test_forecast_context_boundaries_are_enforced():
+    """预测后续接口的边界（审计 10-29 第 7、8、9 项）。
+
+    覆盖：数据不足的缓存 / 目标部分越界 / 起止反向 / alertId 与时段冲突 /
+    预测来源方案的仿真绑定（窗口与 AP）。
+    """
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+    prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
+    fc = (prev["forecast"]["start"], prev["forecast"]["end"])
+    alert_id = (prev.get("alerts") or [{}])[0].get("id")
+
+    def analyze(tw=None, alert=None):
+        return main.forecast_analyze(main.ForecastAnalyzeRequest(
+            forecastId=prev["id"], scenario=SCENARIO, baseTime=base, alertId=alert,
+            history=main._TimeRange(start=hs, end=he),
+            forecast=main._TimeRange(start=fc[0], end=fc[1]),
+            targetWindow=(main._TimeRange(start=tw[0], end=tw[1]) if tw else None)))
+
+    def plans(tw=None, alert=None):
+        return main.forecast_plans(main.ForecastPlanRequest(
+            forecastId=prev["id"], scenario=SCENARIO, baseTime=base,
+            history=main._TimeRange(start=hs, end=he),
+            forecast=main._TimeRange(start=fc[0], end=fc[1]), alertId=alert,
+            targetWindow=(main._TimeRange(start=tw[0], end=tw[1]) if tw else None)))
+
+    # 目标部分越界 / 起止反向 / alertId 与时段冲突
+    assert analyze(tw=("2026-01-02 16:00:00", "2026-01-02 18:00:00")).get("code") == 40003
+    assert plans(tw=("2026-01-02 16:00:00", "2026-01-02 18:00:00")).get("code") == 40003
+    assert analyze(tw=("2026-01-02 15:50:00", "2026-01-02 14:40:00")).get("code") == 40002
+    assert plans(tw=("2026-01-02 15:50:00", "2026-01-02 14:40:00")).get("code") == 40002
+    assert analyze(tw=("2026-01-02 14:15:00", "2026-01-02 14:20:00"), alert=alert_id).get("code") == 40002
+
+    # 数据不足的缓存：不能解释成"没有风险"
+    p8 = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime="2026-01-08 12:00:00",
+        history=main._TimeRange(start="2026-01-08 11:00:00", end="2026-01-08 12:00:00"),
+        horizonMinutes=60)))
+    assert p8["status"] == "insufficient_data"
+    for call in (
+        main.forecast_analyze(main.ForecastAnalyzeRequest(
+            forecastId=p8["id"], scenario=SCENARIO, baseTime=p8["baseTime"], alertId=None,
+            history=main._TimeRange(start=p8["history"]["start"], end=p8["history"]["end"]),
+            forecast=main._TimeRange(start=p8["forecast"]["start"], end=p8["forecast"]["end"]))),
+        main.forecast_plans(main.ForecastPlanRequest(
+            forecastId=p8["id"], scenario=SCENARIO, baseTime=p8["baseTime"],
+            history=main._TimeRange(start=p8["history"]["start"], end=p8["history"]["end"]),
+            forecast=main._TimeRange(start=p8["forecast"]["start"], end=p8["forecast"]["end"]))),
+    ):
+        assert call.get("code") == 40003, call
+        assert "数据不足" in str(call.get("message"))
+
+    # 预测来源方案：仿真必须绑定依据窗口与 AP
+    plan = _data(plans())["plans"][0]
+    assert main.plan_simulate(main.PlanSimulateRequest(
+        plan_id=plan["id"], scenario=SCENARIO,
+        window_start=fc[0], window_end=fc[1], parameter_values={})).get("code") == 40002
+    assert main.plan_simulate(main.PlanSimulateRequest(
+        plan_id=plan["id"], scenario=SCENARIO,
+        window_start=hs, window_end=he, ap_id="AP-01", parameter_values={})).get("code") == 40002
+    assert main.plan_simulate(main.PlanSimulateRequest(
+        plan_id=plan["id"], scenario=SCENARIO,
+        window_start=hs, window_end=he, parameter_values={})).get("code") == 0
+
+
+def test_kpi_only_fault_has_consistent_state_and_span():
+    """KPI 触发故障时，状态与区间必须与结论一致（审计 10-29 第 4 项）。
+
+    真实反例：AP-01 01-06 10:12~10:13，6 行采样、标签全 normal、
+    RSRP -106.07 / SINR -10.64 → 判覆盖故障，却返回 current_state=normal、spans=[]。
+    """
+    d = _data(main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-06 10:12:00", window_end="2026-01-06 10:13:00",
+        ap_id="AP-01")))
+    assert d["is_anomaly"] is True
+    assert d["anomaly_spans"], "判故障却没有异常区间"
+    assert d["current_state"] != "normal"
+    assert d["last_anomaly_at"] is not None
+    assert any(s.get("source") == "kpi" for s in d["anomaly_spans"])
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 

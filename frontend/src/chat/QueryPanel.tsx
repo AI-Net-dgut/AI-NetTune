@@ -189,7 +189,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
       </section>
       {forecastMode ? <section className="ain-ai-management-empty" aria-label="预测处理方案与仿真">
         <h3>预测处理方案与仿真</h3>
-        <p>本次预测暂未提供可操作方案与仿真结果。以上建议为文字研判，尚未经过配置参数仿真评估。</p>
+        <p>预测风险的处置方案在**上方「预测风险研判」卡片内**（「生成处置方案」按钮）：方案、参数与效果评估都在那里，评估窗口是预测基准前的实测窗口，不是预测时段实测。</p>
+        <p>本区域只对应现存网络异常的研判；两者不要混看。</p>
       </section> : data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
         diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans}
         sourceQuestion={diagnosisQuestion} pending={query.pending} archiveParentId={query.archiveId} />

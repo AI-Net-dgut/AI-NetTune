@@ -1,29 +1,36 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchForecastPlans, simulatePlan } from "../services/backend";
+import { record } from "../history/store";
 import type { SimulationResult, TreatmentPlan } from "../types/plan";
+import { METRIC_META } from "../types/backend";
 import type { ForecastHandoff } from "./types";
 
-// 指标中文名/单位（与 diagnosisPresentation 保持一致的四个口径）
-const METRIC_TEXT: Record<string, { label: string; unit: string }> = {
-  rsrp: { label: "RSRP", unit: "dBm" },
-  sinr: { label: "SINR", unit: "dB" },
-  throughput: { label: "吞吐量", unit: "Mbps" },
-  prb_usage: { label: "PRB 利用率", unit: "%" },
+/**
+ * 预测风险 → 处置方案（审计第 6 条 / 10-29 审计第 1、2、6 项）。
+ *
+ * 三条硬约束（对应审计验收标准）：
+ *  1. **版本隔离**：结果必须绑定"发起时的方案 + 参数"；期间改参数或换方案，
+ *     旧响应直接丢弃（不是"清空界面再被旧响应覆盖"）。
+ *  2. **必须归档**：生成方案、每次仿真都写入分析记录，挂在预测研判记录下，
+ *     刷新/导出后仍能对上"问题—方案—参数—效果"。
+ *  3. **不许含糊**：工参基线标"默认模板（非实测）"，指标用 METRIC_META 的中文与单位，
+ *     枚举参数用下拉框，方法/假设/限制原样展示。
+ */
+const sameValues = (a: Record<string, string>, b: Record<string, string>) =>
+  Object.keys({ ...a, ...b }).every(k => String(a[k] ?? "") === String(b[k] ?? ""));
+
+type SimState = {
+  pending: boolean;
+  // 结果连同"发起时"的输入一起存，用于判断是否仍对应当前方案/参数
+  result: SimulationResult | null;
+  forPlanId: string;
+  inputValues: Record<string, string>;
+  error: string;
 };
 
-/**
- * 预测风险 → 处置方案（审计第 6 条）。
- *
- * 为什么单独做一块 UI 而不是塞进「处理建议与效果」：
- * 那块区域对应**现存网络异常**的研判，如果把预测方案放进去，用户会以为
- * 下面这套参数/仿真就是"当前故障的方案"，这正是审计指出的误导来源。
- *
- * 因此这里显式做三件事：
- *   1. 标题写清"来自预测风险"，并重复风险时段；
- *   2. 方案依据（basisWindow）与免责说明**必须显示**，不能折叠隐藏；
- *   3. 仿真按钮文案写明"在预测基准前的实测窗口评估"，不写"预测效果"。
- */
-export default function ForecastPlans({ handoff }: { handoff: ForecastHandoff }) {
+const EMPTY_SIM: SimState = { pending: false, result: null, forPlanId: "", inputValues: {}, error: "" };
+
+export default function ForecastPlans({ handoff, parentId }: { handoff: ForecastHandoff; parentId?: string }) {
   const { result, alertId, targetWindow } = handoff;
   const [state, setState] = useState<{
     pending: boolean;
@@ -32,12 +39,21 @@ export default function ForecastPlans({ handoff }: { handoff: ForecastHandoff })
   }>({ pending: false, payload: null, error: "" });
   const [selectedId, setSelectedId] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
-  const [sim, setSim] = useState<{ pending: boolean; result: SimulationResult | null; error: string }>(
-    { pending: false, result: null, error: "" });
+  const [sim, setSim] = useState<SimState>(EMPTY_SIM);
+  // 每次发起评估或修改输入都自增；响应回来时代号不一致即丢弃
+  const simSeq = useRef(0);
+
+  // 改动输入即作废在途请求与已有结果（审计第 1 项的核心）
+  const invalidate = () => {
+    simSeq.current += 1;
+    setSim(EMPTY_SIM);
+  };
+
+  useEffect(() => () => { simSeq.current += 1; }, []);
 
   const load = async () => {
     setState({ pending: true, payload: null, error: "" });
-    setSim({ pending: false, result: null, error: "" });
+    invalidate();
     try {
       const payload = await fetchForecastPlans({
         forecastId: result.id, scenario: result.scenario, baseTime: result.baseTime,
@@ -49,30 +65,73 @@ export default function ForecastPlans({ handoff }: { handoff: ForecastHandoff })
       if (first) {
         setSelectedId(first.id);
         setValues(Object.fromEntries(first.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])));
+        archivePlan(first, payload);
       }
     } catch (reason) {
       setState({ pending: false, payload: null, error: reason instanceof Error ? reason.message : "方案生成失败" });
     }
   };
 
+  /** 归档：生成方案 / 每次仿真都写记录，挂在预测研判记录下（审计第 2 项）。 */
+  const archivePlan = (plan: TreatmentPlan, payload: NonNullable<typeof state.payload>,
+    extra?: { values: Record<string, string>; sim?: SimulationResult; action: string; error?: string }) => {
+    if (!parentId) return;                       // 没有父记录就不写，避免出现孤立条目
+    const scope = payload.basisWindow ?? { start: result.history.start, end: result.history.end };
+    record({
+      kind: "parameters", parentId,
+      question: `预测方案 · ${payload.risk?.ap ?? ""} ${payload.risk?.type ?? ""}`.trim(),
+      scope: { scenario: result.scenario, start: scope.start, end: scope.end },
+      analysisTime: result.baseTime, status: "completed",
+      payload: { plan, action: extra?.action ?? "生成预测处置方案", values: extra?.values, forecast: payload.basis ?? payload.risk },
+    });
+    if (extra?.sim) {
+      record({
+        kind: "simulation", parentId,
+        question: `预测方案效果 · ${plan.name}`,
+        scope: { scenario: result.scenario, start: scope.start, end: scope.end },
+        analysisTime: result.baseTime, status: extra.error ? "failed" : "completed",
+        payload: { plan, values: extra.values, result: extra.sim, error: extra.error, inputAt: new Date().toISOString() },
+      });
+    }
+  };
+
+  const choose = (plan: TreatmentPlan) => {
+    setSelectedId(plan.id);
+    setValues(Object.fromEntries(plan.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])));
+    invalidate();
+    if (state.payload) archivePlan(plan, state.payload, { values: Object.fromEntries(plan.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])), action: "选择预测方案" });
+  };
+
   const selected: TreatmentPlan | undefined = state.payload?.plans.find(p => p.id === selectedId);
   const runSim = async () => {
     if (!selected || !state.payload?.basisWindow) return;
-    setSim({ pending: true, result: null, error: "" });
+    const seq = ++simSeq.current;
+    // 闭包里的 values/selectedId 就是"点击这一下时的输入"，正是要绑定的版本
+    const inputValues = { ...values };
+    const planId = selected.id;
+    setSim({ pending: true, result: null, forPlanId: planId, inputValues, error: "" });
     try {
-      // 关键：窗口用 basisWindow（预测基准前的实测窗口），不是预测目标时段
       const scope = { scenario: result.scenario, start: state.payload.basisWindow.start, end: state.payload.basisWindow.end };
-      const r = await simulatePlan(scope, selected, values, selected.objectIds[0] ?? "");
-      setSim({ pending: false, result: r, error: "" });
+      const r = await simulatePlan(scope, selected, inputValues, selected.objectIds[0] ?? "");
+      if (seq !== simSeq.current) return;       // 期间改过参数/换过方案 → 丢弃旧响应
+      setSim({ pending: false, result: r, forPlanId: planId, inputValues, error: "" });
+      if (r) archivePlan(selected, state.payload, { values: inputValues, sim: r, action: "预测方案仿真" });
     } catch (reason) {
-      setSim({ pending: false, result: null, error: reason instanceof Error ? reason.message : "仿真失败" });
+      if (seq !== simSeq.current) return;
+      const text = reason instanceof Error ? reason.message : "仿真失败";
+      setSim({ pending: false, result: null, forPlanId: planId, inputValues, error: text });
+      archivePlan(selected, state.payload, { values: inputValues, action: "预测方案仿真", error: text });
     }
   };
+
+  // 只有"结果对应的方案与参数仍是当前值"才展示（旧结果明确标注作废）
+  const resultIsCurrent = Boolean(sim.result) && sim.forPlanId === selectedId && sameValues(sim.inputValues, values);
+  const baseline = state.payload?.basisWindow;
 
   return <section className="ain-forecast-plans" aria-label="预测风险处置方案">
     <header><strong>预测风险的处置方案</strong><span>{result.alerts.find(a => a.id === alertId)?.target ?? "整体预测"}</span></header>
     <p className="ain-ai-note">
-      这里的方案**只来自本轮预测的风险**，与「处理建议与效果」里的现存问题方案相互独立。
+      这些方案**只来自本轮预测的风险**，与「处理建议与效果」里的现存问题方案相互独立。
     </p>
     {!state.payload && !state.pending && !state.error &&
       <button type="button" className="ain-button" onClick={() => void load()}>生成处置方案</button>}
@@ -87,35 +146,47 @@ export default function ForecastPlans({ handoff }: { handoff: ForecastHandoff })
           {state.payload.plans.map(p => <li key={p.id}>
             <label>
               <input type="radio" name={`forecast-plan-${result.id}`} checked={p.id === selectedId}
-                onChange={() => { setSelectedId(p.id); setSim({ pending: false, result: null, error: "" });
-                  setValues(Object.fromEntries(p.parameters.map(x => [x.id, String(x.suggestedValue ?? "")]))); }} />
+                onChange={() => choose(p)} />
               <strong>{p.name}</strong>{p.description ? ` · ${p.description}` : ""}
             </label>
           </li>)}
         </ul>
         {selected && <div className="ain-forecast-plans-params">
-          <p>参数（基线来自 {state.payload.basisWindow?.start} ~ {state.payload.basisWindow?.end} 的实测）</p>
+          <p>
+            参数基线：<strong>默认工参模板</strong>（倾角/功率为模板默认值，<strong>不是</strong> CSV 实测配置）；
+            KPI 与效果评估取自 {baseline?.start} ~ {baseline?.end} 的历史实测窗口。
+          </p>
           {selected.parameters.map(p => <label key={p.id}>
             <span>{p.label}{p.unit ? `（${p.unit}）` : ""}</span>
-            <input value={values[p.id] ?? ""} onChange={e => { setValues(v => ({ ...v, [p.id]: e.target.value })); setSim({ pending: false, result: null, error: "" }); }} />
-            <small>当前 {String(p.currentValue ?? "-")} · 建议 {String(p.suggestedValue ?? "-")}</small>
+            {p.type === "enum" && p.options?.length
+              ? <select value={values[p.id] ?? ""} onChange={e => { setValues(v => ({ ...v, [p.id]: e.target.value })); invalidate(); }}>
+                {p.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              : <input value={values[p.id] ?? ""} onChange={e => { setValues(v => ({ ...v, [p.id]: e.target.value })); invalidate(); }} />}
+            <small>当前 {String(p.currentValue ?? "-")}{p.unit ?? ""} · 建议 {String(p.suggestedValue ?? "-")}{p.unit ?? ""}</small>
           </label>)}
           <button type="button" className="ain-button" disabled={sim.pending} onClick={() => void runSim()}>
             {sim.pending ? "正在评估…" : "在预测基准前的实测窗口评估"}
           </button>
-          <p className="ain-ai-note">评估用的是基准前的实测数据，**不是**预测时段的实测结果。</p>
+          <p className="ain-ai-note">评估用的是基准前的实测数据，**不是**预测时段的实测结果；改参数或换方案会作废上一次结果。</p>
         </div>}
         {sim.error && <p role="alert">{sim.error}</p>}
-        {sim.result && <div className="ain-forecast-plans-sim">
+        {sim.result && !resultIsCurrent && <p className="ain-ai-note" role="status">
+          参数或方案已变更，上一次评估结果（{sim.inputValues && Object.keys(sim.inputValues).length ? JSON.stringify(sim.inputValues) : "旧参数"}）已作废，请重新评估。
+        </p>}
+        {sim.result && resultIsCurrent && <div className="ain-forecast-plans-sim">
           <p><strong>{sim.result.summary || "评估完成"}</strong></p>
           <ul>{sim.result.metrics.map(m => {
-            const text = METRIC_TEXT[m.key] ?? { label: m.key, unit: "" };
+            const meta = METRIC_META[m.key] ?? { label: String(m.key), unit: "" };
             const delta = m.before !== null && m.after !== null ? Number((m.after - m.before).toFixed(2)) : null;
             return <li key={`${m.key}-${m.objectId}`}>
-              {text.label}：{m.before ?? "—"} → {m.after ?? "—"} {text.unit}
-              {delta !== null ? `（${delta > 0 ? "+" : ""}${delta}${text.unit}）` : ""}
+              {meta.label}（{m.objectId}）：{m.before ?? "—"} → {m.after ?? "—"} {meta.unit}
+              {delta !== null ? `（${delta > 0 ? "+" : ""}${delta}${meta.unit}）` : ""}
             </li>;
           })}</ul>
+          {sim.result.method && <p className="ain-ai-note">方法：{sim.result.method}</p>}
+          {sim.result.assumptions?.length ? <p className="ain-ai-note">假设：{sim.result.assumptions.join("；")}</p> : null}
+          {sim.result.limitations?.length ? <p className="ain-ai-note">限制：{sim.result.limitations.join("；")}</p> : null}
         </div>}
       </>}
     </>}
