@@ -9,7 +9,9 @@ export type HistoryTimeResult = { kind: "none" } | { kind: "error"; message: str
 
 // 只声明能明确处理的时间表达式；不把“方案需要30分钟”等预计代价当作历史窗口。
 export function hasHistoryTimeHint(message: string): boolean {
-  return /\d{1,2}[:：]\d{2}|\d{1,2}点|昨天|前天|昨日|前日|今天|今日|(?<![A-Za-z0-9])\d{1,2}[-/]\d{1,2}(?![A-Za-z0-9])|(?:最近|过去|近|前)\s*(?:\d+(?:\.\d+)?|半|[一二两三四五六七八九十]个?)\s*(?:小时|分钟|天)|\d{1,2}月\d{1,2}日|\d{4}[-/]\d{1,2}[-/]\d{1,2}|(?:\d+(?:\.\d+)?|半)\s*(?:小时|分钟|天)前|上周|上个月/.test(message);
+  // 10-29 审计第 3 项：中文数词与"个"也算历史时间提示（"三个小时前"/"半个小时前"原先识别不到，
+  // 会静默沿用原有窗口，等于答非所问）。
+  return /\d{1,2}[:：]\d{2}|\d{1,2}点|昨天|前天|昨日|前日|今天|今日|(?<![A-Za-z0-9])\d{1,2}[-/]\d{1,2}(?![A-Za-z0-9])|(?:最近|过去|近|前)\s*(?:\d+(?:\.\d+)?|半|[一二两三四五六七八九十])\s*(?:个)?\s*(?:小时|分钟|天)|\d{1,2}月\d{1,2}日|\d{4}[-/]\d{1,2}[-/]\d{1,2}|(?:\d+(?:\.\d+)?|半|[一二两三四五六七八九十])\s*(?:个)?\s*(?:小时|分钟|天)\s*前|上周|上个月/.test(message);
 }
 export function resolveHistoryQuestion(message: string, context: HistoryTimeContext): HistoryTimeResult {
   if (needsFutureForecast(message)) return { kind: "none" };
@@ -23,7 +25,11 @@ export function resolveHistoryQuestion(message: string, context: HistoryTimeCont
         let h = Number(hour); if (/下午|晚上|傍晚|中午/.test(part) && h > 0 && h < 12) h += 12;
         if (part === "凌晨" && h === 12) h = 0; return `${h}:${rest}`;
       })
-      .replace(/(最近|过去|近|前)\s*([一二两三四五六七八九十])个?\s*(小时|分钟|天)/g, (_all, prefix: string, n: string, unit: string) => `${prefix}${({一:1,二:2,两:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10} as Record<string, number>)[n]}${unit}`);
+      // 中文数词 / "个" / "半小时" 归一成数字，后续规则只处理一种写法（审计 10-29 第 3 项）
+      .replace(/半\s*个?\s*(小时|钟头)/g, "30分钟")
+      .replace(/([一二两三四五六七八九十])\s*个?\s*(小时|钟头|分钟|天)\s*前/g,
+        (_all, n: string, unit: string) => `${({ 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 } as Record<string, number>)[n]}${unit === "钟头" ? "小时" : unit}前`)
+      .replace(/(最近|过去|近|前)\s*([一二两三四五六七八九十])\s*个?\s*(小时|钟头|分钟|天)/g, (_all, prefix: string, n: string, unit: string) => `${prefix}${({一:1,二:2,两:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10} as Record<string, number>)[n]}${unit === "钟头" ? "小时" : unit}`)
     const finish = (a: number, b: number): HistoryTimeResult => {
       if (a > b) return { kind: "error", message: "开始时间晚于结束时间；跨日查询请写明两个日期。" };
       if (a > upper) return { kind: "error", message: "指定时间尚未到达，不能读取未来数据。" };
@@ -62,6 +68,19 @@ export function resolveHistoryQuestion(message: string, context: HistoryTimeCont
       const minute = Math.floor(anchor / 60_000) * 60_000;
       return finish(minute, minute + 59_000);
     };
+    // "最近/过去 X 到 Y前"：一个锚点是相对时长、另一个是相对时点 → 连续窗口
+    // （审计 10-29 第 3 项：原先只取"10分钟前"，把 30 分钟的跨度丢了）
+    const mixed = normalized.match(/(?:最近|过去|近)\s*(半|\d+(?:\.\d+)?)\s*(小时|分钟|天)\s*(?:到|至|~|—|－|–|−|-)\s*(半|\d+(?:\.\d+)?)\s*(小时|分钟|天)\s*前/);
+    if (mixed) {
+      if (tokens.length || dates.length || relativeDays.size)
+        return { kind: "error", message: "多个时间锚点不明确，请直接写出起止时间。" };
+      const toMs = (amount: string, unit: string) =>
+        (amount === "半" ? 0.5 : Number(amount)) * (unit === "天" ? 86400_000 : unit === "小时" ? 3600_000 : 60_000);
+      const a = master - toMs(mixed[1], mixed[2]);
+      const b = master - toMs(mixed[3], mixed[4]);
+      if (a >= b) return { kind: "error", message: "开始时间需要早于结束时间（例如“过去30分钟到10分钟前”）。" };
+      return finish(a, b);
+    }
     // "X前到Y前"：两个相对锚点组成一个连续窗口（审计第 2 条）。
     // 原实现只取第一个"X前"，把"30分钟前到10分钟前"解析成 11:30–11:30:59 的一分钟，
     // 静默丢掉了第二个锚点。这里显式识别成窗口，且支持"个"与中文数词。

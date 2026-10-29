@@ -51,6 +51,26 @@ export function resolveForecastQuestion(message: string, context: ForecastQuesti
         });
     if (/昨天|前天|昨日|前日/.test(normalized)) return fail('未来预测不能把过去日期作为目标；请写明未来日期，参考历史可通过界面设置。');
     if (/下周|下个月|下星期|下一(?:小时|分钟|天|周)|(?:\d+|[零一二两三四五六七八九十百半]+)\s*(?:秒|周|个月)/.test(normalized)) return fail('请写明具体日期和钟点；当前预测最长支持未来24小时。');
+    // 未来区间与两目标（10-29 审计第 3 项）：
+    //   "未来1小时到3小时" → 目标时段 [base+1h, base+3h]，horizon=3h
+    //   "未来一个小时和三个小时" → 明确拒绝（不能静默只取第一个）
+    const AMOUNT = "(\\d+(?:\\.\\d+)?|[零一二两三四五六七八九十百半]+)";
+    const UNIT = "(分钟|小时|天)";
+    const unitMinutes = (u: string) => (u === "天" ? 1440 : u === "小时" ? 60 : 1);
+    const rangeHit = normalized.match(new RegExp(
+      `(?:未来|接下来(?:的)?|往后|预测(?:未来)?)\\s*${AMOUNT}\\s*(?:个)?\\s*${UNIT}\\s*(?:到|至|~|—|－|–|−|-)\\s*${AMOUNT}\\s*(?:个)?\\s*${UNIT}`));
+    if (rangeHit) {
+      const a = chineseNumber(rangeHit[1]) * unitMinutes(rangeHit[2]);
+      const b = chineseNumber(rangeHit[3]) * unitMinutes(rangeHit[4]);
+      if (!(a > 0) || !(b > a))
+        return fail("未来区间需要“开始早于结束”，例如“未来1小时到3小时”。");
+      return horizon(b, { start: formatReplayTime(base + a * 60_000),
+                          end: formatReplayTime(base + b * 60_000) });
+    }
+    const twoHit = normalized.match(new RegExp(
+      `(?:未来|接下来(?:的)?)\\s*${AMOUNT}\\s*(?:个)?\\s*${UNIT}\\s*(?:与|和|、|vs\\.?|VS)\\s*${AMOUNT}\\s*(?:个)?\\s*${UNIT}`));
+    if (twoHit) return fail("一次只支持一个未来时段；两个目标请分别提问，或用“未来A到B”表示区间。");
+
     // 允许中文量词"个"："未来半个小时 / 一个小时 / 三个小时"（审计第 2 条：
     // 这些最常见的中文表达原先一条都匹配不上，直接落回默认 120 分钟）。
     const duration = normalized.match(/(?:未来|接下来(?:的)?|往后|预测(?:未来)?)\s*(\d+(?:\.\d+)?|[零一二两三四五六七八九十百半]+)\s*(?:个)?\s*(分钟|小时|天)/)
