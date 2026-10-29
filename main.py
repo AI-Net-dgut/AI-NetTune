@@ -3562,7 +3562,9 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
     reply = None
     source = "rule"
     try:
-        if llm_agent.LLM_API_KEY:
+        # 必须同时尊重 ENABLE_LLM（NETTUNE_ENABLE_LLM=0 时即使配了 Key 也不调模型）
+        # 审计 10-29 六-6：原先只查 Key，演示时想关掉模型却仍会被调用。
+        if ENABLE_LLM and llm_agent.LLM_API_KEY:
             reply = call_llm_chat(system_prompt, user_message, temperature=0.3)
             if reply:
                 source = "llm"

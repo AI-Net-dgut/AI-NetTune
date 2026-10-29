@@ -36,7 +36,13 @@ def _load_spectrum():
 
 
 def spectrum_hit(spec, ap: str, start: str, end: str) -> bool | None:
-    """该 AP 在窗口内是否出现"≥40/50 频段越阈且连续≥3分钟"。"""
+    """该 AP 在窗口内是否出现"≥40/50 频段越阈且连续≥3分钟"。
+
+    审计 10-29 六-5：原实现把"功率越阈"与"占用率越阈"按分钟做"或"再求连续，
+    于是**弱覆盖 1 分钟 + 拥塞 1 分钟交替**会被算成连续命中，
+    与生产判据（两类各自连续 3 分钟）不一致，影响验收统计。
+    现在两类分别求连续长度，任一达标才算命中。
+    """
     seg = spec[(spec.observation_id == ap) & (spec.timestamp >= start) & (spec.timestamp <= end)]
     if seg.empty:
         return None
@@ -44,12 +50,17 @@ def spectrum_hit(spec, ap: str, start: str, end: str) -> bool | None:
         p=("power_dbm", lambda x: int((x < main.ALERT_WEAK_POWER_DBM).sum())),
         o=("occupancy_pct", lambda x: int((x > main.ALERT_CONGESTION_OCC_PCT).sum())),
     )
-    hit = ((per.p >= MIN_BANDS) | (per.o >= MIN_BANDS)).astype(int)
-    run = best = 0
-    for v in hit:
-        run = run + 1 if v else 0
-        best = max(best, run)
-    return best >= MIN_MINUTES
+
+    def longest_run(flags) -> int:
+        run = best = 0
+        for hit in flags:
+            run = run + 1 if hit else 0
+            best = max(best, run)
+        return best
+
+    weak_type = longest_run((per.p >= MIN_BANDS).astype(int))
+    cong_type = longest_run((per.o >= MIN_BANDS).astype(int))
+    return max(weak_type, cong_type) >= MIN_MINUTES
 
 
 def judge_anomalous(start: str, end: str) -> str:

@@ -472,6 +472,44 @@ def test_kpi_only_fault_has_consistent_state_and_span():
     assert any(s.get("source") == "kpi" for s in d["anomaly_spans"])
 
 
+def test_forecast_analyze_respects_enable_llm():
+    """NETTUNE_ENABLE_LLM=0 时必须走规则研判，即使配了 Key（审计 10-29 六-6）。"""
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+    prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
+
+    calls = {"n": 0}
+    original_chat, original_enable = main.call_llm_chat, main.ENABLE_LLM
+    original_key = main.llm_agent.LLM_API_KEY
+
+    def fake_chat(*a, **kw):
+        calls["n"] += 1
+        return "【LLM】模型回复"
+
+    def ask():
+        return _data(main.forecast_analyze(main.ForecastAnalyzeRequest(
+            forecastId=prev["id"], scenario=SCENARIO, baseTime=base, alertId=None,
+            history=main._TimeRange(start=hs, end=he),
+            forecast=main._TimeRange(start=prev["forecast"]["start"], end=prev["forecast"]["end"]))))
+
+    try:
+        main.call_llm_chat = fake_chat
+        main.llm_agent.LLM_API_KEY = "dummy-key"
+
+        main.ENABLE_LLM = False
+        lost = ask()
+        assert lost["source"] == "rule" and calls["n"] == 0, (lost["source"], calls["n"])
+
+        calls["n"] = 0
+        main.ENABLE_LLM = True
+        got = ask()
+        assert got["source"] == "llm" and calls["n"] == 1, (got["source"], calls["n"])
+    finally:
+        main.call_llm_chat = original_chat
+        main.ENABLE_LLM = original_enable
+        main.llm_agent.LLM_API_KEY = original_key
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 
@@ -510,6 +548,7 @@ def test_forecast_analyze_uses_question_and_target_window():
     # ③ LLM 提示词：用桩捕获 prompt，确认只在有值时注入
     captured = []
     orig_call, orig_key = main.call_llm_chat, llm_agent.LLM_API_KEY
+    orig_enable = main.ENABLE_LLM
 
     def fake_call(system_prompt, user_message, **kwargs):
         captured.append(user_message)
@@ -518,12 +557,16 @@ def test_forecast_analyze_uses_question_and_target_window():
     try:
         main.call_llm_chat = fake_call
         llm_agent.LLM_API_KEY = "sk-test"
+        # 本用例测的是"提示词注入"，需要显式开启 LLM：
+        # 生产代码现在同时尊重 ENABLE_LLM（NETTUNE_ENABLE_LLM=0 时不调模型）。
+        main.ENABLE_LLM = True
         main.forecast_analyze(main.ForecastAnalyzeRequest(**base))
         main.forecast_analyze(main.ForecastAnalyzeRequest(
             **base, question="会不会影响视频会议？",
             targetWindow=main._TimeRange(start="2026-01-02 14:15:00", end="2026-01-02 14:35:00")))
     finally:
         main.call_llm_chat, llm_agent.LLM_API_KEY = orig_call, orig_key
+        main.ENABLE_LLM = orig_enable
 
     assert len(captured) == 2
     assert "用户的问题" not in captured[0], "未传问题时不应改变提示词"
