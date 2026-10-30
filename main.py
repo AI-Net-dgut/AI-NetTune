@@ -442,6 +442,16 @@ def data_query(
     columns = ALL_COLUMNS
     if metrics:
         wanted = [m.strip() for m in metrics.split(",")]
+        # 非法指标名必须报 40002，而不是 KeyError → 500（独立审计 P2）；
+        # 同时去重，避免 metrics=timestamp 时输出 ["timestamp","timestamp"]。
+        unknown = [m for m in wanted if m and m not in ALL_COLUMNS]
+        if unknown:
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"metrics 含未知字段：{', '.join(unknown)}；可选值：{', '.join(ALL_COLUMNS)}")
+        wanted = [m for m in dict.fromkeys(wanted) if m and m != "timestamp"]
+        if not wanted:
+            return error_response(ERROR_CODE["PARAM_INVALID"], "metrics 不能为空，至少指定一个 KPI 列")
         columns = ["timestamp"] + wanted
     records = [{k: r[k] for k in columns} for r in page_rows]
 
@@ -952,6 +962,16 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     # 新增：hourly_trend 小时趋势 / ap_comparison 多AP对比 / alarm_history 告警历史
     # 窗口先收敛到"支撑区间"：越界部分裁掉并明确告知，完全无交集则如实说无数据，
     # 不再对没有频谱的数据段给出故障结论（否则与预测预警自相矛盾）。
+    # 时间必须先按真实格式解析（独立审计 P2）：此前用字符串字典序比较，
+    # "xyz" 这类垃圾值会因为字典序"落在范围内"被接受，或在后面 _spec_verdict
+    # 里抛 DateParseError 变成 HTTP 500 —— 同一参数两种行为，且都该是 40002。
+    try:
+        _parse_ts(req.window_start)
+        _parse_ts(req.window_end)
+    except (ValueError, TypeError):
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"window_start / window_end 格式应为 yyyy-MM-dd HH:mm:ss"
+                              f"（收到 {req.window_start} ~ {req.window_end}）")
     _range = _supported_range()
     window_start, window_end = req.window_start, req.window_end
     range_notice = ""
@@ -2553,6 +2573,27 @@ def get_heatmap(
     end_time: str | None = Query(None, description="结束时间"),
     metric: str = Query("rsrp", description="热力指标：rsrp / sinr")
 ):
+    # 指标白名单（独立审计 P3）：此前 metric=foo 会 200 + 空网格，
+    # 调用方无法区分"指标写错"与"该窗口无采样"；实现其实还支持 throughput/latency/prb_usage。
+    _HEATMAP_METRICS = ("rsrp", "sinr", "throughput", "latency", "prb_usage")
+    if metric not in _HEATMAP_METRICS:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"metric 仅支持 {'/'.join(_HEATMAP_METRICS)}（收到 {metric}）")
+    # 窗口上限（独立审计 P2）：采样封顶 2500 点，7 天窗口单次 4~6s、4 并发可把
+    # /api/health 拖到 9s+ 且无服务端超时。超过 24 小时直接拒绝，别占满工作线程。
+    if start_time and end_time:
+        try:
+            _hs, _he = _parse_ts(start_time), _parse_ts(end_time)
+        except (ValueError, TypeError):
+            return error_response(ERROR_CODE["PARAM_INVALID"],
+                                  "start_time / end_time 格式应为 yyyy-MM-dd HH:mm:ss")
+        if _hs >= _he:
+            return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "start_time 必须早于 end_time")
+        if (_he - _hs).total_seconds() > 24 * 3600:
+            return error_response(
+                ERROR_CODE["PARAM_OUT_OF_RANGE"],
+                f"热力图窗口最长 24 小时（收到 {int((_he - _hs).total_seconds() // 60)} 分钟）；"
+                f"Kriging 单次计算随采样量变慢，请缩短窗口后重试")
     # 热力图结果缓存（120 秒）：Kriging 的耗时随采样点立方增长
     # （实测 60 分钟窗口 ~0.2s，7 天窗口 ~4~6s）。缓存只复用**完全相同参数**的结果，
     # 数值零变化；回放切换时刻时窗口不同仍会重新计算。
@@ -3918,9 +3959,19 @@ def forecast_plans(req: ForecastPlanRequest):
 
     alerts = cached.get("alerts") or []
     if not alerts:
+        # 无风险时也要校验 alertId（独立审计 P3）：否则"alertId 不存在 → 40002"这条
+        # 在 analyze 成立、在 plans 不成立，两接口口径分裂。
+        if req.alertId:
+            return error_response(ERROR_CODE["PARAM_INVALID"],
+                                  f"该轮预测里没有 alertId={req.alertId} 的风险项（本轮 0 条风险）")
         return success_response({
             "plans": [],
             "risk": None,
+            "basisWindow": {"start": (cached.get("history") or {}).get("start"),
+                            "end": (cached.get("history") or {}).get("end")},
+            # 即使没有方案也要给免责说明（独立审计 P3：字段时有时无）
+            "disclaimer": ("本轮预测未检出越阈风险，因此不生成处置方案；"
+                           "这不代表该时段一定没有问题，仍需按常规巡检判断。"),
             "message": "该轮预测未检出越阈风险，因此不生成处置方案（不编造方案）。",
         })
 

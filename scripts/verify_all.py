@@ -23,6 +23,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
+# GBK 控制台无法编码 '✗'（独立审计 P3：任一步失败时脚本自己先崩，
+# 失败清单和汇总都看不到）。统一把输出切到 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 1800) -> tuple[int, str]:
     started = time.time()

@@ -194,7 +194,13 @@ def main() -> int:
                         note(f"  仅频谱表有: {sample}")
 
             if args.full:
-                big = load_network("network_data_30d.csv") or load_network("network_data_30d(1).csv")
+                # 不能用 `df or df2`：DataFrame 的真值判断会抛
+                # ValueError: The truth value of a DataFrame is ambiguous
+                # （独立审计 P2：--full 模式 100% 崩溃，且崩在打印部分结论之后，
+                #  容易被误读成"已对账"）。
+                big = load_network("network_data_30d.csv")
+                if big is None:
+                    big = load_network("network_data_30d(1).csv")
                 if big is not None:
                     head = big[big["ts"] <= spec["ts"].max()]
                     head_groups = groups(head)

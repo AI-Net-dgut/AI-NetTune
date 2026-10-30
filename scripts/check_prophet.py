@@ -52,6 +52,13 @@ def main() -> int:
     args = ap.parse_args()
 
     timeout = args.timeout if args.timeout is not None else float(os.getenv("NETTUNE_PROPHET_TIMEOUT", "20"))
+    # --timeout 必须同时生效到**拟合超时**，否则只是"多等一会儿"，
+    # 拟合仍按 20 秒放弃（独立审计 P3：--timeout 120 仍报"超过 20 秒"）。
+    try:
+        import forecast_model as _fm_timeout  # noqa: PLC0415
+        _fm_timeout.PROPHET_TIMEOUT_SEC = float(timeout)
+    except Exception:  # noqa: BLE001
+        pass
     report: dict = {"python": sys.version.split()[0], "timeout_sec": timeout}
 
     try:
