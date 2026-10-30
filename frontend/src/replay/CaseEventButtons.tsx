@@ -76,7 +76,9 @@ export default function CaseEventButtons({ state, act, scope, disabled = false }
       return <button key={event.eventId} type="button" className="ain-button"
         disabled={disabled || !selectable}
         title={`${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）\n${phaseText}`
-          + (fixedView ? "\n当前是固定查看，点下面这句话会切到该案例并退出固定查看。" : "")
+          // 实际行为：切换案例会把分析范围改成该事件，但视图仍停在固定查看；
+          // 要回到跟随主时钟需点 QueryPanel 里的「退出分析，返回当前」。
+          + (fixedView ? "\n当前是固定查看：切换后仍停留在固定查看，需要时可点「退出分析，返回当前」。" : "")
           + (phase !== "pending" && viewCutoff < endMs ? "\n切换后会按上表范围重新取数。" : "")}
         onClick={() => act({ type: "select-range", startMs, endMs: rangeEnd })}>
         {label}

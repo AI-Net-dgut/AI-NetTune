@@ -76,10 +76,14 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
   };
 
   const loadSeq = useRef(0);
+  // parentId 用 ref 跟踪：它可能在请求**飞行途中**才到达，闭包里读到的仍是旧值
+  // （独立审计 P2：这时方案既没归档、也不会补，因为 effect 已经跑过了）。
+  const parentIdRef = useRef(parentId);
   const load = async () => {
     // 请求序号（独立审计 P2）：换风险时旧请求后返回会覆盖新方案，
     // 还会按**当前** parentId 把旧方案归档到新风险下。
     const seq = ++loadSeq.current;
+    pendingArchive.current = null;               // 换轮次/换风险：丢弃旧的待归档项
     setState({ pending: true, payload: null, error: "" });
     invalidate();
     try {
@@ -94,8 +98,10 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
       if (first) {
         setSelectedId(first.id);
         setValues(Object.fromEntries(first.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])));
-        // 没有 parentId 时先记下来，等它到了再补归档
-        if (parentId) archivePlan(first, payload);
+        // 用 ref 读 parentId：请求飞行途中到达也能归档；
+        // 仍为空才暂存，等 effect 补。
+        const pid = parentIdRef.current;
+        if (pid) archivePlan(first, payload);
         else pendingArchive.current = { plan: first, payload };
       }
     } catch (reason) {
@@ -109,8 +115,10 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
   const archivedFor = useRef("");
   const pendingArchive = useRef<{ plan: TreatmentPlan; payload: NonNullable<typeof state.payload> } | null>(null);
   useEffect(() => {
+    parentIdRef.current = parentId;              // 供在途请求读取最新值
     if (!parentId || !pendingArchive.current) return;
-    const key = `${parentId}|${pendingArchive.current.plan.id}`;
+    // key 带上轮次与风险：同一挂载内换了 handoff 时，旧的待归档项不能被算作已归档
+    const key = `${parentId}|${result.id}|${alertId ?? ""}|${pendingArchive.current.plan.id}`;
     if (archivedFor.current === key) return;
     archivedFor.current = key;
     const { plan, payload } = pendingArchive.current;
@@ -118,7 +126,7 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
     archivePlan(plan, payload);
     // archivePlan 依赖 parentId/result，均由本次移交固定
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentId]);
+  }, [parentId, result.id, alertId]);
 
   // 自动接续（10-30 清单第 4 点）：研判完成后直接加载方案，
   // 不再要求用户再点一次"生成处置方案"才知道有没有方案。
