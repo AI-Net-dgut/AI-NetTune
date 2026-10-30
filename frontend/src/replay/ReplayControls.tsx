@@ -23,6 +23,13 @@ export default function ReplayControls({ state, act, loading, onReload, config }
         <label>倍速<select aria-label="回放倍速" value={state.speed} disabled={loading || !state.ready}
           onChange={event => act({ type: "speed", value: Number(event.target.value) })}>
           {REPLAY_SPEEDS.map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select></label>
+        {/* 10-30 清单第 1 点：换算要贴在倍速控件旁（原先只在底部小字里，不醒目）。
+            1× 时现实 10 秒推进模拟 1 分钟 → 每秒推进 6 秒；4× 即每秒 24 秒。 */}
+        <span className="ain-replay-speed-hint">
+          1× = 现实每秒推进 {Math.round(60 / config.realSecondsPerMinute)} 秒 ·
+          当前 {state.speed}× = 每秒 {Math.round((60 / config.realSecondsPerMinute) * state.speed)} 秒
+          （默认 {config.initialSpeed}×）
+        </span>
         <button className="ain-button" type="button" disabled={disabled} onClick={() => act({ type: "restart" })}>重新开始</button>
         <label className="ain-replay-loop"><input type="checkbox" checked={state.loop} disabled={loading || !state.ready}
           onChange={event => act({ type: "loop", value: event.target.checked })} />循环</label>

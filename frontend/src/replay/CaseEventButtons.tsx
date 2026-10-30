@@ -57,7 +57,9 @@ export default function CaseEventButtons({ state, act, scope, disabled = false }
       const rangeEnd = phase === "running" ? Math.min(nowMs, endMs) : endMs;
       const selectable = state.ready && !state.locked && phase !== "pending" && rangeEnd > startMs;
       const typeLabel = TYPE_LABEL[event.faultType] ?? event.faultType;
-      const label = `${event.apId} ${typeLabel} ${event.start.slice(11, 16)}`
+      // 按钮上带**完整日期**（MM-DD HH:mm）：6 个案例跨 7 天，只显示时分会分不清
+      // （10-30 清单第 2 点要求按状态显示状态与完整日期）。
+      const label = `${event.apId} ${typeLabel} ${event.start.slice(5, 16)}`
         + (phase === "running" ? "（进行中）" : "");
       const phaseText = phase === "pending"
         ? "未开始（主时钟尚未到事件开始时刻）"
