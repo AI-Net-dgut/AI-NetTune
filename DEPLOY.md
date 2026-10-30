@@ -226,7 +226,7 @@ npm run preview        # 注意：preview 不读 vite.config.ts 的 proxy，仍�
 | `LLM_MODEL` | 后端 | `deepseek-chat` | 模型名 |
 | `NETTUNE_ENABLE_LLM` | 后端 | `1` | 设为 `0` 强制走纯规则链路 |
 | `NETTUNE_ALLOW_ORIGINS` | 后端 | 空 | 追加 CORS 允许来源（逗号分隔）。默认已放行 `localhost:5173` 与 `10.63.118.174:5173`，这里是**追加**不是覆盖 |
-| `NETTUNE_PROPHET_TIMEOUT` | 后端 | `20` | 接口 10 的 Prophet 拟合超时（秒）。超时自动降级移动平均，`method` 字段如实返回 |
+| `NETTUNE_PROPHET_TIMEOUT` | 后端 | `20` | 接口 10 的 Prophet 拟合超时（秒）。超时自动降级移动平均，`method` 字段如实返回。**前提**：Prophet 需要可写的临时目录（cmdstanpy 每次拟合写编译产物），受限环境下预热必然超时（实测调到 180 秒也救不回来）；预热失败是**进程级永久降级**、只能重启恢复，用 `/api/health` 的 `capabilities.prophet_runtime` 查看真实状态 |
 | `VITE_API_BASE` | 前端（构建时） | 空 | 空 = 同源 `/api`；填完整地址则直连后端 |
 | `VITE_PROXY_TARGET` | 前端（dev） | `http://127.0.0.1:8000` | 仅 `npm run dev` 生效 |
 

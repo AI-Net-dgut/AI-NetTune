@@ -600,14 +600,15 @@ POST /api/analyze/forecast
 |metrics / ues|array|本次预测的指标与 UE 列表|
 |series[ue][metric]|object|单个 UE × 指标的预测结果（含 method 字段：prophet / moving_average / none）|
 |bins / true|array|全量 1 小时桶实测序列（前端对比图横轴与实测线）|
-|predicted|array|测试段（后 20%）预测值，24 点，与真实值对比用|
+|predicted|array|测试段预测值；长度 = `n - split`，其中 `split = max(int(n*0.8), n-horizon)`。默认 30 天窗口（n=720、horizon=24）时为 **24 点**；降级路径（moving_average）已与 Prophet 使用**同一套切分**，两条路径的 predicted 长度与 true_mean 可直接比较|
 |true_mean / pred_mean / mape|number|测试段实测均值 / 预测均值 / 平均绝对百分比误差（%）|
 |forecast_bins / forecast|array|未来 24 小时预测的时间轴与预测值|
 |lower / upper|array|未来 24 小时置信区间下 / 上限（与 forecast 等长）；**降级为 moving_average 时无置信区间，lower/upper 恒等于 forecast**，前端不应绘制置信带|
 
 ### 备注
 
-- 训练/测试切分固定 80/20；未来延伸固定 24 小时；序列不足 24 个点或 Prophet 拟合失败时自动降级 moving_average（降级时 method 如实返回 moving_average，lower/upper=forecast 无置信区间）
+- 训练/测试切分：`split = max(int(n*0.8), n-horizon)`（**不是固定 80/20**；默认 720 点 → 696/24）。未来延伸固定 24 小时；序列不足 24 个点或 Prophet 拟合失败时自动降级 moving_average（降级时 method 如实返回 moving_average，lower/upper=forecast 无置信区间），**降级路径使用同一套切分**，指标可比
+- Prophet 需要**可写的临时目录**（cmdstanpy 每次拟合写编译产物）；预热失败后该进程内**永久降级**、只能重启恢复，可用 `/api/health` 的 `capabilities.prophet_runtime` 检查
 - 请求默认窗口为 **30 天全窗**（2026-01-01 00:00:00 ~ 2026-01-31 23:59:59），可直接观察到第 4 天起的故障预测；不传 window_start/window_end 时走默认窗口
 - 数据源为 30 天仿真数据（`data/network_data_30d(1).csv`，main.py 默认读取；3d 版备份为 `data/network_data_3d_bak.csv`）
 - 30d 数据第 4 天起每 2 天注入一组故障，anomaly 演示窗口请选择 1 月 4 日之后以观察到异常样本
