@@ -678,6 +678,9 @@ POST /api/forecast/preview
 |spectrumId|string|主关联频谱记录 ID（兼容字段）；非空时必须属于该风险组|
 |bandIds|array|受影响频段 ID 列表（引用 spectrumId 对应频率网格）；无超阈值频段时为空数组|
 |impactId|string|关联的 impacts 指标 ID|
+|spans|array|该风险**本段**的逐分钟区间 `[{start,end}]`；段长 >60 分钟时只给首末两个端点（见 spansTruncated）。用于表达"中间恢复的间隙不属于本段"|
+|spansTruncated|bool|`spans` 是否被截断（仅保留首末端点）|
+|segment / segmentCount|int|同一 AP+类型在本轮预测里的第几段 / 共几段；多段时 id 追加 `-k`、标题追加"（第 k/n 段）"。单段时 id 与旧版一致|
 |spectrumViews|object|{powerId, occupancyId, recommendedView, reason}：powerId 必须指向 metric=power、occupancyId 必须指向 metric=occupancy；缺少数据时相应 ID 为 null；同一组引用的频谱记录必须来自同一 observationId；recommendedView 可为 curve/power-time/occupancy|
 
 > 风险分数不能直接当作发生概率；不提供 spectrumViews 的旧响应仍可用（仅展示 spectrumId 关联的单类指标）。

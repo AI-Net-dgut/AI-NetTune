@@ -3294,6 +3294,16 @@ def forecast_preview(req: ForecastPreviewRequest):
                     "segment": run_index, "segmentCount": len(runs),
                 })
 
+    # 前端 api.ts 对 alerts 的上限是 200（超过直接抛错 → 整个预测面板报错）。
+    # 分段改造后极端情况（长时距 + 反复越阈/恢复）可能超过 200 条，这里先截断兜底，
+    # 保持既有 append 顺序不变（不排序，避免改变 alerts[0] 的语义）。
+    # 不能静默丢风险（独立验证 N2）：截断时置 alertsTruncated 并在 message 里说明。
+    alerts_truncated = False
+    if len(alerts) > 200:
+        print(f"[Main] 预警条数 {len(alerts)} 超过前端上限 200，已截断（预测时长 {req.horizonMinutes} 分钟）")
+        alerts_truncated = True
+        alerts = alerts[:200]
+
     # impacts：SINR/吞吐从主网络数据按分钟聚合，用同一套阻尼趋势外推
     impacts = []
     try:
@@ -3383,7 +3393,10 @@ def forecast_preview(req: ForecastPreviewRequest):
         "forecast": {"start": req.baseTime, "end": fmt(fore_end)},
         "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": "simulation", "status": "ready",
-        "message": "预测窗口内发现需要关注的风险" if alerts else "预测窗口内整体正常",
+        "message": (("预测窗口内发现需要关注的风险（条数超过 200，仅展示前 200 条）"
+                     if alerts_truncated else "预测窗口内发现需要关注的风险") if alerts
+                    else "预测窗口内整体正常"),
+        "alertsTruncated": alerts_truncated,
         "alerts": alerts, "spectra": spectra, "impacts": impacts,
         # 预测结果的自然语言说明（阶段2）：LLM 可用时由大模型改写，否则用模板。
         # 模板只引用本响应里已有的数值，保证"没 key 也有话可说"且不编造。
