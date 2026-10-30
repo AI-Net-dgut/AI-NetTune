@@ -1215,7 +1215,9 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                    "minutes": max(1, int((datetime.strptime(window_end, "%Y-%m-%d %H:%M:%S")
                                           - datetime.strptime(window_start, "%Y-%m-%d %H:%M:%S")).total_seconds() // 60) + 1),
                    "source": "kpi"}]
-    _last_anomaly_at = _spans[-1]["end"] if _spans else None
+    # 取"最大 end"而不是"排序后最后一条"：多 AP 区间交错时，末条未必是最晚结束的
+    # （独立审计 P3：潜在缺陷，真实数据未触发，但按最大 end 更稳）。
+    _last_anomaly_at = max((s["end"] for s in _spans), default=None)
     _RECOVER_GRACE_SEC = 600   # 10 分钟：数据是分钟级且故障有 ramp-out，5 分钟太紧
     if is_anomaly and _last_anomaly_at:
         try:
@@ -3281,9 +3283,14 @@ def forecast_preview(req: ForecastPreviewRequest):
                     "start": fmt(span_start), "end": fmt(span_end),
                     "spectrumId": f"{ap}-{sid_suffix}", "impactId": None,
                     "bandIds": hardest[:5],
-                    # 该段的连续命中分钟（中间恢复的间隙不并入）
-                    "spans": [{"start": fmt(base_dt + timedelta(minutes=i)),
-                               "end": fmt(min(fore_end, base_dt + timedelta(minutes=i + 1)))} for i in segment],
+                    # 该段的连续命中分钟（中间恢复的间隙不并入）。
+                    # 独立审计 P3：1440 分钟基准下单条 alert 曾带 1419 个 spans（约 60KB），
+                    # 而前端并不解析该字段。超过阈值时只给首末两个端点，避免响应膨胀。
+                    "spans": ([{"start": fmt(base_dt + timedelta(minutes=i)),
+                                "end": fmt(min(fore_end, base_dt + timedelta(minutes=i + 1)))}
+                               for i in (segment if len(segment) <= 60
+                                         else [segment[0], segment[-1]])]),
+                    "spansTruncated": len(segment) > 60,
                     "segment": run_index, "segmentCount": len(runs),
                 })
 
@@ -3492,6 +3499,12 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
             if a.get("id") == req.alertId:
                 alert_detail = a
                 break
+        # 指定的 alertId 不存在时必须报错，不能落到通用文案里凭空说"检测到风险"
+        # （独立审计 P3：之前 analyze 返回 0 且引用了一个不存在的预警 ID，plans 则是 40002）
+        if alert_detail is None:
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"该轮预测里没有 alertId={req.alertId} 的风险项，请从返回的 alerts 里选择")
 
     # 用户的问题与关注时段（v3）：只在**有值**时参与，未传时输出与旧行为逐字节一致。
     question_text = (req.question or "").strip()
@@ -3766,6 +3779,16 @@ def forecast_plans(req: ForecastPlanRequest):
         if alert is None:
             return error_response(ERROR_CODE["PARAM_INVALID"],
                                   f"该轮预测里没有 alertId={req.alertId} 的风险项")
+        # 与 forecast/analyze 同口径：选中的风险必须与关注时段有交集，
+        # 否则会出现"问 14:15~14:20 却拿到 14:33~16:12 的方案"（独立审计 P2）。
+        if req.targetWindow is not None and not (
+                (alert.get("start") or "") <= req.targetWindow.end
+                and (alert.get("end") or "") >= req.targetWindow.start):
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"所选风险 {req.alertId}（{alert.get('start')} ~ {alert.get('end')}）"
+                f"与关注时段 {req.targetWindow.start} ~ {req.targetWindow.end} 没有交集，"
+                f"请调整时段或改选风险")
     if alert is None and req.targetWindow is not None:
         alert = next((a for a in alerts
                       if (a.get("start") or "") <= req.targetWindow.end
@@ -3824,11 +3847,16 @@ def forecast_plans(req: ForecastPlanRequest):
     # plan_model 生成的是确定性 ID（PLAN-<AP>-<模板>-<序号>），同一个 AP 的两轮预测
     # 会得到完全相同的 ID，_PLAN_CACHE 被后一轮覆盖 —— 第一轮再仿真会撞上
     # 窗口/AP 绑定校验（40002），或更糟：拿第二轮的依据评估第一轮。
+    # 完整 md5（32 位）：与预测标识一致，不做截断（截断后仍可构造碰撞）。
     _round_tag = hashlib.md5(
-        f"{req.forecastId}|{alert.get('id')}".encode("utf-8")).hexdigest()[:8]
+        f"{req.forecastId}|{alert.get('id')}".encode("utf-8")).hexdigest()
     for p in plans:
         p["baseId"] = p["id"]                      # 保留模板原始 ID，便于对照/排查
         p["id"] = f'{p["id"]}@{_round_tag}'
+        # 内嵌仿真 ID 跟随新方案 ID：否则同一方案会出现两个仿真 ID
+        # （初始 SIM-<baseId>、重算 SIM-<baseId>@tag），独立审计 P3。
+        if isinstance(p.get("simulation"), dict):
+            p["simulation"]["id"] = f"SIM-{p['id']}"
         p["origin"] = "forecast"                   # 前端据此显示"来自预测风险"
         p["basis"] = basis
         _remember_plan(p)                          # 让 /api/plan/simulate 可用

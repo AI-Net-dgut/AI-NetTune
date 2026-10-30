@@ -631,6 +631,73 @@ def test_forecast_plans_infers_type_for_segmented_alert_ids():
             main._FORECAST_CACHE[cache_key] = saved
 
 
+def test_forecast_plans_alert_must_intersect_target_window():
+    """指定 alertId 时，该风险必须与关注时段有交集（独立审计 P2）。
+
+    修复前：forecast/plans 先按 alertId 取风险、跳过时段筛选 →
+    问 14:15~14:20 却返回 14:33~16:12 的方案，而 forecast/analyze 同样组合是 40002。
+    """
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+    prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
+    aid = (prev.get("alerts") or [{}])[0].get("id")
+    fc = (prev["forecast"]["start"], prev["forecast"]["end"])
+
+    def plans(tw=None, alert=aid):
+        return main.forecast_plans(main.ForecastPlanRequest(
+            forecastId=prev["id"], scenario=SCENARIO, baseTime=base,
+            history=main._TimeRange(start=hs, end=he),
+            forecast=main._TimeRange(start=fc[0], end=fc[1]), alertId=alert,
+            targetWindow=(main._TimeRange(start=tw[0], end=tw[1]) if tw else None)))
+
+    # 窗口无交集 → 拒绝；两个接口口径一致
+    assert plans(("2026-01-02 14:15:00", "2026-01-02 14:20:00")).get("code") == 40002
+    assert main.forecast_analyze(main.ForecastAnalyzeRequest(
+        forecastId=prev["id"], scenario=SCENARIO, baseTime=base, alertId=aid,
+        history=main._TimeRange(start=hs, end=he),
+        forecast=main._TimeRange(start=fc[0], end=fc[1]),
+        targetWindow=main._TimeRange(start="2026-01-02 14:15:00", end="2026-01-02 14:20:00")
+    )).get("code") == 40002
+    # 不传时段 → 正常
+    assert plans().get("code") == 0
+
+    # 不存在的 alertId：analyze 也必须报错（修复前返回 0 且引用不存在的 ID）
+    assert main.forecast_analyze(main.ForecastAnalyzeRequest(
+        forecastId=prev["id"], scenario=SCENARIO, baseTime=base, alertId="ALT-AP-99-nope",
+        history=main._TimeRange(start=hs, end=he),
+        forecast=main._TimeRange(start=fc[0], end=fc[1]))).get("code") == 40002
+
+
+def test_alert_spans_are_capped_on_long_horizon():
+    """长时距下单条 alert 的 spans 不能无限膨胀（独立审计 P3：1440 分钟曾带 1419 条）。"""
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+    prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he),
+        horizonMinutes=1440)))
+    alerts = prev.get("alerts") or []
+    assert alerts, "1440 分钟应当有风险"
+    for a in alerts:
+        spans = a.get("spans") or []
+        assert len(spans) <= 60, (a["id"], len(spans))
+        if a.get("spansTruncated"):
+            assert len(spans) == 2, (a["id"], len(spans))
+
+
+def test_forecast_plan_simulation_id_matches_plan_id():
+    """方案的内嵌仿真 ID 必须跟随方案 ID（独立审计 P3：两个 ID 不一致）。"""
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+    prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
+        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
+    d = _data(main.forecast_plans(main.ForecastPlanRequest(
+        forecastId=prev["id"], scenario=SCENARIO, baseTime=base,
+        history=main._TimeRange(start=hs, end=he),
+        forecast=main._TimeRange(start=prev["forecast"]["start"], end=prev["forecast"]["end"]))))
+    plan = d["plans"][0]
+    assert plan["simulation"]["id"] == f"SIM-{plan['id']}", plan["simulation"]["id"]
+    # 轮次标签用完整 md5（32 位），id 不再截断
+    assert len(plan["id"].rsplit("@", 1)[-1]) == 32
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 

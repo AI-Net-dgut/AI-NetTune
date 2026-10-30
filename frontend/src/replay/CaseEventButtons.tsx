@@ -3,7 +3,7 @@ import type { QueryScope } from "../types/backend";
 import { fetchFaultEvents, toEpoch } from "../services/backend";
 import type { FaultEvent } from "../services/backend";
 import type { ReplayAction, ReplayState } from "./replayState";
-import { viewTime } from "./replayState";
+import { formatReplayTime, viewTime } from "./replayState";
 
 /**
  * 预置案例快捷按钮：事件清单来自后端 GET /api/data/events（读 data/fault_events.csv）。
@@ -62,7 +62,9 @@ export default function CaseEventButtons({ state, act, scope, disabled = false }
       const phaseText = phase === "pending"
         ? "未开始（主时钟尚未到事件开始时刻）"
         : phase === "running"
-          ? `进行中：只选已发生的 ${event.start} — ${new Date(rangeEnd).toISOString().slice(11, 16)}（不读未来数据）`
+          // 时间必须用仓库统一的北京时间格式化：toISOString() 是 UTC，会早 8 小时
+          // （独立审计 P3：11:30 会显示成 03:30）
+          ? `进行中：只选已发生的 ${event.start} — ${formatReplayTime(rangeEnd)}（不读未来数据）`
           : `已结束：可选全段 ${event.start} — ${event.end}`;
       return <button key={event.eventId} type="button" className="ain-button"
         disabled={disabled || !selectable}

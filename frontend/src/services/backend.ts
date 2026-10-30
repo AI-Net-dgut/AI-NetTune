@@ -409,6 +409,9 @@ export async function fetchForecastPlans(
   return {
     plans,
     risk: (data.risk && typeof data.risk === "object" ? data.risk : null) as ForecastPlansPayload["risk"],
+    // 必须把 basis 解出来：归档记录要用它写 forecastId/basisWindow
+    // （独立审计 P3：之前声明了字段却从不赋值，归档只剩 risk）。
+    basis: data.basis ?? undefined,
     basisWindow: (data.basisWindow && typeof data.basisWindow === "object" ? data.basisWindow : undefined) as ForecastPlansPayload["basisWindow"],
     disclaimer: typeof data.disclaimer === "string" ? data.disclaimer : undefined,
     message: typeof data.message === "string" ? data.message : undefined,

@@ -98,14 +98,18 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
 
   // 自动接续（10-30 清单第 4 点）：研判完成后直接加载方案，
   // 不再要求用户再点一次"生成处置方案"才知道有没有方案。
+  // 守卫必须覆盖**全部**影响请求的输入：同一轮预测（id 由上下文确定性生成）
+  // 换一条风险再进研判时，alertId/targetWindow 变了也必须重新加载
+  // （独立审计 P2：只认 result.id 会把上一次风险的方案留在页面上）。
+  const autoKey = `${result.id}|${alertId ?? ""}|${targetWindow?.start ?? ""}|${targetWindow?.end ?? ""}`;
   const autoLoaded = useRef("");
   useEffect(() => {
-    if (autoLoaded.current === result.id) return;
-    autoLoaded.current = result.id;
+    if (autoLoaded.current === autoKey) return;
+    autoLoaded.current = autoKey;
     void load();
     // load 只用本次移交的固定上下文（result/alertId/targetWindow），无需进依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result.id]);
+  }, [autoKey]);
 
   const choose = (plan: TreatmentPlan) => {
     setSelectedId(plan.id);
