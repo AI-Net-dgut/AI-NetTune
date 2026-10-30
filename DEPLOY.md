@@ -243,6 +243,13 @@ setx LLM_API_KEY "sk-你的key"
 ## 8. 一键自检与维护脚本
 
 ```powershell
+python scripts/verify_all.py             # 全量检查：测试/口径一致率/数据对账/死代码/前端 tsc+eslint
+python scripts/verify_all.py --smoke     # 追加 HTTP 冒烟（需后端已在运行）
+python scripts/verify_all.py --fast      # 跳过最慢的两项，改完一处小地方时用
+
+python scripts/check_prophet.py          # Prophet 环境自检（接口 10 是否真能走 Prophet）
+python scripts/check_prophet.py --timeout 180   # 慢机器放宽预热等待
+
 python scripts/doctor.py            # 环境/数据/依赖自检（读 108MB 频谱表，约 5-10 秒）
 python scripts/doctor.py --quick    # 跳过频谱表深度统计（更快）
 
@@ -254,7 +261,14 @@ python scripts/find_dead_code.py --commands # 额外输出可直接执行的删�
 
 python scripts/prepare_data.py            # 规整 data/ 下的 "(1)" 文件名（预览）
 python scripts/prepare_data.py --apply    # 真正重命名
+
+python scripts/check_history_export.py 导出.json   # 校验导出的历史记录（旧格式兼容性）
 ```
+
+`check_prophet.py` 的退出码：`0` 可用 / `1` 已降级（会打印临时目录可写性与降级原因）/
+`2` 未安装。**注意** Prophet 预热失败是进程级永久标记，修好环境后必须**重启服务**再跑一次。
+
+`verify_all.py` 逐项打印 PASS/FAIL，任一失败退出码 1，失败项会附最后 320 字符的原始输出。
 
 `audit_data.py` 的结论直接对应 `AI-NetTune预测预警数据交接说明-v2.7` 里的验证表：
 目前会报出"两表异常组不一致（147/402）"和"全部切点为阶跃、无渐变征兆"两条不符项，

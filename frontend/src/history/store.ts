@@ -39,6 +39,38 @@ function changed() {
 type SyncChannel = { postMessage: (message: unknown) => void; onmessage: ((event: { data: unknown }) => void) | null };
 const SYNC_NAME = 'aintune-history';
 const DELETED_KEY = 'aintune-history-deleted';
+// 持久化墓碑（独立审计 P3）：删除广播只在**活着的页面**之间生效，
+// 关掉页面/重开后再写入同 id 的迟到记录就会复活。这里把删除过的 id 记到
+// localStorage（7 天 TTL、最多 500 条），初始化时并入 rejectedIds。
+const TOMB_KEY = 'aintune-history-tombstones';
+const TOMB_TTL_MS = 7 * 24 * 3600 * 1000;
+const TOMB_CAP = 500;
+function storage(): Storage | null {
+    try { return (globalThis as unknown as { localStorage?: Storage }).localStorage ?? null; } catch { return null; }
+}
+function loadTombstones(): Record<string, number> {
+    try {
+        const raw = storage()?.getItem(TOMB_KEY);
+        const parsed = raw ? JSON.parse(raw) as unknown : null;
+        const now = Date.now(), out: Record<string, number> = {};
+        if (parsed && typeof parsed === 'object') {
+            for (const [id, at] of Object.entries(parsed as Record<string, unknown>)) {
+                if (typeof at === 'number' && now - at <= TOMB_TTL_MS) out[id] = at;
+            }
+        }
+        return out;
+    } catch { return {}; }
+}
+function rememberTombstones(ids: string[]) {
+    const store = storage();
+    if (!store || !ids.length) return;
+    try {
+        const map = loadTombstones(), now = Date.now();
+        for (const id of ids) map[id] = now;
+        const kept = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, TOMB_CAP);
+        store.setItem(TOMB_KEY, JSON.stringify(Object.fromEntries(kept)));
+    } catch { /* 隐私模式/配额满：墓碑尽力而为，不影响删除结果。 */ }
+}
 function makeChannel(): SyncChannel | null {
     try {
         const Ctor = (globalThis as unknown as { BroadcastChannel?: new (name: string) => SyncChannel }).BroadcastChannel;
@@ -56,9 +88,12 @@ function applyDeleted(ids: string[]) {
         unsaved.delete(id);
         rejectedIds.add(id);        // 关键：拦住本页迟到的写入，避免"删除后复活"
     }
+    rememberTombstones(ids);        // 并持久化，跨刷新/重开也拦得住
     capacityProblem = '';           // 别的页面腾出了容量，本页的满额提示要撤掉
     changed();
 }
+// 初始化：把历史墓碑并入 rejectedIds（上一次会话删掉的记录不会被迟到写入复活）
+for (const id of Object.keys(loadTombstones())) rejectedIds.add(id);
 if (syncChannel) {
     syncChannel.onmessage = (event) => {
         const data = event?.data as { type?: string; ids?: unknown } | undefined;
@@ -214,11 +249,22 @@ function saveRecord(input: RecordInput): string {
     unsaved.add(item.id);
     writes = writes.then(async () => {
         try {
-            if (rejectedIds.has(item.id) || (item.parentId && rejectedIds.has(item.parentId) && !isQuestionRecord(item))) {
+            // 被删除拦下（本页删除 / 别的页面广播 / 墓碑里记着的旧删除）
+            const blocked = () => rejectedIds.has(item.id) || Boolean(item.parentId && rejectedIds.has(item.parentId) && !isQuestionRecord(item));
+            if (blocked()) {
                 memory.delete(item.id);
                 unsaved.delete(item.id);
-            } else if (!await persistWithinCapacity(item)) {
-                refuseRecord(item);
+            } else {
+                const persisted = await persistWithinCapacity(item);
+                if (!persisted) {
+                    refuseRecord(item);
+                } else if (blocked()) {
+                    // 写入**飞行途中**被删除（真实 IDB 事务提交有延迟）→ 补偿删除，
+                    // 否则这行会在删除之后落库，也就是"删了又自己回来"（独立审计 P3）。
+                    await removeWithinTransaction([item.id]);
+                    memory.delete(item.id);
+                    unsaved.delete(item.id);
+                }
             }
             if (memory.get(item.id) === item)
                 unsaved.delete(item.id);
@@ -265,6 +311,8 @@ export async function deleteRecords(ids: string[]) {
     const deletion = writes.then(async () => {
         const removed = await removeWithinTransaction(ids);
         for (const id of removed) { memory.delete(id); unsaved.delete(id); rejectedIds.add(id); }
+        // 本地删除也要落墓碑：关掉页面/重开后再来的迟到写入，靠它拦下（独立审计 P3）
+        rememberTombstones(removed);
         capacityProblem = '';
         if (!unsaved.size) problem = '';
         // 通知其它标签页：这些 id 已删，别再显示、也别让迟到写入复活
