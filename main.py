@@ -322,6 +322,10 @@ def data_status():
         "spectrum": spec,
         "capabilities": {
             "prophet": bool(getattr(_fm, "_HAS_PROPHET", False)),
+            # import 成功 ≠ 运行可用：预热可能超时/失败，接口 10 会退回移动平均。
+            # 把运行时状态也暴露出来，避免"capabilities 说 prophet 可用、实际走 MA"
+            # （独立审计 P3：本轮复验实测 prophet=on 而接口 10 用 moving_average）。
+            "prophet_runtime": dict(getattr(_fm, "_warm_state", {}) or {}),
             "kriging": bool(getattr(_sm, "_HAS_PYKRIGE", False)),
             "llm_enabled": bool(ENABLE_LLM),
             "llm_key_configured": bool(llm_agent.LLM_API_KEY),
@@ -1138,6 +1142,12 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
         print(f"[Main] 方案生成失败（不影响研判）：{exc}")
         plans = []
 
+    # 方案叙事来源按**实际结果**判定（与 forecast 的 narrative_source 同口径）：
+    # 开关打开但模型失败/无 key 时 explain_plans 返回模板，不能标成 llm。
+    _plan_fallback = _plans_template(plans, anomaly_type)
+    _plan_narrative_text = explain_plans(plans, anomaly_type)
+    _plan_narrative_from_llm = bool(_plan_narrative_text and _plan_narrative_text != _plan_fallback)
+
     # ===== 状态语义计算（队友反馈第4点）=====
     # 窗口是"过去 N 分钟"，出现过的异常不等于**此刻**仍在故障，必须分开表达：
     #   fault_active          窗口末尾 5 分钟内仍有异常 → 当前仍在故障
@@ -1223,8 +1233,54 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     # 区间与结论必须同源：没有故障结论 → 没有异常区间。
     if not is_anomaly:
         _spans = []
-    # 取"最大 end"而不是"排序后最后一条"：多 AP 区间交错时，末条未必是最晚结束的
-    # （独立审计 P3：潜在缺陷，真实数据未触发，但按最大 end 更稳）。
+        findings = []
+    # 第三/第四类触发事实：结论为异常、但标签与频谱都给不出区间时（KPI 判据、
+    # 或"仅个别小时越阈"的整窗均值正常分支），必须补一个同源区间，
+    # 否则 is_anomaly=true + anomaly_spans=[] 又是"结论没有证据支撑"。
+    # 小时级异常用**该小时起止**，而不是整窗（避免把 2 小时窗口说成全程异常）。
+    if is_anomaly and not _spans:
+        _ap0 = (findings[0].get("ap_id") if findings else
+                (hour_findings_all[0].get("ap_id") if hour_findings_all else "AP"))
+        _type0 = ((findings or hour_findings_all)[0].get("network_status") or "weak_coverage")
+        if _type0 not in ("weak_coverage", "congestion"):
+            _type0 = "weak_coverage"
+        if anomaly_scope == "hour" and hour_findings_all:
+            _hour_key = hour_findings_all[0].get("hour") or hour_findings_all[0].get("hour_key")
+            if _hour_key:
+                _s = f"{_hour_key}:00:00" if len(_hour_key) == 13 else f"{_hour_key}"
+                _e = f"{_hour_key}:59:59" if len(_hour_key) == 13 else window_end
+            else:
+                _s, _e = window_start, window_end
+        else:
+            _s, _e = window_start, window_end
+        _spans = [{"ap_id": _ap0, "type": _type0, "start": _s, "end": _e,
+                   "minutes": max(1, int((datetime.strptime(_e, "%Y-%m-%d %H:%M:%S")
+                                          - datetime.strptime(_s, "%Y-%m-%d %H:%M:%S")).total_seconds() // 60) + 1),
+                   "source": "kpi"}]
+    # 同一 AP+类型可能同时有"标签区间"和"频谱区间"，部分重叠时会被前端画两遍；
+    # 这里按区间并集合并，source 用 "merged" 标出（独立审计 P3）。
+    if _spans:
+        _grouped: dict[tuple[str, str], list[dict]] = {}
+        for _sp in _spans:
+            _grouped.setdefault((_sp["ap_id"], _sp["type"]), []).append(_sp)
+        _merged_spans: list[dict] = []
+        for (_ap, _ty), _items in _grouped.items():
+            _items.sort(key=lambda x: x["start"])
+            _cur = dict(_items[0])
+            for _nxt in _items[1:]:
+                if _nxt["start"] <= _cur["end"]:
+                    if _nxt["end"] > _cur["end"]:
+                        _cur["end"] = _nxt["end"]
+                    if _cur.get("source") != _nxt.get("source"):
+                        _cur["source"] = "merged"
+                else:
+                    _merged_spans.append(_cur)
+                    _cur = dict(_nxt)
+            _merged_spans.append(_cur)
+        for _sp in _merged_spans:
+            _sp["minutes"] = max(1, int((datetime.strptime(_sp["end"], "%Y-%m-%d %H:%M:%S")
+                                         - datetime.strptime(_sp["start"], "%Y-%m-%d %H:%M:%S")).total_seconds() // 60) + 1)
+        _spans = sorted(_merged_spans, key=lambda x: (x["start"], x["ap_id"]))
     _last_anomaly_at = max((s["end"] for s in _spans), default=None)
     _RECOVER_GRACE_SEC = 600   # 10 分钟：数据是分钟级且故障有 ramp-out，5 分钟太紧
     if is_anomaly and _last_anomaly_at:
@@ -1290,9 +1346,10 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                 for h in perf_hints
             ],
             "plans": plans,                      # 新增：处理方案 + 对比仿真（闭环"方案制定"）
-            # 方案的自然语言说明（阶段2）：LLM 可用时改写，否则用模板；只引用方案内已有数值
-            "plan_narrative": explain_plans(plans, anomaly_type),
-            "plan_narrative_source": "llm" if ENABLE_LLM else "template",
+            # 方案的自然语言说明（阶段2）：LLM 可用时改写，否则用模板；只引用方案内已有数值。
+            # 来源必须按**实际结果**标注：开关打开但模型失败时仍是模板，不能标 llm。
+            "plan_narrative": _plan_narrative_text,
+            "plan_narrative_source": "llm" if _plan_narrative_from_llm else "template",
         },
     }
 
@@ -1616,12 +1673,17 @@ def _forecast_template(data: dict) -> str:
     else:
         parts.append("预测窗口内所有对象均未越过告警阈值。")
     if impacts:
-        ups = [i for i in impacts if (i.get("points") or [])]
+        # impacts 的序列字段是 history / predicted（不是 points）——此前读 points 恒为空，
+        # 导致模板永远不提 SINR/吞吐预测（独立审计 P3）。
+        ups = [i for i in impacts if (i.get("predicted") or [])]
         if ups:
             first_impact = ups[0]
-            pts = first_impact["points"]
-            parts.append(f"{first_impact.get('label', '指标')}当前约 {pts[0].get('value')}，"
-                         f"预测末值约 {pts[-1].get('value')}（区间 {pts[-1].get('lower')}~{pts[-1].get('upper')}）。")
+            hist_pts = first_impact.get("history") or []
+            pred_pts = first_impact["predicted"]
+            now = hist_pts[-1].get("value") if hist_pts else None
+            parts.append(f"{first_impact.get('label', '指标')}当前约 {now}，"
+                         f"预测末值约 {pred_pts[-1].get('value')}"
+                         f"（区间 {pred_pts[-1].get('lower')}~{pred_pts[-1].get('upper')}）。")
     parts.append("以上为基于历史窗口趋势外推的结果，不含未来故障注入信息；"
                  "预测越远区间越宽，应以区间而非单点解读。")
     return "".join(parts)
@@ -1641,8 +1703,11 @@ def explain_forecast(data: dict) -> str:
         "base_time": data.get("base_time"),
         "alerts": [{k: a.get(k) for k in ("target", "title", "severity", "start", "end")}
                    for a in (data.get("alerts") or [])[:3]],
-        "impacts": [{"label": i.get("label"), "current": (i.get("points") or [{}])[0].get("value"),
-                     "last": (i.get("points") or [{}])[-1].get("value")}
+        # 与 _forecast_template 同口径：序列字段是 history / predicted（不是 points），
+        # 否则 LLM 看到的 current/last 恒为 null（独立审计 P3）。
+        "impacts": [{"label": i.get("label"),
+                     "current": ((i.get("history") or [{}])[-1].get("value")),
+                     "last": ((i.get("predicted") or [{}])[-1].get("value"))}
                     for i in (data.get("impacts") or [])],
         "limitations": data.get("limitations") or [],
     }
@@ -2236,6 +2301,11 @@ def data_events(scenario: str | None = Query(None, description="按场景过滤�
     文件缺失时返回空列表（而不是 500）：事件表缺失不应让工作台打不开。
     """
     path = DATA_DIR / "fault_events.csv"
+    # scenario 可选，但**给了就必须合法**（独立审计 P2：此前任意字符串都返回空列表，
+    # 与 api.md 声明的 40002 不一致，调用方无法区分"场景写错"和"该场景没有事件"）。
+    if scenario is not None and scenario not in VALID_SCENARIOS:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "scenario仅支持" + "/".join(VALID_SCENARIOS))
     if not path.exists():
         return success_response({"events": [], "count": 0,
                                  "note": f"未找到 {path.name}，请用 data_generator.py 重新生成数据"})
@@ -3019,13 +3089,13 @@ def forecast_preview(req: ForecastPreviewRequest):
                         "、".join(_DATA_SCENARIOS) + "），不返回其它场景的预测结果。"),
             "alerts": [], "spectra": [], "impacts": [], "alertsTruncated": False,
         })
-    # NaN 会穿过所有区间比较（NaN 与任何数比较都是 False），
-    # 然后在 round() 抛 ValueError 变成 500（独立审计 P3）。
+    # 先判值域、再判有限性：这样 ±Infinity 落到"超出 1~1440"（40003，值域错），
+    # 而 NaN 因为与任何数比较都为 False，才能落到下面的"非有限数值"（40002，格式错）。
+    if req.horizonMinutes <= 0 or req.horizonMinutes > 1440:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "horizonMinutes 需在 1~1440 分钟之间")
     if not math.isfinite(req.horizonMinutes):
         return error_response(ERROR_CODE["PARAM_INVALID"],
                               f"horizonMinutes 必须是有限数值（收到 {req.horizonMinutes}）")
-    if req.horizonMinutes <= 0 or req.horizonMinutes > 1440:
-        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "horizonMinutes 需在 1~1440 分钟之间")
     # 只接受整数分钟（审计 10-29 六-1）：30.1 与 30.9 在下面会被 int() 成 30，
     # 两轮不同的请求拿到同一个预测标识，语义上不该发生。明确拒绝而不是静默取整。
     if abs(req.horizonMinutes - round(req.horizonMinutes)) > 1e-9:
@@ -3099,6 +3169,9 @@ def forecast_preview(req: ForecastPreviewRequest):
             "source": "simulation", "status": "insufficient_data",
             "message": _insufficient_msg,
             "alerts": [], "spectra": [], "impacts": [],
+            # 同族响应字段必须齐全（独立审计 P3）：曾经这个分支缺 alertsTruncated，
+            # 客户端读不到字段、时有时无。
+            "alertsTruncated": False,
         }
         _remember_forecast(fid, result)
         return success_response(result)
@@ -3426,6 +3499,7 @@ def forecast_preview(req: ForecastPreviewRequest):
             "message": (f"参考历史窗口（{req.history.start} ~ {req.history.end}）内没有频谱数据；"
                         f"频谱表覆盖至 {_SPEC['max_ts']:%Y-%m-%d %H:%M}，请把基准时刻调到该区间内。"),
             "alerts": [], "spectra": [], "impacts": [],
+            "alertsTruncated": False,
         }
         _remember_forecast(fid, empty)
         return success_response(empty)
