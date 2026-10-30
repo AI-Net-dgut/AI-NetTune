@@ -1147,3 +1147,72 @@ POST /api/forecast/analyze
 - 方案缓存为进程内字典（上限 200 条，满后按 FIFO 淘汰 50 条），**服务重启后旧 plan_id 失效**。
 - 天线下倾角 / 发射功率的"当前值"是默认工参（数据表没有工参字段），已在 `assumptions` 里写明。
 - 未评估对邻区的连带影响与切换冲击，`limitations` 里已写明。
+
+---
+
+## 接口 17：预测风险 → 处置方案（POST /api/forecast/plans）
+
+把**某一轮预测里的风险**变成可操作的处置方案（含可编辑参数与默认效果）。与接口 2/3 内嵌的 `plans[]`（现存问题方案）互不相干。
+
+### 接口 17 请求
+
+|参数|类型|必填|说明|
+|---|---|---|---|
+|forecastId|string|是|接口 11 返回的预测 ID；缓存不存在/已过期（服务重启或超出 32 轮）→ 40003|
+|scenario|string|是|必须与该轮预测记录一致，否则 40002|
+|baseTime|string|是|同上，必须一致|
+|history|object|是|{start,end}，必须与该轮记录一致|
+|forecast|object|是|{start,end}，必须与该轮记录一致|
+|alertId|string|可选|指定要处置的风险；不存在 → 40002；若同时给了 `targetWindow`，该风险必须与时段**有交集**，否则 40002|
+|targetWindow|object|可选|关注时段，必须**完整落在**预测范围内（部分越界 → 40003；起止反向或格式非法 → 40002）|
+
+### 接口 17 响应（`data`）
+
+```json
+{
+  "plans": [
+    {"id": "PLAN-AP-03-tilt-1@833cd6c5…", "baseId": "PLAN-AP-03-tilt-1",
+     "name": "下调天线下倾角", "origin": "forecast",
+     "parameters": [{"id": "tilt", "label": "下倾角", "type": "number", "unit": "°",
+                     "currentValue": 8, "suggestedValue": 5}],
+     "simulation": {"id": "SIM-PLAN-AP-03-tilt-1@833cd6c5…", "status": "completed",
+                    "summary": "…", "metrics": [{"key": "rsrpDbm", "objectId": "AP-03",
+                    "before": -111.06, "after": -107.46}]},
+     "basis": {"forecastId": "…", "risk": {"ap": "AP-03", "type": "覆盖故障",
+               "start": "…", "end": "…", "title": "…"},
+               "basisWindow": {"start": "…", "end": "…"}, "targetWindow": null}}
+  ],
+  "risk": {"ap": "AP-03", "type": "覆盖故障", "start": "…", "end": "…", "title": "…"},
+  "basisWindow": {"start": "2026-01-02 13:12:00", "end": "2026-01-02 14:12:00"},
+  "disclaimer": "方案依据：本轮预测预计 … 期间 AP-03 出现覆盖故障…；参数与效应基于预测基准前的实测窗口 …，属当前配置下的等效测算，不是该未来时段的实测结果…"
+}
+```
+
+|字段|说明|
+|---|---|
+|plans|方案数组；**无风险时为空数组**并给 `message`，不编造方案|
+|plans[].id|`<模板ID>@<轮次哈希>`：轮次哈希 = md5(forecastId\|alertId) 的 32 位，**同一 AP 的两轮预测不会互相覆盖**|
+|plans[].baseId|模板原始 ID（如 `PLAN-AP-03-tilt-1`），便于对照与排查|
+|plans[].origin|固定 `forecast`，前端据此与"现存问题方案"区分|
+|plans[].basis|该方案的依据：forecastId / 风险（AP、类型、时段）/ 评估窗口 / 关注时段|
+|plans[].simulation|后端已算好的默认效果：`id == "SIM-" + plan.id`；参数未改时前端可直接展示，改参数须重跑接口 14|
+|basisWindow|**参数基线与效果评估所用窗口** = 预测基准前的实测窗口（不是预测目标时段）|
+|disclaimer|免责说明全文；前端必须展示，不得折叠隐藏|
+
+### 接口 17 错误码
+
+|场景|code|说明|
+|---|---|---|
+|预测记录不存在/过期|40003|请重新执行一次预测|
+|场景/基准/历史/预测范围不一致|40002|两轮记录不能混用|
+|alertId 不存在，或与关注时段无交集|40002|不能拿窗外风险生成窗内方案|
+|关注时段起止反向/格式非法|40002|格式 `yyyy-MM-dd HH:mm:ss`|
+|关注时段部分越界|40003|请缩短时段或延长预测时长|
+|该轮 `status=insufficient_data`|40003|数据不足，不能据此生成方案|
+|基准前窗口该 AP 无采样|40002|无法给出可靠参数基线|
+|该轮无风险|**0**|`plans=[]` + `message`，不视为错误|
+
+### 与接口 14 的关系
+
+接口 17 返回的 `plan.id` 可直接用于接口 14 `/api/plan/simulate`；但预测来源方案**绑定依据**：评估窗口必须等于 `basisWindow`、AP 必须等于 `basis.risk.ap`，否则 40002（防止手工改请求去读基准之后的真实数据或换 AP）。
+

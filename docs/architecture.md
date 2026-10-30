@@ -14,7 +14,7 @@
 │     ↓                                                            │
 │   components(19)  展示组件：图表、表格、方案模块、AI 面板        │
 │     ↓                                                            │
-│   chat(5) / forecast(14) / replay(13)   三个业务域              │
+│   chat(5) / forecast(15) / replay(13)   三个业务域              │
 │     ↓                                                            │
 │   services(9)  →  types(2)     HTTP 与字段映射（不反向依赖 UI）  │
 └───────────────────────────────┬──────────────────────────────────┘
@@ -22,22 +22,24 @@
 ┌───────────────────────────────▼──────────────────────────────────┐
 │ 后端  FastAPI + Python 3.13                                       │
 │                                                                  │
-│   main.py（≈3.0k 行）★ 组合根                                     │
+│   main.py（≈4.1k 行）★ 组合根                                     │
 │     · 配置常量 / CSV 加载 / 数据索引                              │
 │     · 17 个业务接口 + /api/download/reports 静态挂载               │
 │     · 工具注册表 TOOLS + 意图分发                                 │
 │     · 报告 / 方案 / 空间 / LLM 包装                               │
 │                                                                  │
 │   领域模块（互不依赖，只被 main 引用）：                          │
-│     plan_model(324)     方案仿真                                  │
-│     report_model(340)   Markdown / HTML 报告渲染                  │
-│     forecast_model(279) Prophet ↔ 移动平均降级                   │
-│     llm_agent(214)      意图规则 + LLM 调用 + 兜底                │
-│     spatial_frames(143) / spectrum_frames(139)  IDW 空间帧        │
-│     signal_nav(126)     信号导航                                  │
-│     spatial_model(88)   Kriging 热力图                            │
-│     data_layout(53)     数据路径解析                              │
+│     plan_model(319)     方案仿真                                  │
+│     report_model(330)   Markdown / HTML 报告渲染                  │
+│     forecast_model(247) Prophet ↔ 移动平均降级                   │
+│     llm_agent(188)      意图规则 + LLM 调用 + 兜底                │
+│     spatial_frames(127) / spectrum_frames(116)  IDW 空间帧        │
+│     signal_nav(120)     信号导航                                  │
+│     spatial_model(75)   Kriging 热力图                            │
+│     data_layout(47)     数据路径解析                              │
 │     data_generator(638) 离线造数（不进服务链路）                  │
+│                                                                  │
+│   （体量数字随迭代变化，以 wc -l 为准；此处为 2026-10 实测值）     │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -112,7 +114,7 @@ data/spectrum_7d.csv ──load_spectrum()──► _SPEC{df, bands, min_ts, max
 
 ## 6. 已知约束与风险
 
-### R1　`main.py` 是单体（≈3.7k 行，17 个业务接口 + 报告挂载 + 组合根）
+### R1　`main.py` 是单体（≈4.1k 行，17 个业务接口 + 报告挂载 + 组合根）
 
 一个文件同时承担：配置、加载索引、HTTP、业务编排、工具注册、LLM 包装。
 
