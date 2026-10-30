@@ -41,21 +41,36 @@ export default function CaseEventButtons({ state, act, scope, disabled = false }
   if (error) return <p className="ain-reference-error" role="alert">{error}</p>;
   if (!events.length) return null;
 
-  const cutoff = viewTime(state);
+  // 主时钟（数据已知到的时刻）与查看时钟分开（10-30 清单第 2 点）：
+  //   可用性按**主时钟**判断，否则"固定分析时查看时刻停在 14:59"会让已结束案例也永远不可点；
+  //   进行中的案例只选到 min(主时钟, 事件结束)，绝不越过已知数据（reducer 也会再夹一次）。
+  const nowMs = state.currentMs;
+  const viewCutoff = viewTime(state);
 
   return <div className="ain-reference-row" aria-label="预置案例">
     <span className="ain-reference-hint">预置案例</span>
     {events.map(event => {
       const startMs = toEpoch(event.start);
       const endMs = toEpoch(event.end);
-      const reachable = state.ready && endMs <= cutoff;
-      const label = `${event.apId} ${TYPE_LABEL[event.faultType] ?? event.faultType} ${event.start.slice(11, 16)}`;
+      const phase: "pending" | "running" | "ended" =
+        startMs > nowMs ? "pending" : endMs <= nowMs ? "ended" : "running";
+      const rangeEnd = phase === "running" ? Math.min(nowMs, endMs) : endMs;
+      const selectable = state.ready && !state.locked && phase !== "pending" && rangeEnd > startMs;
+      const typeLabel = TYPE_LABEL[event.faultType] ?? event.faultType;
+      const label = `${event.apId} ${typeLabel} ${event.start.slice(11, 16)}`
+        + (phase === "running" ? "（进行中）" : "");
+      const phaseText = phase === "pending"
+        ? "未开始（主时钟尚未到事件开始时刻）"
+        : phase === "running"
+          ? `进行中：只选已发生的 ${event.start} — ${new Date(rangeEnd).toISOString().slice(11, 16)}（不读未来数据）`
+          : `已结束：可选全段 ${event.start} — ${event.end}`;
       return <button key={event.eventId} type="button" className="ain-button"
-        disabled={disabled || state.locked || !reachable}
-        title={reachable
-          ? `${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）`
-          : "该事件晚于当前查看截止时刻，请先把时钟推进到事件结束之后"}
-        onClick={() => act({ type: "select-range", startMs, endMs })}>
+        disabled={disabled || !selectable}
+        title={state.locked
+          ? `${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）\n当前为固定查看，请先退出固定分析（点「实时」）再切换案例`
+          : `${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）\n${phaseText}`
+            + (phase !== "pending" && viewCutoff < endMs ? "\n切换后会按上表范围重新取数。" : "")}
+        onClick={() => act({ type: "select-range", startMs, endMs: rangeEnd })}>
         {label}
       </button>;
     })}
