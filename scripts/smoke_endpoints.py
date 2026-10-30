@@ -106,6 +106,19 @@ def build_cases(base: str):
                       {"forecastId": "missing", "scenario": SCENARIO, "baseTime": base_time,
                        "history": {"start": hist[0], "end": hist[1]},
                        "forecast": {"start": base_time, "end": base_time}}, {40003}))
+
+    # 17 号：预测风险→处置方案（此前冒烟只覆盖 16 个业务接口，缺这一条）
+    if prev_data.get("id"):
+        cases.append(("17 预测处置方案", "POST", "/api/forecast/plans",
+                      {"forecastId": prev_data["id"], "scenario": SCENARIO, "baseTime": base_time,
+                       "history": {"start": hist[0], "end": hist[1]},
+                       "forecast": {"start": prev_data["forecast"]["start"],
+                                    "end": prev_data["forecast"]["end"]}}, {0}))
+    else:
+        cases.append(("17 预测处置方案（无可用记录）", "POST", "/api/forecast/plans",
+                      {"forecastId": "missing", "scenario": SCENARIO, "baseTime": base_time,
+                       "history": {"start": hist[0], "end": hist[1]},
+                       "forecast": {"start": base_time, "end": base_time}}, {40003}))
     return cases
 
 

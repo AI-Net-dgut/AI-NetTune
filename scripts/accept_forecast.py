@@ -21,6 +21,15 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Windows 默认 GBK 控制台无法编码口径说明里的 U+2212（"−"）等字符，
+# 会在第一张表之后抛 UnicodeEncodeError、后面几节全部不执行（独立审计 P3）。
+# 与 tests/run_tests.py 同口径：先把 stdout/stderr 切到 UTF-8，失败则忽略。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 # 同一目录下的口径一致性度量（docs/fault_definition.md 第 7 节指标 3）

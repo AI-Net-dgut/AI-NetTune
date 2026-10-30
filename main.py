@@ -868,7 +868,10 @@ def _anomaly_spans(rows: list[dict], limit: int = 20) -> list[dict]:
                 if current is not None:
                     spans.append(current)
                 current = {"ap_id": ap_id, "type": status,
-                           "start": ts_str, "end": ts_str, "minutes": 1}
+                           "start": ts_str, "end": ts_str, "minutes": 1,
+                           # 同一数组里三种来源必须可区分（独立审计 P3）：
+                           # label=网络标签派生 / spectrum=频谱越阈 / kpi=KPI 判据
+                           "source": "label"}
                 last_dt = ts
         if current is not None:
             spans.append(current)
@@ -1215,13 +1218,20 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                    "minutes": max(1, int((datetime.strptime(window_end, "%Y-%m-%d %H:%M:%S")
                                           - datetime.strptime(window_start, "%Y-%m-%d %H:%M:%S")).total_seconds() // 60) + 1),
                    "source": "kpi"}]
+    # 结论为"正常"时不得再给出异常区间（独立审计 P3：标签里出现过非 normal 分钟、
+    # 但整窗判据未达门槛时，会出现"各项指标正常"＋"异常区间 …"的自相矛盾）。
+    # 区间与结论必须同源：没有故障结论 → 没有异常区间。
+    if not is_anomaly:
+        _spans = []
     # 取"最大 end"而不是"排序后最后一条"：多 AP 区间交错时，末条未必是最晚结束的
     # （独立审计 P3：潜在缺陷，真实数据未触发，但按最大 end 更稳）。
     _last_anomaly_at = max((s["end"] for s in _spans), default=None)
     _RECOVER_GRACE_SEC = 600   # 10 分钟：数据是分钟级且故障有 ramp-out，5 分钟太紧
     if is_anomaly and _last_anomaly_at:
         try:
-            _gap = (datetime.strptime(req.window_end, "%Y-%m-%d %H:%M:%S")
+            # "此刻"要用**裁剪后**的窗口末尾：请求尾部越界时用 req.window_end 会拿未来时刻比较，
+            # 同一份数据得出不同状态（独立审计 P3）。
+            _gap = (datetime.strptime(window_end, "%Y-%m-%d %H:%M:%S")
                     - datetime.strptime(_last_anomaly_at, "%Y-%m-%d %H:%M:%S")).total_seconds()
         except (ValueError, TypeError):
             _gap = 0
@@ -2993,6 +3003,27 @@ def forecast_preview(req: ForecastPreviewRequest):
         base_dt = _parse_ts(req.baseTime)
     except (ValueError, TypeError):
         return error_response(ERROR_CODE["PARAM_INVALID"], "baseTime 格式应为 yyyy-MM-dd HH:mm:ss")
+    # 场景必须先校验（独立审计 P2）：原先 preview 完全不看 scenario，
+    # 传「商场」「火星」都会返回 ready，而 alerts/spectra 实际是校园数据，
+    # 只把 scenario 字段改写成请求值 —— 等于跨场景伪造预测结果。
+    if req.scenario not in VALID_SCENARIOS:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "scenario仅支持" + "/".join(VALID_SCENARIOS))
+    if req.scenario not in _DATA_SCENARIOS:
+        return success_response({
+            "id": "", "scenario": req.scenario, "baseTime": req.baseTime,
+            "history": {"start": req.history.start, "end": req.history.end},
+            "forecast": {"start": req.baseTime, "end": req.baseTime},
+            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": "simulation", "status": "insufficient_data",
+            "message": (f"场景「{req.scenario}」暂无数据（当前数据仅覆盖：" +
+                        "、".join(_DATA_SCENARIOS) + "），不返回其它场景的预测结果。"),
+            "alerts": [], "spectra": [], "impacts": [], "alertsTruncated": False,
+        })
+    # NaN 会穿过所有区间比较（NaN 与任何数比较都是 False），
+    # 然后在 round() 抛 ValueError 变成 500（独立审计 P3）。
+    if not math.isfinite(req.horizonMinutes):
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"horizonMinutes 必须是有限数值（收到 {req.horizonMinutes}）")
     if req.horizonMinutes <= 0 or req.horizonMinutes > 1440:
         return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "horizonMinutes 需在 1~1440 分钟之间")
     # 只接受整数分钟（审计 10-29 六-1）：30.1 与 30.9 在下面会被 int() 成 30，
@@ -3018,6 +3049,15 @@ def forecast_preview(req: ForecastPreviewRequest):
         return error_response(
             ERROR_CODE["PARAM_INVALID"],
             f"history.start（{req.history.start}）必须早于 history.end（{req.history.end}）")
+    # 历史窗口上限（独立审计 P3）：每个频谱的历史帧数 = 历史分钟数，
+    # 2880 分钟会让响应膨胀到 6.5MB/6.1s，且违反 docs/api.md 自己声明的
+    # "单侧帧数 × 频段数 ≤ 40000"（50 频段 → 800 分钟）。这里显式拒绝而不是悄悄拖慢。
+    _hist_minutes = (hist_end_dt - hist_start_dt).total_seconds() / 60
+    if _hist_minutes > 800:
+        return error_response(
+            ERROR_CODE["PARAM_OUT_OF_RANGE"],
+            f"history 窗口过长（{int(_hist_minutes)} 分钟）：频谱按分钟出帧，"
+            f"窗口超过 800 分钟会超过「帧数×频段数 ≤ 40000」的上限；请缩短参考历史")
 
     fid = "FC_" + base_dt.strftime("%Y%m%d%H%M%S")
     # 预测标识必须绑定"这一轮的完整上下文"：场景 + 基准 + 历史范围 + 预测时长。
@@ -3304,6 +3344,10 @@ def forecast_preview(req: ForecastPreviewRequest):
         alerts_truncated = True
         alerts = alerts[:200]
 
+    # narrative 的"实际来源"：只有模型真的改写成功才算 llm。
+    # 先算模板基线，再与 explain_forecast 的结果比对（_llm_rewrite 失败会原样返回模板）。
+    _narrative_data = {"base_time": req.baseTime, "alerts": alerts, "impacts": None}
+
     # impacts：SINR/吞吐从主网络数据按分钟聚合，用同一套阻尼趋势外推
     impacts = []
     try:
@@ -3387,6 +3431,12 @@ def forecast_preview(req: ForecastPreviewRequest):
         return success_response(empty)
 
     views_ap = alerts[0]["target"] if alerts else "AP-01"
+    # narrative 来源按**实际结果**判定（独立审计 P3）：_llm_rewrite 失败会原样返回模板，
+    # 此时若仍标 llm，就是"模板冒充大模型输出"。
+    _narr_data = {"base_time": req.baseTime, "alerts": alerts, "impacts": impacts}
+    _narr_fallback = _forecast_template(_narr_data)
+    _narrative_text = explain_forecast(_narr_data)
+    _narrative_from_llm = bool(_narrative_text and _narrative_text != _narr_fallback)
     result = {
         "id": fid, "scenario": req.scenario, "baseTime": req.baseTime,
         "history": {"start": req.history.start, "end": req.history.end},
@@ -3400,9 +3450,10 @@ def forecast_preview(req: ForecastPreviewRequest):
         "alerts": alerts, "spectra": spectra, "impacts": impacts,
         # 预测结果的自然语言说明（阶段2）：LLM 可用时由大模型改写，否则用模板。
         # 模板只引用本响应里已有的数值，保证"没 key 也有话可说"且不编造。
-        "narrative": explain_forecast({"base_time": req.baseTime, "alerts": alerts,
-                                       "impacts": impacts}),
-        "narrative_source": "llm" if ENABLE_LLM else "template",
+        # narrative_source 必须看**实际结果**而不是开关：模型超时/401 时 _llm_rewrite
+        # 会退回模板，此时仍标 llm 就是"模板冒充大模型输出"（独立审计 P3）。
+        "narrative": _narrative_text,
+        "narrative_source": "llm" if _narrative_from_llm else "template",
         "spectrumViews": {
             "powerId": f"{views_ap}-power", "occupancyId": f"{views_ap}-occupancy",
             "recommendedView": "occupancy" if alerts else "curve",
@@ -3487,6 +3538,14 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
         # 部分越界 16:00~18:00、起止反向 15:50~14:40 原先都会被接受）
         _tw = req.targetWindow
         if _tw is not None:
+            # 时间格式必须先解析：否则 "abc"/"2026/01/01 10:35:00" 会被当成"合法但越界"
+            # 返回 40003 并把垃圾字符串回显（独立审计 P3）；缺秒的 "10:4" 还会因字典序混进来。
+            try:
+                _parse_ts(_tw.start); _parse_ts(_tw.end)
+            except (ValueError, TypeError):
+                return error_response(
+                    ERROR_CODE["PARAM_INVALID"],
+                    f"关注时段格式应为 yyyy-MM-dd HH:mm:ss（收到 {_tw.start} ~ {_tw.end}）")
             if _tw.start >= _tw.end:
                 return error_response(
                     ERROR_CODE["PARAM_INVALID"],
@@ -3768,6 +3827,12 @@ def forecast_plans(req: ForecastPlanRequest):
     # 新方案接口原先对 16:00~18:00 这种部分越界仍返回"该时段没有风险"）
     _tw = req.targetWindow
     if _tw is not None:
+        try:
+            _parse_ts(_tw.start); _parse_ts(_tw.end)
+        except (ValueError, TypeError):
+            return error_response(
+                ERROR_CODE["PARAM_INVALID"],
+                f"关注时段格式应为 yyyy-MM-dd HH:mm:ss（收到 {_tw.start} ~ {_tw.end}）")
         if _tw.start >= _tw.end:
             return error_response(ERROR_CODE["PARAM_INVALID"],
                                   f"关注时段起止反向（{_tw.start} >= {_tw.end}），请检查")
