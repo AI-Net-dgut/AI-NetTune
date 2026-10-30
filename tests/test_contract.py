@@ -579,6 +579,23 @@ def test_forecast_plan_ids_are_bound_to_round():
             assert r.get("code") == 0, (plan["id"], r.get("message"))
 
 
+def test_crossing_runs_are_split_at_recovery_gaps():
+    """越阈分钟必须按连续段拆分，中间恢复的间隙不能并进同一条风险（10-30 清单第 6 点）。
+
+    受控输入：10,11,12（3 分钟）→ 恢复 15 分钟 → 30,31,32（3 分钟）
+    期望：两段，而不是"10→32 一条连续风险"。
+    """
+    # 两段各 3 分钟，中间空 17 分钟
+    assert main._split_crossing_runs([10, 11, 12, 30, 31, 32], 3) == [[10, 11, 12], [30, 31, 32]]
+    # 不足门槛的短段要丢弃
+    assert main._split_crossing_runs([10, 11, 30, 31, 32], 3) == [[30, 31, 32]]
+    # 连续一整天 → 单段
+    assert main._split_crossing_runs(list(range(0, 24)), 3) == [list(range(0, 24))]
+    # 全都不足 → 空
+    assert main._split_crossing_runs([1, 2, 9, 10], 3) == []
+    assert main._split_crossing_runs([], 3) == []
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 

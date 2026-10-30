@@ -2838,6 +2838,29 @@ class ForecastPlanRequest(BaseModel):
     targetWindow: _TimeRange | None = None
 
 
+def _split_crossing_runs(hit_minutes: list[int], min_minutes: int) -> list[list[int]]:
+    """把"越阈分钟序号"拆成若干**连续**区间，只保留长度 ≥ min_minutes 的段。
+
+    为什么单独成函数（10-30 清单第 6 点）：原先预警区间取"首个合格段 → 最后命中点"，
+    中间恢复的间隙被并进同一条风险，展示成"连续故障"。拆段后才能如实表达
+    "14:33–15:00 有风险、15:00–15:40 恢复、15:40–16:12 又有风险"。
+
+    纯函数、无副作用，便于用受控输入验证（真实 7 天数据恰好都是单段）。
+    """
+    runs: list[list[int]] = []
+    run: list[int] = []
+    for i in hit_minutes:
+        if run and i == run[-1] + 1:
+            run.append(i)
+        else:
+            if len(run) >= min_minutes:
+                runs.append(run)
+            run = [i]
+    if len(run) >= min_minutes:
+        runs.append(run)
+    return runs
+
+
 def _parse_ts(value: str):
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
 
@@ -3193,76 +3216,76 @@ def forecast_preview(req: ForecastPreviewRequest):
             crossing = [_bands_over(f["values"], threshold, direction) for f in frames]
             hit_minutes = [i for i, ids in enumerate(crossing) if len(ids) >= min_crossing_bands]
 
-            # 找出"连续 ≥ min_crossing_minutes 分钟"的段落，取第一段
-            run_start = None
-            run = []
-            for i in hit_minutes:
-                if run and i == run[-1] + 1:
-                    run.append(i)
-                else:
-                    if len(run) >= min_crossing_minutes:
-                        run_start = run[0]
-                        break
-                    run = [i]
-            if run_start is None:
-                if len(run) >= min_crossing_minutes:
-                    run_start = run[0]
-                else:
-                    continue          # 没有够长的连续段 → 视为噪声，不告警
-            hit_minutes = [i for i in hit_minutes if i >= run_start]
-            if not hit_minutes:
-                continue
+            # 收集**所有**"连续 ≥ min_crossing_minutes 分钟"的区间（10-30 清单第 6 点）。
+            # 原实现取"首个合格段 → 最后命中点"，中间恢复的间隙被并进同一条风险，
+            # 用户会以为"从头到尾一直在故障"。现在每段独立成一条风险。
+            runs = _split_crossing_runs(hit_minutes, min_crossing_minutes)
+            if not runs:
+                continue          # 没有够长的连续段 → 视为噪声，不告警
 
-            first_minute = hit_minutes[0]
-            last_minute = hit_minutes[-1]
-            hardest = crossing[first_minute]
-            ratio = len(hardest) / max(1, len(bands))
             already = bool(hist_frames[metric]) and len(
                 _bands_over(hist_frames[metric][-1]["values"], threshold, direction)
             ) >= min_crossing_bands
+            unit_text = "dBm" if metric == "power" else "%"
 
-            if already:
-                severity = "high" if ratio >= 0.5 else "medium"
-                unit_text = "dBm" if metric == "power" else "%"
-                if last_minute + 1 >= len(frames):
-                    duration_text = f"预测整个 {int(req.horizonMinutes)} 分钟内该状态维持"
+            for run_index, segment in enumerate(runs, start=1):
+                first_minute = segment[0]
+                last_minute = segment[-1]
+                hardest = crossing[first_minute]
+                ratio = len(hardest) / max(1, len(bands))
+
+                if already:
+                    severity = "high" if ratio >= 0.5 else "medium"
+                    if last_minute + 1 >= len(frames):
+                        duration_text = f"预测整个 {int(req.horizonMinutes)} 分钟内该状态维持"
+                    else:
+                        duration_text = (f"预计持续到第 {last_minute + 1} 分钟"
+                                         f"（{frames[last_minute]['end'][11:16]}）后逐步恢复")
+                    title = f"{ap} 已处于{'弱覆盖' if metric == 'power' else '拥塞'}，预计持续"
+                    summary = (
+                        f"基准时刻（{req.baseTime}）已有 {len(hardest)}/{len(bands)} 个频段"
+                        f"{label}{verb} {threshold}{unit_text}；按当前趋势，{duration_text}。"
+                    )
                 else:
-                    duration_text = (f"预计持续到第 {last_minute + 1} 分钟"
-                                     f"（{frames[last_minute]['end'][11:16]}）后逐步恢复")
-                title = f"{ap} 已处于{'弱覆盖' if metric == 'power' else '拥塞'}，预计持续"
-                summary = (
-                    f"基准时刻（{req.baseTime}）已有 {len(hardest)}/{len(bands)} 个频段"
-                    f"{label}{verb} {threshold}{unit_text}；按当前趋势，{duration_text}。"
-                )
-            else:
-                severity = "high" if first_minute <= 10 else ("medium" if first_minute <= 30 else "low")
-                unit_text = "dBm" if metric == "power" else "%"
-                summary = (
-                    f"基准时刻（{req.baseTime}）尚未越阈；按当前趋势外推，"
-                    f"预计第 {first_minute} 分钟后开始有 {len(hardest)}/{len(bands)} 个频段"
-                    f"{label}{verb} {threshold}{unit_text}。"
-                    # 措辞校准：这是"趋势延续"判断，不是保证。实测 01-02 AP-03 弱覆盖
-                    # 在故障注入前的历史窗口内毫无前兆，任何外推都无法提前预知，
-                    # 所以不写"提前预警"这类绝对表述。
-                    f"（趋势推算值，非确定预测；若后续趋势变化，越阈时刻会随之变动）"
-                )
-                title = f"{ap} 预计 {first_minute} 分钟后{label}{verb} {threshold}{unit_text}"
+                    severity = "high" if first_minute <= 10 else ("medium" if first_minute <= 30 else "low")
+                    summary = (
+                        f"基准时刻（{req.baseTime}）尚未越阈；按当前趋势外推，"
+                        f"预计第 {first_minute} 分钟后开始有 {len(hardest)}/{len(bands)} 个频段"
+                        f"{label}{verb} {threshold}{unit_text}。"
+                        # 措辞校准：这是"趋势延续"判断，不是保证。实测 01-02 AP-03 弱覆盖
+                        # 在故障注入前的历史窗口内毫无前兆，任何外推都无法提前预知，
+                        # 所以不写"提前预警"这类绝对表述。
+                        f"（趋势推算值，非确定预测；若后续趋势变化，越阈时刻会随之变动）"
+                    )
+                    title = f"{ap} 预计 {first_minute} 分钟后{label}{verb} {threshold}{unit_text}"
 
-            span_start = base_dt + timedelta(minutes=first_minute)
-            span_end = min(fore_end, base_dt + timedelta(minutes=last_minute + 1))
-            if span_end <= span_start:      # 单分钟命中：至少给 1 分钟窗口
-                span_end = min(fore_end, span_start + timedelta(minutes=1))
+                # 多段时标题补"第 k 段"，避免两条同名风险混淆
+                if len(runs) > 1:
+                    title = f"{title}（第 {run_index}/{len(runs)} 段）"
+                    summary = (summary.rstrip("。")
+                               + f"（本轮预测共 {len(runs)} 个独立时段，这是第 {run_index} 段）")
 
-            alerts.append({
-                "id": f"ALT-{ap}-{'weak' if metric == 'power' else 'cong'}",
-                "target": ap,
-                "title": title,
-                "summary": summary,
-                "severity": severity,
-                "start": fmt(span_start), "end": fmt(span_end),
-                "spectrumId": f"{ap}-{sid_suffix}", "impactId": None,
-                "bandIds": hardest[:5],
-            })
+                span_start = base_dt + timedelta(minutes=first_minute)
+                span_end = min(fore_end, base_dt + timedelta(minutes=last_minute + 1))
+                if span_end <= span_start:      # 单分钟命中：至少给 1 分钟窗口
+                    span_end = min(fore_end, span_start + timedelta(minutes=1))
+
+                alerts.append({
+                    # 多段时 id 带序号，保证 alertId 唯一（研判/方案都按 id 定位）
+                    "id": (f"ALT-{ap}-{'weak' if metric == 'power' else 'cong'}"
+                           + (f"-{run_index}" if len(runs) > 1 else "")),
+                    "target": ap,
+                    "title": title,
+                    "summary": summary,
+                    "severity": severity,
+                    "start": fmt(span_start), "end": fmt(span_end),
+                    "spectrumId": f"{ap}-{sid_suffix}", "impactId": None,
+                    "bandIds": hardest[:5],
+                    # 该段的连续命中分钟（中间恢复的间隙不并入）
+                    "spans": [{"start": fmt(base_dt + timedelta(minutes=i)),
+                               "end": fmt(min(fore_end, base_dt + timedelta(minutes=i + 1)))} for i in segment],
+                    "segment": run_index, "segmentCount": len(runs),
+                })
 
     # impacts：SINR/吞吐从主网络数据按分钟聚合，用同一套阻尼趋势外推
     impacts = []
