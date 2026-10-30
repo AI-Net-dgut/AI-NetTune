@@ -191,7 +191,7 @@ npm run dev
 
 * 请求参数：`scenario`（必填）、`time`（可选，默认最新时刻）、`include_metrics`（可选，默认 true）
 * 返回字段：`nodes[]`（AP 带 `rsrp_avg` / `prb_usage` / `active_users` 属性，UE 带 `rsrp` / `sinr` / `throughput` 当前指标）+ `links[]`（`metrics` 含 rsrp / sinr / throughput / latency / packet_loss）+ `stats`（节点数 / 链路数 / 平均 RSRP / SINR）
-* 当前状态：契约 v1 已冻结，待后端实现
+* 当前状态：**已实现**（`main.py` 的 `get_enhanced_topology`，读网络表按指定时刻生成节点/链路/统计；契约 v1 字段保持不变）
 
 ## 数据字典（CSV 格式，18 列）
 

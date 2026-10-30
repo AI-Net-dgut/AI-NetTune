@@ -29,15 +29,15 @@
 │     · 报告 / 方案 / 空间 / LLM 包装                               │
 │                                                                  │
 │   领域模块（互不依赖，只被 main 引用）：                          │
-│     plan_model(319)     方案仿真                                  │
-│     report_model(330)   Markdown / HTML 报告渲染                  │
-│     forecast_model(247) Prophet ↔ 移动平均降级                   │
-│     llm_agent(188)      意图规则 + LLM 调用 + 兜底                │
-│     spatial_frames(127) / spectrum_frames(116)  IDW 空间帧        │
-│     signal_nav(120)     信号导航                                  │
-│     spatial_model(75)   Kriging 热力图                            │
-│     data_layout(47)     数据路径解析                              │
-│     data_generator(638) 离线造数（不进服务链路）                  │
+│     plan_model(363)     方案仿真                                  │
+│     report_model(390)   Markdown / HTML 报告渲染                  │
+│     forecast_model(323) Prophet ↔ 移动平均降级                   │
+│     llm_agent(235)      意图规则 + LLM 调用 + 兜底                │
+│     spatial_frames(167) / spectrum_frames(167)  IDW 空间帧        │
+│     signal_nav(147)     信号导航                                  │
+│     spatial_model(97)   Kriging 热力图                            │
+│     data_layout(65)     数据路径解析                              │
+│     data_generator(707) 离线造数（不进服务链路）                  │
 │                                                                  │
 │   （体量数字随迭代变化，以 wc -l 为准；此处为 2026-10 实测值）     │
 └──────────────────────────────────────────────────────────────────┘

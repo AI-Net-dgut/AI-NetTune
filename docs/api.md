@@ -14,7 +14,7 @@ Base URL: http://localhost:8000
 |5|GET|/api/data/heatmap|信号热力图数据|
 |6|GET|/api/network/topology/basic|基础网络拓扑数据|
 |7|GET|/api/data/events|故障事件清单（来自 data/fault_events.csv，案例起点的单一事实来源）|
-|8|GET|/api/predict/result|时序预测结果查询（契约v1·查询壳：转调接口10数据，不新建模型）|
+|8|GET|/api/predict/result|时序预测结果查询（契约 v1 · **占位**：固定返回 predict_list=[] / model=placeholder，不调用任何模型）|
 |9|GET|/api/network/topology/enhanced|拓扑增强数据（契约v1）|
 |10|POST|/api/analyze/forecast|区域信号/频谱态势预测（Prophet 时序模型）|
 |11|POST|/api/forecast/preview|预测预览（频谱预测预警 v2，baseTime 防未来）|
@@ -355,9 +355,9 @@ GET /api/data/events?scenario=校园
 
 参数：
 
-- `scenario`（必填）：场景名，与 `VALID_SCENARIOS` 白名单一致。
+- `scenario`（**可选**）：按场景过滤；不传返回全部。若提供则必须在 `VALID_SCENARIOS` 白名单内，否则 `40002`。
 
-> 更正（独立审计）：本节此前写成"实时增量监测数据"，带 `last_time` 参数、返回 `{total, columns, records}` 的 KPI 增量行 —— 与实现完全不符。接口 7 实际只读 `data/fault_events.csv`，返回**事件清单**，是预置案例窗口的单一事实来源。
+> 更正（独立审计）：本节此前写成"实时增量监测数据"，带 `last_time` 参数、返回 `{total, columns, records}` 的 KPI 增量行 —— 与实现完全不符。接口 7 实际只读 `data/fault_events.csv`，返回**事件清单**，是预置案例窗口的单一事实来源。字段为 **snake_case**（下方以真实返回为准）。
 
 响应：
 
@@ -368,8 +368,9 @@ GET /api/data/events?scenario=校园
   "data": {
     "count": 8,
     "events": [
-      {"eventId": "EV-001", "scenario": "校园", "apId": "AP-02", "faultType": "weak_coverage",
-       "start": "2026-01-01 10:00:00", "end": "2026-01-01 12:00:00", "rampMinutes": 20}
+      {"event_id": "EV-001", "scenario": "校园", "ap_id": "AP-02", "fault_type": "weak_coverage",
+       "start_time": "2026-01-01 10:00:00", "end_time": "2026-01-01 12:00:00",
+       "ramp_minutes": 20.0, "strength": 12.0, "labeled_from_expect": ""}
     ]
   }
 }
@@ -380,15 +381,24 @@ GET /api/data/events?scenario=校园
 |字段|类型|说明|
 |---|---|---|
 |count|int|事件条数|
-|events|array|事件数组：eventId / scenario / apId / faultType（weak_coverage / congestion）/ start / end / rampMinutes|
+|events|array|事件数组（字段名与 CSV 表头一致，snake_case）|
+|events[].event_id|string|事件编号，如 EV-001|
+|events[].scenario|string|场景|
+|events[].ap_id|string|故障 AP，如 AP-02|
+|events[].fault_type|string|`weak_coverage` / `congestion`|
+|events[].start_time / end_time|string|事件起止（yyyy-MM-dd HH:mm:ss）|
+|events[].ramp_minutes|number|渐变时长（分钟），可能为 null|
+|events[].strength|number|注入强度，可能为 null|
+|events[].labeled_from_expect|string|标注来源说明，可为空|
+|note|string|仅当 `fault_events.csv` 缺失时出现：提示用 `data_generator.py` 重新生成（此时 `count=0`，仍返回 `code=0`，不让工作台打不开）|
 
 **错误码说明**：
 
-- `0`：成功（场景无事件时返回 `count=0, events=[]`）
+- `0`：成功（无事件或文件缺失均为 `count=0`）
 
-- `40002`：scenario 不在白名单
+- `40002`：`scenario` 不在白名单
 
-- `50001`：服务端内部异常（如 `data/fault_events.csv` 缺失）
+- `50001`：服务端内部异常（如 CSV 表头损坏无法解析）
 
 
 
@@ -523,7 +533,7 @@ GET /api/network/topology/enhanced?scenario=校园&time=2026-01-01 10:00:00
 
 错误码：复用全局错误码体系——参数缺失 40001、格式非法 40002、范围越界 40003、服务异常 50001。
 
-> 契约状态说明：接口 8、接口 9 契约 v1 已冻结，前端联调均以本契约为准；接口 8 为查询壳（转调接口 10 数据、不新建模型），字段变更需走契约评审。
+> 契约状态说明：接口 8、接口 9 契约 v1 已冻结，前端联调均以本契约为准；**接口 8 当前是占位实现**（`predict_list=[]`、`model="placeholder"`，不调用任何模型），字段变更需走契约评审。
 
 ## 接口 10：区域信号/频谱态势预测（Prophet 时序模型）
 
@@ -701,6 +711,7 @@ POST /api/forecast/preview
   差 1~3 个导致拥塞预警从未触发；全 7 天回测 80% → 触发 114 段且全部命中真值、0 误报
    - 越阈频段数 ≥ `max(5, int(频段数 × 0.8))`（`ALERT_MIN_CROSSING_RATIO = 0.8`；当前 50 段即 **40 段**）才算命中，避免单频段噪声触发。
      > 更正（独立审计）：本节此前误写为 `max(3, 频段数/10)`（50 段即 5 段），与上一行"≥40/50"及代码都不符；按 5 段实现的客户端会严重误报。
+   - 还必须**连续 ≥3 分钟**满足上述条件（`ALERT_MIN_CROSSING_MINUTES = 3`）；单分钟抖动不算命中，且中间恢复的间隙会把风险**拆成多条**（见 `alerts[].segment`）。
 2. 用**历史最后一帧**判断基准时刻是否已越阈，给出两种语义（与责任分工要求的"持续风险/提前预警分别验收"对应）：
 
 | 情形 | title 形态 | start | severity |
