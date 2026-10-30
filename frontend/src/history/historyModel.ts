@@ -42,7 +42,8 @@ export interface PlanView {
   suggested: ParameterView[];            // 模板给出的**建议参数**（不随手动修改变化）
   source: 'system' | 'ai';               // 方案来源：模板生成=system；AI 只负责文字解释
   draft: boolean; effects: EffectView[];
-  latest: EffectView | null;             // 最新一条可用效果（默认展示）
+  latest: EffectView | null;             // 可展示的效果（优先与当前参数一致的那条）
+  latestMatched: boolean;                // latest 是否**就是**当前参数的效果（决定文案口径）
   others: EffectView[];                  // 其他评估版本（折叠）
   deviated: boolean;                     // 本次参数是否偏离建议值
   tasks: string[]; conditions: string[]; tradeoffs: string[];
@@ -93,7 +94,7 @@ export function recordContent(entry: QuestionEntry) {
         parameters: parameters(plan), suggested: parameters(plan),
         // 方案来自后端模板；AI 只负责文字研判，不参与选方案（10-30 清单第 3 点要求标清楚来源）
         source: 'system',
-        draft: false, effects: [], latest: null, others: [], deviated: false,
+        draft: false, effects: [], latest: null, latestMatched: false, others: [], deviated: false,
         tasks: array(plan.tasks).map(text).filter(Boolean), conditions: array(plan.conditions).map(text).filter(Boolean), tradeoffs: array(plan.tradeoffs).map(text).filter(Boolean) });
       snapshots.set(id, plan);
     }
@@ -144,15 +145,29 @@ export function recordContent(entry: QuestionEntry) {
       }
     }
   }
-  const sameParameters = (a: ParameterView[], b: ParameterView[]) => a.length === b.length && a.every((v, i) => v.label === b[i].label && v.value === b[i].value);
+  // 参数比较必须按**参数名**配对，不能按下标：不同快照的 parameters 顺序/长度可能不同
+  // （独立审计 P3：按下标会把"发射功率"与"下倾角"张冠李戴，还会出现"偏离但列不出差异"）。
+  // 只比展示值（含单位），长度不同即视为不同。
+  const byLabel = (list: ParameterView[]) => new Map(list.map(v => [v.label, v.value]));
+  const sameParameters = (a: ParameterView[], b: ParameterView[]) => {
+    const left = byLabel(a), right = byLabel(b);
+    if (left.size !== right.size) return false;
+    for (const [label, value] of left) if (right.get(label) !== value) return false;
+    return true;
+  };
   for (const plan of plans.values()) {
     plan.effects.sort((a, b) => text(b.time).localeCompare(text(a.time)));
     plan.draft = needsEvaluation.has(plan.id) && !plan.effects.some(e => !e.error && e.metrics.length > 0 && sameParameters(e.parameters, plan.parameters));
-    // 默认只突出"本次评估参数 + 最新效果"；其余版本折叠，但每个版本保留自己的参数
+    // 默认只突出"本次评估参数 + 与它一致的效果"；其余版本折叠，但每个版本保留自己的参数
     // （10-30 清单第 3 点：用户会把最新效果误当成原始建议值的效果）。
+    // 关键：**找不到与当前参数一致的效果时，仍展示一条（否则看不到任何结果），
+    // 但必须用 latestMatched=false 让界面改口径**，不能再说"对应上方参数"——
+    // 独立审计 P2：这正是本改动要消灭的误读。
     const usable = plan.effects.filter(e => !e.error && e.metrics.length > 0);
-    const pick = usable.find(e => sameParameters(e.parameters, plan.parameters)) ?? usable[0] ?? null;
+    const matched = usable.find(e => sameParameters(e.parameters, plan.parameters)) ?? null;
+    const pick = matched ?? usable[0] ?? null;
     plan.latest = pick;
+    plan.latestMatched = matched !== null;
     plan.others = plan.effects.filter(e => e !== pick);
     plan.deviated = !sameParameters(plan.parameters, plan.suggested);
   }

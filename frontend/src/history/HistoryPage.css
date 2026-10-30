@@ -33,10 +33,16 @@
 .history-answer { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; }
 .history-plan { padding: 11px 12px; margin-top: 10px; border: 1px solid #e0e9f3; border-radius: 6px; }
 .history-plan h4 { margin: 0 0 5px; font-size: 14px; color: #315779; }
-/* 方案来源标签 + "建议/本次参数/效果"三段式（10-30 清单第 3 点） */
-.history-plan-source { margin-left: 8px; padding: 1px 7px; border-radius: 9px; background: #eef4fb; color: #4c6f95; font-size: 11px; font-weight: 400; }
+/* 方案来源标签 + "建议/本次参数/效果"三段式（10-30 清单第 3 点）
+   独立审计：标签从 h4 移出成独立段落，这里给它块级样式，避免长标签换行时背景断行 */
+/* 注意特异性：`.history-plan > p`（1 类+1 类型）会盖过 `.history-plan-source`（1 类），
+   所以这里用 `.history-plan > p.history-plan-source`（2 类+1 类型）才能让 11px 生效
+   （独立审计 P3：标签从 h4 移出后被 .history-plan > p 的 13px 覆盖）。 */
+.history-plan > p.history-plan-source { display: inline-block; margin: 0 0 6px; padding: 1px 7px; border-radius: 9px; background: #eef4fb; color: #4c6f95; font-size: 11px; line-height: 1.5; white-space: nowrap; }
 .history-section-block { margin: 8px 0; }
 .history-section-block h5 { margin: 0 0 4px; font-size: 12px; color: #4a6b8a; font-weight: 600; }
+/* 方案描述移入折叠后不再命中 .history-plan > p，这里补回同样的排版规则 */
+.history-plan-desc { font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .history-plan > p, .history-effect > p { font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .history-page details { margin-top: 8px; font-size: 12px; }
 .history-page summary { color: #537a9e; cursor: pointer; line-height: 1.8; }
