@@ -3781,9 +3781,13 @@ def forecast_plans(req: ForecastPlanRequest):
         alert = alerts[0]
 
     ap = alert.get("target")
-    # 风险类型由预警 id 后缀判定（ALT-<ap>-weak / ALT-<ap>-cong）
+    # 风险类型判定必须容错：分段后 alert id 形如 ALT-AP-01-cong-2，
+    # 用 endswith("-cong") 会把它误判成"覆盖故障"（弱覆盖模板）。
+    # 优先看 spectrumId（…-occupancy / …-power），再退回"包含 -cong"。
+    _sid = str(alert.get("spectrumId") or "")
     _aid = str(alert.get("id") or "")
-    anomaly_type = "网络拥塞" if _aid.endswith("-cong") else "覆盖故障"
+    _is_congestion = _sid.endswith("-occupancy") or ("-cong" in _aid) or ("occupancy" in _sid)
+    anomaly_type = "网络拥塞" if _is_congestion else "覆盖故障"
     if not ap:
         return error_response(ERROR_CODE["PARAM_INVALID"], "该条风险没有关联 AP，暂无法生成方案")
 

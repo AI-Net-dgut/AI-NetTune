@@ -596,6 +596,41 @@ def test_crossing_runs_are_split_at_recovery_gaps():
     assert main._split_crossing_runs([], 3) == []
 
 
+def test_forecast_plans_infers_type_for_segmented_alert_ids():
+    """分段后的 alert id（ALT-AP-01-cong-2）仍必须判为拥塞（10-30 清单第 6 点连带修复）。
+
+    原实现用 endswith("-cong")，多段 id 会被误判成覆盖故障 → 用错方案模板。
+    """
+    cache_key = "FC-seg-test"
+    saved = main._FORECAST_CACHE.get(cache_key)
+    try:
+        for aid, expected in (("ALT-AP-01-cong", "网络拥塞"),
+                              ("ALT-AP-01-cong-2", "网络拥塞"),
+                              ("ALT-AP-01-weak", "覆盖故障"),
+                              ("ALT-AP-01-weak-3", "覆盖故障")):
+            main._FORECAST_CACHE[cache_key] = {
+                "id": cache_key, "baseTime": "2026-01-01 20:06:00",
+                "history": {"start": "2026-01-01 19:06:00", "end": "2026-01-01 20:06:00"},
+                "forecast": {"start": "2026-01-01 20:06:00", "end": "2026-01-01 22:06:00"},
+                "scenario": SCENARIO, "status": "ready",
+                "alerts": [{"id": aid, "target": "AP-01", "title": "t", "summary": "s",
+                            "severity": "high", "start": "2026-01-01 20:20:00",
+                            "end": "2026-01-01 20:40:00",
+                            "spectrumId": f"AP-01-{'occupancy' if 'cong' in aid else 'power'}"}],
+            }
+            d = _data(main.forecast_plans(main.ForecastPlanRequest(
+                forecastId=cache_key, scenario=SCENARIO, baseTime="2026-01-01 20:06:00",
+                history=main._TimeRange(start="2026-01-01 19:06:00", end="2026-01-01 20:06:00"),
+                forecast=main._TimeRange(start="2026-01-01 20:06:00", end="2026-01-01 22:06:00"),
+                alertId=aid)))
+            assert d["risk"]["type"] == expected, (aid, d["risk"]["type"])
+    finally:
+        if saved is None:
+            main._FORECAST_CACHE.pop(cache_key, None)
+        else:
+            main._FORECAST_CACHE[cache_key] = saved
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 
