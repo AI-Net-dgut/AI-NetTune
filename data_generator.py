@@ -695,6 +695,12 @@ def main():
         suffix = {3: "", 7: "_7d", 30: "_30d"}.get(args.days, "")
         OUTPUT_PATH = f"data/network_data{suffix}.csv"
         SPECTRUM_OUTPUT_PATH = f"data/spectrum{suffix}.csv"
+    # 事件清单的过滤基准必须是**实际存在的频谱文件**：--days 30 时
+    # SPECTRUM_OUTPUT_PATH 指向 spectrum_30d.csv（通常不存在），若照它过滤就会
+    # 回退成 31 条并覆盖 fault_events.csv（独立审计 P3）。这里优先用 7 天频谱。
+    if not Path(SPECTRUM_OUTPUT_PATH).exists() and Path("data/spectrum_7d.csv").exists():
+        SPECTRUM_OUTPUT_PATH = "data/spectrum_7d.csv"
+        print(f"[v2.8] 频谱输出不存在，事件清单按 {SPECTRUM_OUTPUT_PATH} 覆盖范围过滤")
     FAULT_SCHEDULE = build_fault_schedule(TOTAL_DAYS)  # 按天数延伸故障时间表
     print(f"[v2.8] 生成 {TOTAL_DAYS} 天数据，故障注入 {len(FAULT_SCHEDULE)} 条，"
           f"渐变 {RAMP_MINUTES} 分钟 → {OUTPUT_PATH}")

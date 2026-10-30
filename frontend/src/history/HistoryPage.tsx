@@ -26,7 +26,15 @@ function Effect({ effect }: { effect: EffectView }) {
 export function RecordDetails({ entry }: { entry: QuestionEntry }) {
   const { record } = entry, content = recordContent(entry), scope = object(record.scope);
   return <>
-    <div className="history-question-heading"><span>{record.kind === 'forecast-analysis' ? '预测问题' : '网络分析'}</span><h2>{text(record.question) || '未记录问题'}</h2>
+    <div className="history-question-heading"><span>{
+      // 三类新归档（预测预览/空间态势/回测）不能都标"网络分析"，
+      // 否则记录详情页说的内容与记录类型对不上（独立审计 P3）。
+      record.kind === 'forecast-analysis' ? '预测问题'
+        : record.kind === 'forecast' ? '预测预览'
+          : record.kind === 'spatial' ? '空间态势序列'
+            : record.kind === 'backtest' ? '历史回测'
+              : '网络分析'
+    }</span><h2>{text(record.question) || '未记录问题'}</h2>
       <p>提问时间：{savedTime(record.createdAt)}</p>
       <p>分析数据：{text(scope.start) || '未记录'} — {text(scope.end) || text(record.analysisTime) || '未记录'}（北京时间）</p>
       {Object.keys(content.future).length > 0 && <p>预测关注：{text(content.future.start)} — {text(content.future.end)}（北京时间）</p>}

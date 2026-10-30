@@ -94,9 +94,8 @@ function applyDeleted(ids: string[]) {
 }
 // 初始化：把历史墓碑并入 rejectedIds（上一次会话删掉的记录不会被迟到写入复活）
 for (const id of Object.keys(loadTombstones())) rejectedIds.add(id);
-// 页面卸载时关闭通道：模块作用域创建的 BroadcastChannel 若从不 close，
-// 非浏览器宿主（SSR/测试/预渲染）require 之后事件循环永不退出，
-// HMR 反复求值还会叠加通道（独立审计 P3）。
+// 页面卸载时关闭通道（浏览器内）。注意：Node 等非浏览器宿主没有 pagehide，
+// 通道句柄仍会存在——受限测试环境请显式退出进程（独立审计：此前的注释夸大了作用范围）。
 try {
     (globalThis as unknown as { window?: Window }).window?.addEventListener?.('pagehide', () => {
         try { syncChannel?.close?.(); } catch { /* 已关闭或环境不支持。 */ }
@@ -244,16 +243,24 @@ function compactPayload(kind: RecordKind, value: unknown): unknown {
     }
     if (kind === 'forecast' || kind === 'spatial' || kind === 'backtest') {
         // 这三类归档原先被整体拒绝；现在允许入库，payload 只需保留"能复现结论"的元信息。
-        const result = object(p.result ?? p.forecast);
+        // 注意空间态势的真实调用点传的是 `{series}`（SpatialFrameGrid），
+        // 不是扁平的 frameMinutes/metric——不兼容就会出现"归档了但 payload={}"（独立审计 P3）。
+        const series = object(p.series);
+        const result = object(p.result ?? p.forecast ?? series);
         return {
             summary: p.summary, error: p.error, at: p.at,
-            scenario: p.scenario, baseTime: p.baseTime,
+            scenario: p.scenario ?? series.scenario, baseTime: p.baseTime ?? series.baseTime,
             method: result.method ?? p.method,
             limitations: result.limitations ?? p.limitations,
             disclaimer: result.disclaimer ?? p.disclaimer,
             horizonMinutes: p.horizonMinutes ?? result.horizonMinutes,
-            frameMinutes: p.frameMinutes, pastFrames: p.pastFrames, futureFrames: p.futureFrames,
-            windowMinutes: p.windowMinutes, metric: p.metric,
+            metric: p.metric ?? series.metric,
+            // 空间态势：帧数/每帧分钟/坐标范围（能复现这张图需要的都在这里）
+            frameMinutes: p.frameMinutes ?? series.frameMinutes,
+            pastFrames: p.pastFrames ?? (Array.isArray(series.past) ? series.past.length : undefined),
+            futureFrames: p.futureFrames ?? (Array.isArray(series.future) ? series.future.length : undefined),
+            xRange: series.xRange, yRange: series.yRange, note: series.note,
+            windowMinutes: p.windowMinutes,
         };
     }
     return { error: p.error, action: p.action, inputAt: p.inputAt, completedAt: p.completedAt, values: p.values,

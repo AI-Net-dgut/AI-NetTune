@@ -598,7 +598,7 @@ POST /api/analyze/forecast
 
 |字段|类型|说明|
 |---|---|---|
-|method|string|本次请求实际采用的预测模型，如实返回：`prophet`（全部序列 Prophet 成功）/ `moving_average`（全部降级移动平均或全部序列无法预测）/ `mixed`（部分序列降级）；空数据时返回 `no_data`。series 内每个序列自带 method 字段，与顶层一致粒度|
+|method|string|本次请求实际采用的预测模型，如实返回：`prophet`（全部序列 Prophet 成功）/ `moving_average`（全部序列都走了移动平均降级）/ `mixed`（部分序列降级）/ **`no_data`（窗口内可聚合的 1 小时桶不足 4 个，任何序列都没做预测）**。`no_data` **不等于**降级：此时 `series[ue][metric].method` 全为 `none`、`predicted/forecast` 为空数组，原因写在 `limitations` 里|
 |bin_size_min|int|聚合桶粒度，固定 60（1 小时）|
 |metrics / ues|array|本次预测的指标与 UE 列表|
 |series[ue][metric]|object|单个 UE × 指标的预测结果（含 method 字段：prophet / moving_average / none）|
@@ -607,6 +607,7 @@ POST /api/analyze/forecast
 |true_mean / pred_mean / mape|number|测试段实测均值 / 预测均值 / 平均绝对百分比误差（%）|
 |forecast_bins / forecast|array|未来 24 小时预测的时间轴与预测值|
 |lower / upper|array|未来 24 小时置信区间下 / 上限（与 forecast 等长）；**降级为 moving_average 时无置信区间，lower/upper 恒等于 forecast**，前端不应绘制置信带|
+|limitations|array|**本次结果的使用限制**，会如实说明：`no_data`=「桶不足 4 个…这不是模型降级」；降级=「Prophet 不可用或拟合超时，已降级为移动平均（常数预测）」；另外透出模型返回的 `degrade_reason`。前端应展示，不得折叠隐藏|
 
 ### 备注
 

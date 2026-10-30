@@ -71,12 +71,24 @@ v2.8 做了两件事：
 |---|---|---|
 | `network_data.csv` | 12,960 × 18 | 3 天版（旧），仅作历史对照 |
 
-## 历史遗留文件（建议清理，不要用于演示）
+## 历史遗留与可清理项（不要用于演示）
 
-| 文件名 | 问题 |
-|---|---|
-| `network_data_3d_bak.csv` | 与 `network_data.csv` **SHA256 完全相同**，纯冗余 |
-| `network_data_backup_20260929.csv` | **旧格式，只有 11 列**；吞吐量出现 799.9 Mbps、10 个 UE（`UE-001` 命名），与 `docs/data_dict.md` 的 18 列规范不符 |
+> 2026-10 核对：下面旧条目对应的文件**已不存在**，此处改为记录"当前目录里真正占盘的东西"。
+
+| 对象 | 现状 | 处理 |
+|---|---|---|
+| `data/network_data.csv`（1.5 MB，12,960 行） | 旧 3 天表，**仍被 Git 跟踪**；`.gitignore` 的 `data/*` 已匹配它（`git check-ignore --no-index` 可验证），只是历史提交带进来了 | 执行 `git rm --cached data/network_data.csv` 后提交：本地文件保留，不再入库 |
+| `data_backup_20261021_2342` 等 **5 个备份目录**（仓库根下，共约 626 MB） | 换数据时的自动备份，已被 `.gitignore` 的 `data_backup_*/` 忽略，不占 Git | 确认 `network_data_30d.csv` / `spectrum_7d.csv` 正常后可直接删除，释放约 626 MB |
+| `network_data_3d_bak.csv`、`network_data_backup_20260929.csv` | **已不存在**（旧文档遗留描述） | 无需处理 |
+
+清理命令（在仓库根执行；涉及 Git 的请先确认再提交）：
+
+```powershell
+git rm --cached data/network_data.csv     # 只从索引移除，本地文件保留
+git commit -m "chore: 停止跟踪旧 3 天网络表（data/ 已由 .gitignore 覆盖）"
+
+Remove-Item -Recurse -Force data_backup_2026102*   # 释放约 626 MB（已忽略，不影响 Git）
+```
 
 ## 文件从哪来
 
