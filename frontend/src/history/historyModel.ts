@@ -21,7 +21,11 @@ export function questionEntries(records: HistoryRecord[]): QuestionEntry[] {
       current = parent;
     }
   }
-  const roots = items.filter(r => isQuestionRecord(r) || (['parameters', 'simulation'].includes(r.kind) && !owner(r)));
+  // 根 = 问题记录 / 找不到父行的参数·仿真记录 / **找不到父行的分析记录**。
+  // 最后一类此前被漏掉（独立审计 P3：role='evidence' 的分析记录在父问题缺失时
+  // 既不算根也不被任何分组收为成员 → 行还在库里，但列表/搜索/导出全都看不到）。
+  const orphaned = (r: HistoryRecord) => ['parameters', 'simulation', 'analysis'].includes(r.kind) && !owner(r);
+  const roots = items.filter(r => isQuestionRecord(r) || orphaned(r));
   const groups = new Map(roots.map(record => [record.id, { record, members: [] as HistoryRecord[] }]));
   for (const item of items) {
     if (groups.has(item.id) || !['parameters', 'simulation', 'analysis'].includes(item.kind)) continue;
@@ -65,7 +69,10 @@ function effect(raw: unknown, item: HistoryRecord, plan: Record<string, unknown>
   const r = object(raw), p = object(item.payload);
   // 预测结果也有 result 字段；只有真正的仿真结构才能作为效果展示。
   if (!Array.isArray(r.metrics) && !text(p.error)) return null;
-  return { id: item.id, time: text(p.completedAt) || item.createdAt, label: initial ? '建议参数的预计效果' : '本次参数的仿真效果',
+  // 标签必须与参数无关：卡片标题可能写"最近一次评估的效果（参数与上方不同）"，
+  // 效果块若写死"本次参数的仿真效果"就会自我否定（独立审计 P3）。
+  // 该效果用的是哪组参数，由块内"本次效果对应的参数"一行给出。
+  return { id: item.id, time: text(p.completedAt) || item.createdAt, label: initial ? '建议参数的预计效果' : '仿真预计效果',
     summary: text(r.summary), error: text(p.error) || (r.status === 'failed' ? '仿真未成功，暂无有效效果。' : ''),
     parameters: parameters(plan, values ?? r.parameterValues),
     metrics: array(r.metrics).map(rawMetric => {

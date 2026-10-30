@@ -99,7 +99,11 @@ def _ma_fallback(vals: list[float], horizon: int, reason: str = "") -> dict:
     n = len(vals)
     if n < 4:
         return None
-    split = max(2, int(n * TRAIN_RATIO))
+    # 测试段切分必须与 Prophet 路径**完全一致**（max(int(n*0.8), n-horizon)），
+    # 否则两条路径的 mae/rmse/mape/true_mean 与 predicted 长度含义不同却共用同名字段
+    # （独立审计 P2：n=720、horizon=24 时 MA 切 144 点、Prophet 切 24 点，
+    # 报表里 MA 看起来"更准 33%~45%"，同切分下其实是 Prophet 好 11%~18%）。
+    split = max(2, max(int(n * TRAIN_RATIO), n - horizon))
     train, test = vals[:split], vals[split:]
     ma = train[-3:] if len(train) >= 3 else train
     pred_c = sum(ma) / len(ma)

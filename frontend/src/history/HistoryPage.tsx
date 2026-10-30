@@ -48,7 +48,7 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
             独立审计 P2：若本次参数还没有对应效果，下面的效果就不是"对应当前参数"的，
             必须在文案上明确区分，不能用同一句话糊过去。 */}
         {plan.deviated && <p className="history-draft">
-          本次评估参数<strong>已偏离</strong>原始建议值：
+          <strong>已偏离</strong>原始建议值：
           {/* 按参数名配对，避免快照顺序不同导致"建议 X → 本次 Y"张冠李戴 */}
           {plan.parameters.map(p => {
             const sug = plan.suggested.find(s => s.label === p.label)?.value;
@@ -61,11 +61,13 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
             const sug = plan.suggested.find(s => s.label === p.label)?.value;
             return sug !== undefined && sug !== p.value;
           }) && <span>建议参数 {plan.suggested.length} 项、本次记录 {plan.parameters.length} 项；</span>}
+          {/* 只在确实有结果时才说"下面"；没有任何结果时，状态由下方单独一句说明，
+              不再把"尚无对应效果"重复三遍（独立审计 P3） */}
           {plan.latestMatched
-            ? '下面的效果对应"本次评估参数"。'
+            ? '下面的效果对应上面这组参数。'
             : plan.latest
               ? '本次参数尚无对应效果，下面的结果是其它参数版本的。'
-              : '本次参数尚无对应效果。'}
+              : ''}
         </p>}
         <div className="history-section-block">
           <h5>本次评估参数</h5>
@@ -75,10 +77,9 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
           <h5>{plan.latestMatched ? '仿真预计效果（对应上方参数）' : '最近一次评估的效果（参数与上方不同）'}</h5>
           <Effect effect={plan.latest}/>
         </div> : (!plan.others.length ? <p className="history-muted">尚未保存仿真效果。</p> : null)}
-        {/* draft 句只在"上方确实有结果"时才说"上面的结果"，否则与失败提示自相矛盾
-            （第四轮审计 P3） */}
+        {/* draft 句只在"上方确实有结果"时才说"上面的结果"，否则与失败提示自相矛盾；
+            没有结果时不再重复一句"尚无对应的新效果"（独立审计 P3：同一件事说三遍） */}
         {plan.draft && plan.latest && <p className="history-draft">参数已修改，尚无对应的新效果；上面的结果只适用于它自己记录的参数。</p>}
-        {plan.draft && !plan.latest && <p className="history-draft">参数已修改，尚无对应的新效果。</p>}
         {/* 唯一一次仿真失败时，失败原因只在折叠区里 → 可见区域必须留一句提示
             （独立审计 P3：不能因为修"两提示并存"而把失败提示整个藏起来）。
             注意 status=completed 但 metrics=[] 也算"无可对比结果"，所以措辞用"可对比"。 */}
