@@ -38,7 +38,7 @@
 /* 注意特异性：`.history-plan > p`（1 类+1 类型）会盖过 `.history-plan-source`（1 类），
    所以这里用 `.history-plan > p.history-plan-source`（2 类+1 类型）才能让 11px 生效
    （独立审计 P3：标签从 h4 移出后被 .history-plan > p 的 13px 覆盖）。 */
-.history-plan > p.history-plan-source { display: inline-block; margin: 0 0 6px; padding: 1px 7px; border-radius: 9px; background: #eef4fb; color: #4c6f95; font-size: 11px; line-height: 1.5; white-space: nowrap; }
+.history-plan > p.history-plan-source { display: inline-block; max-width: 100%; margin: 0 0 6px; padding: 1px 7px; border-radius: 9px; background: #eef4fb; color: #4c6f95; font-size: 11px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 .history-section-block { margin: 8px 0; }
 .history-section-block h5 { margin: 0 0 4px; font-size: 12px; color: #4a6b8a; font-weight: 600; }
 /* 方案描述移入折叠后不再命中 .history-plan > p，这里补回同样的排版规则 */

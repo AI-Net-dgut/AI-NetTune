@@ -55,6 +55,12 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
             if (sug === undefined || sug === p.value) return null;
             return <span key={p.label}>{p.label} 建议 {sug} → 本次 {p.value}；</span>;
           })}
+          {/* 长度不同/参数缺失/重名时可能一条差异都列不出 → 必须给兜底，不能留空列表
+              （三道独立审计都点了这条） */}
+          {!plan.parameters.some(p => {
+            const sug = plan.suggested.find(s => s.label === p.label)?.value;
+            return sug !== undefined && sug !== p.value;
+          }) && <span>建议参数 {plan.suggested.length} 项、本次记录 {plan.parameters.length} 项；</span>}
           {plan.latestMatched
             ? '下面的效果对应"本次评估参数"。'
             : plan.latest
@@ -69,11 +75,15 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
           <h5>{plan.latestMatched ? '仿真预计效果（对应上方参数）' : '最近一次评估的效果（参数与上方不同）'}</h5>
           <Effect effect={plan.latest}/>
         </div> : (!plan.others.length ? <p className="history-muted">尚未保存仿真效果。</p> : null)}
-        {plan.draft && <p className="history-draft">参数已修改，尚无对应的新效果；上面的结果只适用于它自己记录的参数。</p>}
+        {/* draft 句只在"上方确实有结果"时才说"上面的结果"，否则与失败提示自相矛盾
+            （第四轮审计 P3） */}
+        {plan.draft && plan.latest && <p className="history-draft">参数已修改，尚无对应的新效果；上面的结果只适用于它自己记录的参数。</p>}
+        {plan.draft && !plan.latest && <p className="history-draft">参数已修改，尚无对应的新效果。</p>}
         {/* 唯一一次仿真失败时，失败原因只在折叠区里 → 可见区域必须留一句提示
-            （独立审计 P3：不能因为修"两提示并存"而把失败提示整个藏起来） */}
+            （独立审计 P3：不能因为修"两提示并存"而把失败提示整个藏起来）。
+            注意 status=completed 但 metrics=[] 也算"无可对比结果"，所以措辞用"可对比"。 */}
         {!plan.latest && plan.others.length > 0 && <p className="history-draft">
-          本次参数还没有成功的效果记录；失败原因见下方"其他评估版本"。
+          本次参数还没有可对比的效果记录；原因见下方"其他评估版本"。
         </p>}
         {plan.suggested.length > 0 && plan.deviated && <details>
           <summary>建议参数（原始模板值）</summary>

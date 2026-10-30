@@ -164,11 +164,17 @@ function compactPayload(kind: RecordKind, value: unknown): unknown {
     const object = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
     const effect = (v: unknown) => {
         const r = object(v);
-        return Array.isArray(r.metrics) ? { id: r.id, status: r.status, scope: r.scope, summary: r.summary, metrics: r.metrics, parameterValues: r.parameterValues } : undefined;
+        return Array.isArray(r.metrics) ? { id: r.id, status: r.status, scope: r.scope, summary: r.summary, metrics: r.metrics,
+            parameterValues: r.parameterValues,
+            // 方法/假设/限制要留档，否则记录里看不出结论怎么来的（独立审计 P3）
+            method: r.method, assumptions: r.assumptions, limitations: r.limitations } : undefined;
     };
     const plan = (v: unknown) => {
         const r = object(v);
-        return { id: r.id, name: r.name, description: r.description, scope: r.scope, objectIds: r.objectIds, parameters: r.parameters, tasks: r.tasks, conditions: r.conditions, tradeoffs: r.tradeoffs, simulation: effect(r.simulation) };
+        return { id: r.id, name: r.name, description: r.description, scope: r.scope, objectIds: r.objectIds, parameters: r.parameters,
+            tasks: r.tasks, conditions: r.conditions, tradeoffs: r.tradeoffs, simulation: effect(r.simulation),
+            // 预测来源方案要留住依据，否则记录里对不上 forecastId/basisWindow（独立审计 P3）
+            origin: r.origin, basis: r.basis, baseId: r.baseId };
     };
     const p = object(value);
     if (kind === 'analysis') {
@@ -181,7 +187,10 @@ function compactPayload(kind: RecordKind, value: unknown): unknown {
         const handoff = object(p.handoff);
         return { reply: p.reply, error: p.error, handoff: { targetWindow: handoff.targetWindow, forecast: handoff.forecast ?? object(handoff.result).forecast } };
     }
-    return { error: p.error, action: p.action, inputAt: p.inputAt, completedAt: p.completedAt, values: p.values, plan: p.plan ? plan(p.plan) : undefined, result: effect(p.result) };
+    return { error: p.error, action: p.action, inputAt: p.inputAt, completedAt: p.completedAt, values: p.values,
+        plan: p.plan ? plan(p.plan) : undefined, result: effect(p.result),
+        // 预测来源方案的依据（forecastId/风险/评估窗口）必须留档，否则记录里对不上来源
+        forecast: p.forecast };
 }
 type RecordInput = Omit<HistoryRecord, 'id' | 'createdAt'> & { id?: string; createdAt?: string };
 export function record(input: RecordInput): string {

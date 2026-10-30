@@ -33,7 +33,9 @@ export default function CaseEventButtons({ state, act, scope, disabled = false }
   useEffect(() => {
     let alive = true;
     fetchFaultEvents(scope.scenario)
-      .then(list => { if (alive) { setEvents(list.slice(0, 6)); setError(""); } })
+      // 不再 slice(0,6) 静默丢弃事件（独立审计 P3：后端 8 条只渲染 6 条，
+      // EV-007/EV-008 没有入口）。全部渲染，由 CSS 换行容纳。
+      .then(list => { if (alive) { setEvents(list); setError(""); } })
       .catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : "事件清单获取失败"); });
     return () => { alive = false; };
   }, [scope.scenario]);
@@ -68,12 +70,14 @@ export default function CaseEventButtons({ state, act, scope, disabled = false }
           // （独立审计 P3：11:30 会显示成 03:30）
           ? `进行中：只选已发生的 ${event.start} — ${formatReplayTime(rangeEnd)}（不读未来数据）`
           : `已结束：可选全段 ${event.start} — ${event.end}`;
+      // 固定查看（viewMode=analysis/history）时并不是"禁用"，而是允许切换但会退出固定视图；
+      // 提示文案必须说清实际按钮名（界面上是「退出分析，返回当前」，不是「实时」）。
+      const fixedView = state.viewMode !== "live";
       return <button key={event.eventId} type="button" className="ain-button"
         disabled={disabled || !selectable}
-        title={state.locked
-          ? `${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）\n当前为固定查看，请先退出固定分析（点「实时」）再切换案例`
-          : `${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）\n${phaseText}`
-            + (phase !== "pending" && viewCutoff < endMs ? "\n切换后会按上表范围重新取数。" : "")}
+        title={`${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）\n${phaseText}`
+          + (fixedView ? "\n当前是固定查看，点下面这句话会切到该案例并退出固定查看。" : "")
+          + (phase !== "pending" && viewCutoff < endMs ? "\n切换后会按上表范围重新取数。" : "")}
         onClick={() => act({ type: "select-range", startMs, endMs: rangeEnd })}>
         {label}
       </button>;

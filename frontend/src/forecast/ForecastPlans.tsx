@@ -75,7 +75,11 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
     }
   };
 
+  const loadSeq = useRef(0);
   const load = async () => {
+    // 请求序号（独立审计 P2）：换风险时旧请求后返回会覆盖新方案，
+    // 还会按**当前** parentId 把旧方案归档到新风险下。
+    const seq = ++loadSeq.current;
     setState({ pending: true, payload: null, error: "" });
     invalidate();
     try {
@@ -84,17 +88,37 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
         history: result.history, forecast: result.forecast,
         alertId: alertId ?? undefined, targetWindow: targetWindow ?? undefined,
       });
+      if (seq !== loadSeq.current) return;      // 已被更新的请求取代 → 丢弃
       setState({ pending: false, payload, error: "" });
       const first = payload.plans[0];
       if (first) {
         setSelectedId(first.id);
         setValues(Object.fromEntries(first.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])));
-        archivePlan(first, payload);
+        // 没有 parentId 时先记下来，等它到了再补归档
+        if (parentId) archivePlan(first, payload);
+        else pendingArchive.current = { plan: first, payload };
       }
     } catch (reason) {
+      if (seq !== loadSeq.current) return;
       setState({ pending: false, payload: null, error: reason instanceof Error ? reason.message : "方案生成失败" });
     }
   };
+
+  // parentId 晚到要补归档（独立审计 P3）：自动加载在挂载时发生，
+  // 那时研判记录 id 可能还没回来 → 归档被跳过，且此后不会补。
+  const archivedFor = useRef("");
+  const pendingArchive = useRef<{ plan: TreatmentPlan; payload: NonNullable<typeof state.payload> } | null>(null);
+  useEffect(() => {
+    if (!parentId || !pendingArchive.current) return;
+    const key = `${parentId}|${pendingArchive.current.plan.id}`;
+    if (archivedFor.current === key) return;
+    archivedFor.current = key;
+    const { plan, payload } = pendingArchive.current;
+    pendingArchive.current = null;
+    archivePlan(plan, payload);
+    // archivePlan 依赖 parentId/result，均由本次移交固定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentId]);
 
   // 自动接续（10-30 清单第 4 点）：研判完成后直接加载方案，
   // 不再要求用户再点一次"生成处置方案"才知道有没有方案。

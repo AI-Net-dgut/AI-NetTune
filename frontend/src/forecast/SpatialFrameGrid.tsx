@@ -201,6 +201,14 @@ export default function SpatialFrameGrid({
         上方预警是<b>频率维度</b>（频谱表逐频段）：功率 &lt; −95 dBm 或占用率 &gt; 80% 且满足频段数与持续时间才触发。
         两者指标不同，<b>“图偏蓝但未触发预警”属正常现象</b>。
       </p>
+      {/* 时间尺度必须单独说明（10-30 清单第 6 点）：本图的"每帧时长/历史取样长度"
+          会随上方"查看未来范围"变化，而顶部"参考历史"是另一套窗口，两者不是同一个。 */}
+      <p className="ain-forecast-chart-note">
+        本图时间尺度：每帧 <b>{series.frameMinutes}</b> 分钟、历史取样 <b>{frameMinutes * pastFrames}</b> 分钟
+        （{pastFrames} 帧）、未来 {futureCount} 帧。
+        它与顶部「参考历史」是<b>两套窗口</b>：调整"查看未来范围"会同时改变每帧时长与历史取样长度，
+        所以不同范围下的这张图不是同一批历史数据的对比。
+      </p>
 
       <div className="ain-forecast-spatial-stage">
         <figure className={`ain-spatial-main${isFuture ? " is-future" : ""}`}>

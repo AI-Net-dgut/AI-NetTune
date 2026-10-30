@@ -85,7 +85,12 @@ export default function ForecastDialog({ request, result, pending, error, onClos
           {ageMinutes > 0 && <p>结果基准距主时钟 {ageMinutes} 分钟{fixedView ? '，当前为固定查看，需手动刷新。' : follow ? '，主时钟播放中会自动更新；暂停时不刷新。' : '，可刷新获取最新结果。'}</p>}
           {onHorizonChange && <label className="ain-forecast-horizon">查看未来范围
             <select aria-label="查看未来范围" value={request.horizonMinutes} disabled={pending} onChange={event => onHorizonChange(Number(event.target.value))}>
-              {horizons.map(minutes => <option key={minutes} value={minutes}>未来{minutes}分钟{minutes === 1440 ? '（24小时）' : ''}</option>)}
+              {horizons.map(minutes => <option key={minutes} value={minutes}>
+                未来{minutes}分钟{minutes === 1440 ? '（24小时）' : ''}
+                {/* 只在恰好 720 分钟时标"12小时"；720~1439 的其他取值不能都叫 12 小时
+                    （独立审计 P3：800 分钟曾被标成"12小时"） */}
+                {minutes > 360 ? ' · 长期趋势外推，仅供参考' : ''}
+              </option>)}
             </select></label>}
           {/* 10-30 清单第 6 点：这个下拉框只决定"看多远"，不决定"提前多久"。
               两个概念必须分开写，否则用户会以为选 120 分钟就等于提前 120 分钟发现故障。 */}

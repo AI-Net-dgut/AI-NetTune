@@ -147,12 +147,22 @@ export function recordContent(entry: QuestionEntry) {
   }
   // 参数比较必须按**参数名**配对，不能按下标：不同快照的 parameters 顺序/长度可能不同
   // （独立审计 P3：按下标会把"发射功率"与"下倾角"张冠李戴，还会出现"偏离但列不出差异"）。
-  // 只比展示值（含单位），长度不同即视为不同。
-  const byLabel = (list: ParameterView[]) => new Map(list.map(v => [v.label, v.value]));
+  // 先比数组长度（同名参数不会被 Map 折叠），再按 名称→值列表 做多重集比较。
+  const multi = (list: ParameterView[]) => {
+    const map = new Map<string, string[]>();
+    for (const v of list) map.set(v.label, [...(map.get(v.label) ?? []), v.value]);
+    return map;
+  };
   const sameParameters = (a: ParameterView[], b: ParameterView[]) => {
-    const left = byLabel(a), right = byLabel(b);
+    if (a.length !== b.length) return false;
+    const left = multi(a), right = multi(b);
     if (left.size !== right.size) return false;
-    for (const [label, value] of left) if (right.get(label) !== value) return false;
+    for (const [label, values] of left) {
+      const other = right.get(label);
+      if (!other || other.length !== values.length) return false;
+      const sorted = [...values].sort(), target = [...other].sort();
+      if (sorted.some((v, i) => v !== target[i])) return false;
+    }
     return true;
   };
   for (const plan of plans.values()) {
