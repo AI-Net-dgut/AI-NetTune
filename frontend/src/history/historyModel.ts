@@ -36,7 +36,17 @@ export interface EffectView {
   id: string; time: string; label: string; summary: string; error: string;
   parameters: ParameterView[]; metrics: { label: string; before: string; after: string; unit: string }[];
 }
-export interface PlanView { id: string; name: string; description: string; parameters: ParameterView[]; draft: boolean; effects: EffectView[]; tasks: string[]; conditions: string[]; tradeoffs: string[] }
+export interface PlanView {
+  id: string; name: string; description: string;
+  parameters: ParameterView[];           // 本次评估所用参数（最新一次）
+  suggested: ParameterView[];            // 模板给出的**建议参数**（不随手动修改变化）
+  source: 'system' | 'ai';               // 方案来源：模板生成=system；AI 只负责文字解释
+  draft: boolean; effects: EffectView[];
+  latest: EffectView | null;             // 最新一条可用效果（默认展示）
+  others: EffectView[];                  // 其他评估版本（折叠）
+  deviated: boolean;                     // 本次参数是否偏离建议值
+  tasks: string[]; conditions: string[]; tradeoffs: string[];
+}
 const metricLabels: Record<string, [string, string]> = {
   rsrpDbm: ['RSRP', 'dBm'], sinrDb: ['SINR', 'dB'], throughputMbps: ['吞吐量', 'Mbps'],
   resourceUtilizationPct: ['PRB占用率', '%'], packetLossPct: ['丢包率', '%'], latencyMs: ['时延', 'ms'],
@@ -79,7 +89,12 @@ export function recordContent(entry: QuestionEntry) {
     const plan = object(raw); if (!Object.keys(plan).length) return null;
     const id = text(plan.id) || text(plan.name) || fallback;
     if (!plans.has(id)) {
-      plans.set(id, { id, name: text(plan.name) || '处理方案', description: text(plan.description), parameters: parameters(plan), draft: false, effects: [], tasks: array(plan.tasks).map(text).filter(Boolean), conditions: array(plan.conditions).map(text).filter(Boolean), tradeoffs: array(plan.tradeoffs).map(text).filter(Boolean) });
+      plans.set(id, { id, name: text(plan.name) || '处理方案', description: text(plan.description),
+        parameters: parameters(plan), suggested: parameters(plan),
+        // 方案来自后端模板；AI 只负责文字研判，不参与选方案（10-30 清单第 3 点要求标清楚来源）
+        source: 'system',
+        draft: false, effects: [], latest: null, others: [], deviated: false,
+        tasks: array(plan.tasks).map(text).filter(Boolean), conditions: array(plan.conditions).map(text).filter(Boolean), tradeoffs: array(plan.tradeoffs).map(text).filter(Boolean) });
       snapshots.set(id, plan);
     }
     return plans.get(id)!;
@@ -133,6 +148,13 @@ export function recordContent(entry: QuestionEntry) {
   for (const plan of plans.values()) {
     plan.effects.sort((a, b) => text(b.time).localeCompare(text(a.time)));
     plan.draft = needsEvaluation.has(plan.id) && !plan.effects.some(e => !e.error && e.metrics.length > 0 && sameParameters(e.parameters, plan.parameters));
+    // 默认只突出"本次评估参数 + 最新效果"；其余版本折叠，但每个版本保留自己的参数
+    // （10-30 清单第 3 点：用户会把最新效果误当成原始建议值的效果）。
+    const usable = plan.effects.filter(e => !e.error && e.metrics.length > 0);
+    const pick = usable.find(e => sameParameters(e.parameters, plan.parameters)) ?? usable[0] ?? null;
+    plan.latest = pick;
+    plan.others = plan.effects.filter(e => e !== pick);
+    plan.deviated = !sameParameters(plan.parameters, plan.suggested);
   }
   return { reply, suggestion: text(d.suggestion), error: text(p.error), plans: [...plans.values()],
     future: object(object(p.handoff).targetWindow ?? object(p.handoff).forecast), malformed: !Object.keys(p).length };

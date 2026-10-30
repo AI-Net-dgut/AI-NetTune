@@ -38,15 +38,38 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
     </section>
     <section className="history-section"><h3>解决方案与预计效果</h3>
       {!content.plans.length && <p className="history-answer">{content.suggestion || '本次未生成处理方案或仿真效果。'}</p>}
-      {content.plans.map(plan => <article className="history-plan" key={plan.id}><h4>{plan.name}</h4>{plan.description && <p>{plan.description}</p>}
+      {content.plans.map(plan => <article className="history-plan" key={plan.id}>
+        <h4>{plan.name}<span className="history-plan-source">
+          {plan.source === 'system' ? '系统建议方案（模板生成；AI 仅负责文字研判，不参与选方案）' : 'AI 选择方案'}
+        </span></h4>
+        {/* 10-30 清单第 3 点：默认顺序固定为"建议方案 → 本次评估参数 → 效果"，
+            参数与效果放在同一个可见区块里，避免用户把最新效果误当成原始建议值的效果。 */}
+        {plan.deviated && <p className="history-draft">
+          本次评估参数<strong>已偏离</strong>原始建议值（见下方"建议参数"），下面的效果只对应"本次评估参数"。
+        </p>}
+        <div className="history-section-block">
+          <h5>本次评估参数</h5>
+          {plan.parameters.length ? <Parameters values={plan.parameters}/> : <p className="history-muted">未记录参数。</p>}
+        </div>
+        {plan.latest ? <div className="history-section-block">
+          <h5>仿真预计效果（对应上方参数）</h5>
+          <Effect effect={plan.latest}/>
+        </div> : <p className="history-muted">尚未保存仿真效果。</p>}
+        {plan.draft && <p className="history-draft">参数已修改，尚无对应的新效果；上面的结果只适用于它自己记录的参数。</p>}
+        {plan.suggested.length > 0 && (plan.deviated || plan.suggested.some((v, i) => v.value !== (plan.parameters[i]?.value ?? ''))) && <details>
+          <summary>建议参数（原始模板值）</summary>
+          <Parameters values={plan.suggested}/>
+          <p className="history-muted">方案描述里的"下调/调整"等措辞描述的是模板建议，不代表本次评估实际使用的参数。</p>
+        </details>}
+        {plan.others.length > 0 && <details>
+          <summary>其他评估版本（{plan.others.length}）</summary>
+          {plan.others.map((e, i) => <Effect key={`${e.id}-${i}`} effect={e}/>)}
+        </details>}
         {(plan.tasks.length > 0 || plan.conditions.length > 0 || plan.tradeoffs.length > 0) && <details>
           <summary>人工操作与适用条件</summary>
           {([{ title: '人工操作', values: plan.tasks }, { title: '适用条件', values: plan.conditions }, { title: '影响与取舍', values: plan.tradeoffs }]).map(group => group.values.length > 0 && <div key={group.title}><strong>{group.title}</strong><ul>{group.values.map((v, i) => <li key={i}>{v}</li>)}</ul></div>)}
         </details>}
-        {plan.parameters.length > 0 && <details><summary>查看方案参数{plan.draft ? '（已修改，待重新仿真）' : ''}</summary><Parameters values={plan.parameters}/></details>}
-        {plan.draft && <p className="history-draft">参数已修改，尚无对应的新效果；下方结果仅适用于各次仿真时的参数。</p>}
-        {plan.effects[0] ? <Effect effect={plan.effects[0]}/> : <p className="history-muted">尚未保存仿真效果。</p>}
-        {plan.effects.length > 1 && <details><summary>此前 {plan.effects.length - 1} 次预计效果</summary>{plan.effects.slice(1).map((e, i) => <Effect key={`${e.id}-${i}`} effect={e}/>)}</details>}
+        {plan.description && <details><summary>方案说明（原始建议措辞）</summary><p>{plan.description}</p></details>}
       </article>)}
       {content.plans.some(p => p.effects.length) && <p className="history-muted">以上是仿真预计效果，不代表真实网络配置或实际验证结果。</p>}
     </section>
