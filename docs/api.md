@@ -402,12 +402,15 @@ GET /api/data/events?scenario=校园
 
 
 
-### 降级机制
+> 说明（独立审计）：下面"降级机制 / chart 图表类型"两节属于**接口 3（/api/agent/chat）**，
+> 之前被误放在本接口章节里，现已标注归属。
+
+### 附：接口 3 的降级机制
 1.  关键词规则优先匹配，不依赖LLM即可完成意图识别
-2.  未命中关键词、输入模糊时，默认兜底为 `query_kpi`（KPI概况查询）
+2.  未命中关键词、输入模糊时，默认兜底为 `query_kpi`（KPI概况查询）；对与数据无关的问题兜底 `chat`
 3.  LLM不可用时，自动降级为关键词规则+兜底逻辑，核心功能可用
 
-### chart 图表类型
+### 附：接口 3 的 chart 图表类型
 - `line`：折线趋势图，对应故障研判场景
 - `heatmap`：热力图，对应信号分布场景
 - `graph`：关系图，对应网络拓扑场景
@@ -489,7 +492,7 @@ GET /api/network/topology/enhanced?scenario=校园&time=2026-01-01 10:00:00
 |参数|类型|必填|说明|
 |---|---|---|---|
 |scenario|string|是|业务场景，如 校园|
-|time|string|否|指定时刻，格式 yyyy-MM-dd HH:mm:ss；不传默认取数据集最新时刻|
+|time|string|**是**|指定时刻，格式 yyyy-MM-dd HH:mm:ss。**必填**：不传返回 40001（有意不静默取数据集端点，否则回放模式会露馅）|
 |include_metrics|boolean|否|是否附加链路指标，默认 true|
 
 ### 响应
@@ -539,7 +542,7 @@ GET /api/network/topology/enhanced?scenario=校园&time=2026-01-01 10:00:00
 
 POST /api/analyze/forecast
 
-功能：对每个 UE × 指标（rsrp/sinr/throughput）做 1 小时桶聚合，前 80% 训练 Prophet 模型、后 20% 测试评估（输出 predicted 与 MAPE），并在测试段之后延伸 24 小时未来预测（含置信区间 lower/upper）。与接口 8（/api/predict/result，契约 v1）的区别：接口 10 为**已接入真实 Prophet 模型的预测数据源**；接口 8 为**查询壳**——保持 v1 契约不变，转调接口 10 的数据，不新建模型、不升契约版本。
+功能：对每个 UE × 指标（rsrp/sinr/throughput）做 1 小时桶聚合，按 `split = max(int(n*0.8), n-horizon)` 切分（默认 720 点 → 696 训练 / 24 测试，**不是固定 80/20**）训练 Prophet、在测试段评估（输出 predicted 与 MAE/RMSE/MAPE），并在测试段之后延伸 24 小时未来预测（含置信区间 lower/upper）。与接口 8（/api/predict/result，契约 v1）的区别：接口 10 为**真实预测数据源**（Prophet，缺依赖/超时降级移动平均）；接口 8 为**占位**——字段结构保留 v1 契约，但固定返回 `predict_list=[]`，**不调用任何模型、也不转调接口 10**。
 
 ### 请求
 
@@ -948,9 +951,12 @@ POST /api/forecast/analyze
 | `rule_score` | number | 规则评分（**主字段**）。衡量规则命中强度，**不是概率**；`confidence` 保留一版用于向后兼容 |
 | `score_kind` | string | 固定 `"rule"`，语义标注 |
 | `anomaly_scope` | string | `window`=整窗异常 / `hour`=仅个别小时越阈（整窗均值正常）/ `none` |
-| `anomaly_spans` | array | **分钟级异常区间**：`[{ap_id, type, start, end, minutes}]`，start/end 精确到分钟（申报书要求"定位异常的起止时间"）。同一 AP、同一类型、间隔 ≤2 分钟的异常分钟合并；平稳窗口返回 `[]` |
+| `anomaly_spans` | array | **分钟级异常区间**：`[{ap_id, type, start, end, minutes, source}]`，start/end 精确到分钟（申报书要求"定位异常的起止时间"）。同一 AP、同一类型、间隔 ≤2 分钟的异常分钟合并；重叠区间会先并集，`source` 取 `label`（网络标签派生）/ `spectrum`（频谱越阈）/ `kpi`（KPI 判据）/ `merged`（两种来源重叠合并）。结论为"正常"时**一定为空** |
+| `current_state` | string | **四态语义**（区分"出现过异常"与"此刻仍在故障"）：`fault_active`（窗口末尾 10 分钟内仍有异常）/ `recovered_in_window`（窗口内异常但末尾已恢复）/ `performance_warning`（指标偏低未达判据）/ `normal` |
+| `last_anomaly_at` | string\|null | 本窗口内**最后一个**异常区间结束时刻（取所有区间的最大 `end`，不是排序末条）；无异常为 `null` |
+| `performance_hints` | array | 未达故障判据但值得关注的提示：`[{ap_id, level, network_status, evidence}]`，用于 `performance_warning` 状态 |
 | `plan_narrative` | string | 方案的自然语言说明（LLM 可用时由大模型改写，否则模板） |
-| `plan_narrative_source` | string | `llm` / `template` |
+| `plan_narrative_source` | string | **按实际结果**标注：`llm`（模型真的改写了）/ `template`（开关开着但模型失败或无 key 时也是它） |
 
 **接口 3 `/api/agent/chat`**
 
@@ -1227,4 +1233,86 @@ POST /api/forecast/analyze
 ### 与接口 14 的关系
 
 接口 17 返回的 `plan.id` 可直接用于接口 14 `/api/plan/simulate`；但预测来源方案**绑定依据**：评估窗口必须等于 `basisWindow`、AP 必须等于 `basis.risk.ap`，否则 40002（防止手工改请求去读基准之后的真实数据或换 AP）。
+
+---
+
+## 接口 15：区域电磁态势帧序列（GET /api/forecast/spatial_frames）
+
+把网络表按"空间网格 + 时间帧"聚合成二维场，供空间态势大图与缩略帧条使用。
+
+### 接口 15 请求
+
+|参数|类型|必填|说明|
+|---|---|---|---|
+|scenario|string|是|场景名，白名单外 → 40002|
+|baseTime|string|是|基准时刻 `yyyy-MM-dd HH:mm:ss`；非法 → 40002|
+|pastFrames|int|否|历史帧数，默认 8，上限 12；越界 → 40003|
+|futureFrames|int|否|未来帧数，默认 6，上限 12；越界 → 40003|
+|frameMinutes|int|否|每帧分钟数，默认 10，范围 1~240；越界 → 40003|
+|historyMinutes|int|否|历史取样长度；当它小于 `frameMinutes×pastFrames` 时 `pastFrames` 会被夹到 1（响应里不含夹取提示，前端需按 `past.length` 展示）|
+|metric|string|否|`rsrp` / `sinr` / `throughput` / `latency` / `prb_usage`；非法 → 40002|
+
+### 接口 15 响应（`data`）
+
+```json
+{"scenario":"校园","baseTime":"2026-01-03 10:08:00",
+ "frameMinutes":10,"pastFrames":8,"futureFrames":6,"metric":"rsrp",
+ "xRange":[0,520],"yRange":[0,420],
+ "past":[{"start":"…","end":"…","values":[[…]],"note":""}],
+ "future":[{"start":"…","end":"…","values":[[…]],"note":""}],
+ "note":"过去帧为实测插值，未来帧为趋势外推"}
+```
+
+|字段|说明|
+|---|---|
+|past / future|帧数组：`start`/`end`（该帧时间跨度）、`values`（二维网格，行优先）、`note`|
+|xRange / yRange|网格坐标范围（米）|
+|note|口径说明：过去=实测插值，未来=趋势外推|
+
+### 接口 15 错误码
+
+|场景|code|
+|---|---|
+|scenario 不在白名单 / baseTime 格式非法 / metric 非法|40002|
+|pastFrames、futureFrames、frameMinutes 超出范围|40003（FastAPI 参数校验会先返回 40001「参数校验失败」，属已知口径差异）|
+
+---
+
+## 接口 16：信号导航建议（GET /api/navigate/signal）
+
+给定当前位置与场景，给出"往哪个方向走、走多远、预期提升多少"。
+
+### 接口 16 请求
+
+|参数|类型|必填|说明|
+|---|---|---|---|
+|scenario|string|是|场景名，白名单外 → 40002|
+|current_x / current_y|number|是|当前坐标（米），越界 → 40003|
+|target_x / target_y|number|否|目标点；提供时给出直达建议|
+|metric|string|否|`rsrp`（默认）/ `sinr` / `throughput` / `latency`|
+|time|string|否|指定时刻；非法时间当前返回 40003（提示"该窗口没有数据"），与接口 15 的 40002 不一致，属已知差异|
+
+### 接口 16 响应（`data`）
+
+```json
+{"current":{"x":120,"y":80,"value":-96.2,"level":"偏弱"},
+ "advice":{"direction":"东北","degrees":42,"distanceM":120,"expected":{"value":-88.4,"gain":7.8}},
+ "candidates":[{"x":240,"y":160,"value":-88.4,"gain":7.8,"distanceM":138}],
+ "note":"基于当前时刻的网络表插值，非实测路测；移动后效果需现场验证"}
+```
+
+|字段|说明|
+|---|---|
+|current|当前点位与指标值、等级|
+|advice|建议方向（中文方位 + 角度）、距离、预期指标与增益|
+|candidates|候选取点（按增益排序）|
+|note|口径：基于插值，不是路测|
+
+### 接口 16 错误码
+
+|场景|code|
+|---|---|
+|scenario 非法 / 坐标缺失|40002 / 40001|
+|坐标越界，或该窗口无采样|40003|
+
 

@@ -1,4 +1,4 @@
-# AI-NetTune
+﻿# AI-NetTune
 
 **基于 LLM 意图驱动的多模态无线网络智能分析与管控平台**
 
@@ -88,7 +88,7 @@ powershell -ExecutionPolicy Bypass -File scripts\start_backend.ps1
 
 ### 0. 先放数据
 
-把 `network_data_30d.csv`（14.6 MB）与 `spectrum_7d.csv`（103.6 MB）放进 `data/`。
+把 `network_data_30d.csv`（14.6 MB）与 `spectrum_7d.csv`（103.4 MB）放进 `data/`。
 然后一条命令自检：
 
 ```powershell
@@ -129,7 +129,7 @@ setx LLM_MODEL "deepseek-chat"    # 可选，默认就是 deepseek-chat
 打开 [http://localhost:8000/api/health](http://localhost:8000/api/health) 看部署自检结果（`data.ok` 应为 `true`）。
 
 > 接口 1/2/3/5/6/9 读取 `data/` 下的网络表（当前 30 天版，129,600 条 × 18 列）；
-> 接口 11/12（预测预警）额外读取 103.6 MB 的 `spectrum_7d.csv`（1,512,000 条 × 9 列）。
+> 接口 11/12（预测预警）额外读取 103.4 MB 的 `spectrum_7d.csv`（1,512,000 条 × 9 列）。
 >
 > 两张表覆盖范围不同：网络表 30 天（01-01 ~ 01-30，每天都有注入故障），
 > 频谱表只有前 7 天（01-01 ~ 01-07）。**系统支撑范围取交集 = 01-01 ~ 01-07 23:59**：
@@ -165,7 +165,7 @@ npm run dev
 | 7    | GET  | /api/data/events      | 故障事件清单（读 `data/fault_events.csv`，案例窗口的单一事实来源） |
 | 8    | GET  | /api/predict/result   | 时序预测结果查询（契约 v1 · **占位**：固定返回 `predict_list: []`） |
 | 9    | GET  | /api/network/topology/enhanced | 拓扑增强数据（契约 v1：AP/UE 属性 + 链路多指标 + 整体统计） |
-| 10   | POST | /api/analyze/forecast | 区域信号/频谱态势预测：1 小时桶 · 前 80% 训练 Prophet / 后 20% 测试 + 未来 24h（lower/upper）；Prophet 失败降级移动平均（`method` 如实返回） |
+| 10   | POST | /api/analyze/forecast | 区域信号/频谱态势预测：1 小时桶 · 按 `split=max(int(n*0.8), n-horizon)` 切分（默认 696/24，非固定 80/20）训练 Prophet + 未来 24h（lower/upper）；Prophet 不可用/超时降级移动平均（`method` 如实返回，桶不足 4 个返回 `no_data`） |
 | 11   | POST | /api/forecast/preview | 预测预警 v2：真实频谱数据 → 历史帧 + 未来帧 + 风险预警（`baseTime` 防未来） |
 | 12   | POST | /api/forecast/analyze | 预测研判 v2：按 `forecastId`/`alertId` 生成文字研判（LLM 不可用降级规则模板） |
 | 13   | GET  | /api/health           | 部署自检：数据文件 / 依赖 / 大模型就绪状态（不依赖数据，永远可访问） |

@@ -1,4 +1,4 @@
-# AI-NetTune 部署手册
+﻿# AI-NetTune 部署手册
 
 > 目标：换一台干净的机器，照着这一份文档就能把前后端跑起来。
 > 适用：Windows 10/11（macOS/Linux 命令基本一致，只需替换路径写法）。
@@ -25,7 +25,7 @@
 | 文件名 | 大小 | SHA256（前 16 位） | 缺失后果 |
 |---|---|---|---|
 | `network_data_30d.csv` | 14.6 MB | `E4D8547AEEC1199C` | 接口 1/2/5/6/7/9 与回放全部返回空数据 |
-| `spectrum_7d.csv` | 103.6 MB | `14E6649284E0217F` | 预测预警降级为 `insufficient_data` |
+| `spectrum_7d.csv` | 103.4 MB | `14E6649284E0217F` | 预测预警降级为 `insufficient_data` |
 
 可选（演示备用，后端不会自动读）：
 
@@ -119,7 +119,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 | 地址 | 期望 |
 |---|---|
 | http://127.0.0.1:8000/api/health | `data.ok = true`，两个 `rows > 0` |
-| http://127.0.0.1:8000/docs | Swagger 面板，16 个接口 |
+| http://127.0.0.1:8000/docs | Swagger 面板，17 个业务接口 |
 | http://127.0.0.1:8000/api/data/query?scenario=校园&start_time=2026-01-01%2010:00:00&end_time=2026-01-01%2010:05:00 | `total > 0` |
 
 ---
@@ -250,7 +250,7 @@ python scripts/verify_all.py --fast      # 跳过最慢的两项，改完一处�
 python scripts/check_prophet.py          # Prophet 环境自检（接口 10 是否真能走 Prophet）
 python scripts/check_prophet.py --timeout 180   # 慢机器放宽预热等待
 
-python scripts/doctor.py            # 环境/数据/依赖自检（读 108MB 频谱表，约 5-10 秒）
+python scripts/doctor.py            # 环境/数据/依赖自检（读 103.4MB 频谱表，约 5-10 秒）
 python scripts/doctor.py --quick    # 跳过频谱表深度统计（更快）
 
 python scripts/audit_data.py        # 数据对账：两表异常组差异、渐变征兆、阈值自洽、占用率语义
@@ -271,7 +271,7 @@ python scripts/check_history_export.py 导出.json   # 校验导出的历史记�
 `verify_all.py` 逐项打印 PASS/FAIL，任一失败退出码 1，失败项会附最后 320 字符的原始输出。
 
 `audit_data.py` 的结论直接对应 `AI-NetTune预测预警数据交接说明-v2.7` 里的验证表：
-目前会报出"两表异常组不一致（147/402）"和"全部切点为阶跃、无渐变征兆"两条不符项，
+当前结论是「一致 10 项 / 不符 0 项」（`--full` 会额外核对 30 天表前 7 天）；若换成旧数据会报出"两表异常组不一致"与"全部切点为阶跃"两类不符项，
 重新生成数据后应变成"一致"。
 
 ---
@@ -298,7 +298,7 @@ python scripts/check_history_export.py 导出.json   # 校验导出的历史记�
 - [ ] `data/network_data_30d.csv`、`data/spectrum_7d.csv` 已到位（合计约 120 MB）
 - [ ] `python scripts/doctor.py` 退出码 0
 - [ ] `GET /api/health` 的 `data.ok` 为 `true`
-- [ ] `GET /docs` 能看到 16 个接口
+- [ ] `GET /docs` 能看到 17 个业务接口
 - [ ] 前端 `npm run dev` 打开后，工作台能出图、AI 区能问答
 - [ ] 预测弹窗能打开且 `status=ready`
 - [ ] 若前后端分开部署（`VITE_API_BASE` 直连后端），`main.py` 的 `allow_origins` 已包含前端访问地址
