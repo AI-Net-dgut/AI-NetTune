@@ -542,6 +542,43 @@ def test_forecast_id_is_unique_per_full_context():
     assert _data(preview(60))["id"] != first["id"]
 
 
+def test_forecast_plan_ids_are_bound_to_round():
+    """方案 ID 必须绑定预测轮次（10-30 清单第 4 点）。
+
+    plan_model 生成的是确定性 ID（PLAN-<AP>-<模板>-<序号>），同一个 AP 的两轮预测
+    会得到完全相同的 ID，_PLAN_CACHE 被后一轮覆盖：第一轮再仿真会被窗口/AP 绑定
+    拒绝（40002），或拿第二轮的依据评估第一轮。
+    """
+    base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
+
+    def round_plans(start, end):
+        prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
+            scenario=SCENARIO, baseTime=base,
+            history=main._TimeRange(start=start, end=end), horizonMinutes=120)))
+        out = _data(main.forecast_plans(main.ForecastPlanRequest(
+            forecastId=prev["id"], scenario=SCENARIO, baseTime=base,
+            history=main._TimeRange(start=start, end=end),
+            forecast=main._TimeRange(start=prev["forecast"]["start"], end=prev["forecast"]["end"]))))
+        return prev, out
+
+    prev1, r1 = round_plans(hs, he)
+    prev2, r2 = round_plans("2026-01-02 13:00:00", he)
+    assert r1["plans"] and r2["plans"], (len(r1["plans"]), len(r2["plans"]))
+    ids1 = {p["id"] for p in r1["plans"]}
+    ids2 = {p["id"] for p in r2["plans"]}
+    # 模板原始 ID 相同（说明确实是同一类方案），但完整 ID 必须按轮次区分
+    assert {p.get("baseId") for p in r1["plans"]} & {p.get("baseId") for p in r2["plans"]}
+    assert not (ids1 & ids2), ids1 & ids2
+    # 两轮方案都能按各自依据窗口仿真（不再 40002）
+    for prev, plans in ((prev1, r1["plans"]), (prev2, r2["plans"])):
+        for plan in plans[:2]:
+            r = main.plan_simulate(main.PlanSimulateRequest(
+                plan_id=plan["id"], scenario=SCENARIO,
+                window_start=prev["history"]["start"], window_end=prev["history"]["end"],
+                parameter_values={}))
+            assert r.get("code") == 0, (plan["id"], r.get("message"))
+
+
 def test_forecast_analyze_uses_question_and_target_window():
     """forecast/analyze 必须真正使用 question 与 targetWindow。
 

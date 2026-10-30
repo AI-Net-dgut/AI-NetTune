@@ -83,11 +83,17 @@ export default function ForecastDialog({ request, result, pending, error, onClos
           {request.question && <p>本次未来提问：{request.question}</p>}
           {request.targetWindow && <p>关注时段：{request.targetWindow.start} — {request.targetWindow.end}；下方风险仅显示与关注时段相交的项目。</p>}
           {ageMinutes > 0 && <p>结果基准距主时钟 {ageMinutes} 分钟{fixedView ? '，当前为固定查看，需手动刷新。' : follow ? '，主时钟播放中会自动更新；暂停时不刷新。' : '，可刷新获取最新结果。'}</p>}
-          {onHorizonChange && <label className="ain-forecast-horizon">预测时长
-            <select aria-label="预测时长" value={request.horizonMinutes} disabled={pending} onChange={event => onHorizonChange(Number(event.target.value))}>
+          {onHorizonChange && <label className="ain-forecast-horizon">查看未来范围
+            <select aria-label="查看未来范围" value={request.horizonMinutes} disabled={pending} onChange={event => onHorizonChange(Number(event.target.value))}>
               {horizons.map(minutes => <option key={minutes} value={minutes}>未来{minutes}分钟{minutes === 1440 ? '（24小时）' : ''}</option>)}
             </select></label>}
-          <p>按完整分钟取数；频谱历史最多12小时。修改时长后按当前查看基准重新预测。</p></div>
+          {/* 10-30 清单第 6 点：这个下拉框只决定"看多远"，不决定"提前多久"。
+              两个概念必须分开写，否则用户会以为选 120 分钟就等于提前 120 分钟发现故障。 */}
+          <p>
+            该选项只决定**查看多远**（预测覆盖到哪个时刻）；它<strong>不代表</strong>能提前同样时间发现故障。
+            系统给出的提前量是各条风险里的「预计 N 分钟后越阈」，属趋势外推，需历史回测验证。
+          </p>
+          <p>按完整分钟取数；频谱历史最多12小时。修改范围后按当前查看基准重新预测。</p></div>
         {demo && <p className="ain-forecast-demo" role="status">示例预览：预测模型尚未接入，以下数值与阈值仅用于展示布局，不代表当前网络预测。</p>}
         {pending && <div className="ain-forecast-state" role="status"><strong>正在生成预测…</strong><p>请求基准：{request.baseTime}；仅使用该基准及以前的数据。{result && '下方保留上一轮有效结果，其基准以上方标识为准。'}</p></div>}
         {error && <div className="ain-forecast-state is-error" role="alert"><strong>预测暂未更新</strong><p>{error}{result && ' 下方是上一轮结果，尚未更新。'}</p><button type="button" onClick={onRefresh}>重试预测</button></div>}

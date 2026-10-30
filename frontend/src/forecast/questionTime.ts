@@ -83,7 +83,7 @@ export function resolveForecastQuestion(message: string, context: ForecastQuesti
       return horizon(amount * (duration[2] === '天' ? 1440 : duration[2] === '小时' ? 60 : 1));
     }
     if (/\d+\s*(?:分钟|小时|天)|半小时/.test(normalized) && intended && !clockTokens.length)
-      return fail('请使用“未来120分钟”“接下来两小时”等明确的预测时长。');
+      return fail('请使用“未来120分钟”“接下来两小时”等明确的查看范围（只决定看多远，不等于提前多久发现）。');
     const baseDay = context.baseTime.slice(0, 10);
     const year = baseDay.slice(0, 4);
     const dayWords = [...new Set(normalized.match(/今天|今日|明天|后天|今晚|明早/g) ?? [])];

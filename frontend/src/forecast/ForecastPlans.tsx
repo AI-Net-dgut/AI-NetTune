@@ -51,28 +51,8 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
 
   useEffect(() => () => { simSeq.current += 1; }, []);
 
-  const load = async () => {
-    setState({ pending: true, payload: null, error: "" });
-    invalidate();
-    try {
-      const payload = await fetchForecastPlans({
-        forecastId: result.id, scenario: result.scenario, baseTime: result.baseTime,
-        history: result.history, forecast: result.forecast,
-        alertId: alertId ?? undefined, targetWindow: targetWindow ?? undefined,
-      });
-      setState({ pending: false, payload, error: "" });
-      const first = payload.plans[0];
-      if (first) {
-        setSelectedId(first.id);
-        setValues(Object.fromEntries(first.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])));
-        archivePlan(first, payload);
-      }
-    } catch (reason) {
-      setState({ pending: false, payload: null, error: reason instanceof Error ? reason.message : "方案生成失败" });
-    }
-  };
-
-  /** 归档：生成方案 / 每次仿真都写记录，挂在预测研判记录下（审计第 2 项）。 */
+  /** 归档：生成方案 / 每次仿真都写记录，挂在预测研判记录下（审计第 2 项）。
+   *  必须在 load 之前定义：load 会自动调用它（自动接续后也要归档）。 */
   const archivePlan = (plan: TreatmentPlan, payload: NonNullable<typeof state.payload>,
     extra?: { values: Record<string, string>; sim?: SimulationResult; action: string; error?: string }) => {
     if (!parentId) return;                       // 没有父记录就不写，避免出现孤立条目
@@ -94,6 +74,38 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
       });
     }
   };
+
+  const load = async () => {
+    setState({ pending: true, payload: null, error: "" });
+    invalidate();
+    try {
+      const payload = await fetchForecastPlans({
+        forecastId: result.id, scenario: result.scenario, baseTime: result.baseTime,
+        history: result.history, forecast: result.forecast,
+        alertId: alertId ?? undefined, targetWindow: targetWindow ?? undefined,
+      });
+      setState({ pending: false, payload, error: "" });
+      const first = payload.plans[0];
+      if (first) {
+        setSelectedId(first.id);
+        setValues(Object.fromEntries(first.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])));
+        archivePlan(first, payload);
+      }
+    } catch (reason) {
+      setState({ pending: false, payload: null, error: reason instanceof Error ? reason.message : "方案生成失败" });
+    }
+  };
+
+  // 自动接续（10-30 清单第 4 点）：研判完成后直接加载方案，
+  // 不再要求用户再点一次"生成处置方案"才知道有没有方案。
+  const autoLoaded = useRef("");
+  useEffect(() => {
+    if (autoLoaded.current === result.id) return;
+    autoLoaded.current = result.id;
+    void load();
+    // load 只用本次移交的固定上下文（result/alertId/targetWindow），无需进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result.id]);
 
   const choose = (plan: TreatmentPlan) => {
     setSelectedId(plan.id);
@@ -126,6 +138,13 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
 
   // 只有"结果对应的方案与参数仍是当前值"才展示（旧结果明确标注作废）
   const resultIsCurrent = Boolean(sim.result) && sim.forPlanId === selectedId && sameValues(sim.inputValues, values);
+  // 后端为**建议参数**已经算过一份默认效果：参数没改时直接显示它，
+  // 不必等用户点"评估"（清单第 4 点：已有的默认结果不该被藏起来）。
+  const suggestedValues = selected
+    ? Object.fromEntries(selected.parameters.map(p => [p.id, String(p.suggestedValue ?? "")])) : {};
+  const defaultEffect = selected?.simulation && sameValues(suggestedValues, values) ? selected.simulation : null;
+  const shown = resultIsCurrent ? sim.result : defaultEffect;
+  const shownIsDefault = !resultIsCurrent && Boolean(defaultEffect);
   const baseline = state.payload?.basisWindow;
 
   return <section className="ain-forecast-plans" aria-label="预测风险处置方案">
@@ -174,9 +193,14 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
         {sim.result && !resultIsCurrent && <p className="ain-ai-note" role="status">
           参数或方案已变更，上一次评估结果（{sim.inputValues && Object.keys(sim.inputValues).length ? JSON.stringify(sim.inputValues) : "旧参数"}）已作废，请重新评估。
         </p>}
-        {sim.result && resultIsCurrent && <div className="ain-forecast-plans-sim">
-          <p><strong>{sim.result.summary || "评估完成"}</strong></p>
-          <ul>{sim.result.metrics.map(m => {
+        {shown && <div className="ain-forecast-plans-sim">
+          <p>
+            <strong>{shown.summary || "评估完成"}</strong>
+            <span className="ain-forecast-plans-tag">
+              {shownIsDefault ? "默认建议参数（后端已计算）" : "本次参数评估结果"}
+            </span>
+          </p>
+          <ul>{shown.metrics.map(m => {
             const meta = METRIC_META[m.key] ?? { label: String(m.key), unit: "" };
             const delta = m.before !== null && m.after !== null ? Number((m.after - m.before).toFixed(2)) : null;
             return <li key={`${m.key}-${m.objectId}`}>
@@ -184,9 +208,9 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
               {delta !== null ? `（${delta > 0 ? "+" : ""}${delta}${meta.unit}）` : ""}
             </li>;
           })}</ul>
-          {sim.result.method && <p className="ain-ai-note">方法：{sim.result.method}</p>}
-          {sim.result.assumptions?.length ? <p className="ain-ai-note">假设：{sim.result.assumptions.join("；")}</p> : null}
-          {sim.result.limitations?.length ? <p className="ain-ai-note">限制：{sim.result.limitations.join("；")}</p> : null}
+          {shown.method && <p className="ain-ai-note">方法：{shown.method}</p>}
+          {shown.assumptions?.length ? <p className="ain-ai-note">假设：{shown.assumptions.join("；")}</p> : null}
+          {shown.limitations?.length ? <p className="ain-ai-note">限制：{shown.limitations.join("；")}</p> : null}
         </div>}
       </>}
     </>}

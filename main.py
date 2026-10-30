@@ -3793,7 +3793,15 @@ def forecast_plans(req: ForecastPlanRequest):
         "targetWindow": ({"start": req.targetWindow.start, "end": req.targetWindow.end}
                          if req.targetWindow is not None else None),
     }
+    # 方案 ID 必须绑定"这一轮预测"（10-30 清单第 4 点）：
+    # plan_model 生成的是确定性 ID（PLAN-<AP>-<模板>-<序号>），同一个 AP 的两轮预测
+    # 会得到完全相同的 ID，_PLAN_CACHE 被后一轮覆盖 —— 第一轮再仿真会撞上
+    # 窗口/AP 绑定校验（40002），或更糟：拿第二轮的依据评估第一轮。
+    _round_tag = hashlib.md5(
+        f"{req.forecastId}|{alert.get('id')}".encode("utf-8")).hexdigest()[:8]
     for p in plans:
+        p["baseId"] = p["id"]                      # 保留模板原始 ID，便于对照/排查
+        p["id"] = f'{p["id"]}@{_round_tag}'
         p["origin"] = "forecast"                   # 前端据此显示"来自预测风险"
         p["basis"] = basis
         _remember_plan(p)                          # 让 /api/plan/simulate 可用
