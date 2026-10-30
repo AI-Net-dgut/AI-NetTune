@@ -1,6 +1,8 @@
 import { forecastRecordIds } from '../history/store';
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
+import { ReplyText } from "../chat/DiagnosisAnswer";
 import ChartPanel from "../components/charts/ChartPanel";
 import SpectrumViewPanel from "./SpectrumViewPanel";
 import SpatialFrameGrid from "./SpatialFrameGrid";
@@ -77,44 +79,47 @@ export default function ForecastDialog({ request, result, pending, error, onClos
           <button type="button" aria-label="关闭预测预警" onClick={onClose}>×</button>
         </div></header>
       <div className="ain-forecast-dialog-body" aria-busy={pending}>
-        <div className="ain-forecast-context" id="ain-forecast-context"><div><strong>当前结果基准：{shownBaseTime}</strong><span>北京时间 · {fixedView ? "沿用固定分析时刻，需手动刷新" : follow ? `主时钟播放中每 ${followStepMinutes} 分钟自动刷新；暂停时不刷新` : "结果固定，需手动刷新"}</span></div>
-          <p>参考历史：{shownHistory.start} — {shownHistory.end}</p>
-          <p>预测范围：{result ? `${result.forecast.start} — ${result.forecast.end}` : `${request.baseTime}之后${request.horizonMinutes}分钟`}</p>
-          {request.question && <p>本次未来提问：{request.question}</p>}
-          {request.targetWindow && <p>关注时段：{request.targetWindow.start} — {request.targetWindow.end}；下方风险仅显示与关注时段相交的项目。</p>}
-          {ageMinutes > 0 && <p>结果基准距主时钟 {ageMinutes} 分钟{fixedView ? '，当前为固定查看，需手动刷新。' : follow ? '，主时钟播放中会自动更新；暂停时不刷新。' : '，可刷新获取最新结果。'}</p>}
-          {onHorizonChange && <label className="ain-forecast-horizon">查看未来范围
-            <select aria-label="查看未来范围" value={request.horizonMinutes} disabled={pending} onChange={event => onHorizonChange(Number(event.target.value))}>
-              {horizons.map(minutes => <option key={minutes} value={minutes}>
-                未来{minutes}分钟{minutes === 1440 ? '（24小时）' : ''}
-                {/* 只在恰好 720 分钟时标"12小时"；720~1439 的其他取值不能都叫 12 小时
-                    （独立审计 P3：800 分钟曾被标成"12小时"） */}
-                {minutes > 360 ? ' · 长期趋势外推，仅供参考' : ''}
-              </option>)}
-            </select></label>}
-          {/* 10-30 清单第 6 点：这个下拉框只决定"看多远"，不决定"提前多久"。
-              两个概念必须分开写，否则用户会以为选 120 分钟就等于提前 120 分钟发现故障。 */}
-          <p>
-            该选项只决定**查看多远**（预测覆盖到哪个时刻）；它<strong>不代表</strong>能提前同样时间发现故障。
-            系统给出的提前量是各条风险里的「预计 N 分钟后越阈」，属趋势外推，需历史回测验证。
-          </p>
-          <p>按完整分钟取数；频谱历史最多12小时。修改范围后按当前查看基准重新预测。</p></div>
+        <div className="ain-forecast-context" id="ain-forecast-context">
+          <div className="ain-forecast-context-heading"><strong>结果基准：{shownBaseTime}</strong>
+            <span>{fixedView ? "固定分析时刻" : follow ? `播放中每 ${followStepMinutes} 分钟更新` : "固定查看"}{ageMinutes > 0 ? ` · 距主时钟 ${ageMinutes} 分钟` : ""}</span></div>
+          <dl className="ain-forecast-time-rows">
+            <div><dt>参考历史</dt><dd>{shownHistory.start} — {shownHistory.end}</dd></div>
+            <div><dt>预测范围</dt><dd>{result ? `${result.forecast.start} — ${result.forecast.end}` : `${request.baseTime}之后${request.horizonMinutes}分钟`}</dd></div>
+          </dl>
+          {request.question && <p>本次提问：{request.question}</p>}
+          {request.targetWindow && <p>关注时段：{request.targetWindow.start} — {request.targetWindow.end}</p>}
+          <div className="ain-forecast-range-row">
+            {onHorizonChange && <label className="ain-forecast-horizon">查看未来
+              <select aria-label="查看未来范围" value={request.horizonMinutes} disabled={pending} onChange={event => onHorizonChange(Number(event.target.value))}>
+                {horizons.map(minutes => <option key={minutes} value={minutes}>
+                  {minutes}分钟{minutes === 1440 ? '（24小时）' : ''}{minutes > 360 ? ' · 长期外推' : ''}
+                </option>)}
+              </select></label>}
+            <span>覆盖范围 ≠ 提前预警时间</span>
+            <Link to="/#forecast-guide">使用说明</Link>
+          </div>
+        </div>
         {demo && <p className="ain-forecast-demo" role="status">示例预览：预测模型尚未接入，以下数值与阈值仅用于展示布局，不代表当前网络预测。</p>}
         {pending && <div className="ain-forecast-state" role="status"><strong>正在生成预测…</strong><p>请求基准：{request.baseTime}；仅使用该基准及以前的数据。{result && '下方保留上一轮有效结果，其基准以上方标识为准。'}</p></div>}
         {error && <div className="ain-forecast-state is-error" role="alert"><strong>预测暂未更新</strong><p>{error}{result && ' 下方是上一轮结果，尚未更新。'}</p><button type="button" onClick={onRefresh}>重试预测</button></div>}
         {result && <>
-          {result.integrationNotice && <p className="ain-forecast-chart-note" role="note">{result.integrationNotice}</p>}
-          {!result.integrationNotice && result.method && <p className="ain-forecast-chart-note">预测方法：{result.method}{result.limitations?.length ? `；限制：${result.limitations.join('；')}` : ''}</p>}
+          <details className="ain-forecast-details ain-forecast-explanation">
+            <summary>预测依据与限制{result.integrationNotice ? " · 当前采用趋势外推" : ""}</summary>
+            {result.integrationNotice && <ReplyText text={result.integrationNotice} />}
+            {result.method && <p>预测方法：{result.method}</p>}
+            {result.limitations?.length ? <p>限制：{result.limitations.join('；')}</p> : null}
+            <p>查看未来范围决定覆盖至哪个时刻，不保证提前同样时间发现故障。越阈时间按当前趋势估计，提前预警能力需历史回测验证；较长范围仅供趋势参考。</p>
+            <p>按完整分钟取数，频谱历史最多12小时；修改范围后按当前基准重新预测。跟随更新仅在弹窗打开且主时钟播放时进行，暂停或关闭后停止自动更新。</p>
+            {request.targetWindow && <p>本次仅展示与关注时段相交的风险。</p>}
+            {result.integrationNotice && <p>频谱风险阈值：逐频段功率 &lt; −95 dBm，至少40/50个频段越阈且连续不少于3分钟，或占用率 &gt; 80%。网络 KPI 异常可另交给 AI 研判核对。</p>}
+          </details>
           {result.status !== "ready" ? <div className="ain-forecast-state" role="status"><strong>{result.status === "insufficient_data" ? "参考数据不足" : "预测服务暂不可用"}</strong><p>{result.message || "当前不能生成可靠预测，请稍后重试。"}</p></div> : <>
             {scopedAlerts.length > 1 && <div className="ain-forecast-risk-tabs" aria-label="选择关注风险">{scopedAlerts.map(a => <button type="button" key={a.id} aria-label={`查看${a.target}的预测风险`} aria-pressed={a.id === alert?.id} onClick={() => setSelected(a.id)}>{a.target} · {a.title}</button>)}</div>}
             <section className={`ain-forecast-summary${alert ? "" : " is-normal"}`} aria-label="预警摘要">
-              <div><h3>{alert ? `${alert.target} · ${alert.title}` : request.targetWindow ? '关注时段未触发风险提示' : result.integrationNotice ? "当前未触发风险提示" : "预测范围内未发现明显风险"}</h3>{alert && <span data-level={alert.severity}>{level[alert.severity]}风险</span>}</div>
+              <div><h3>{alert ? (alert.title.includes(alert.target) ? alert.title : `${alert.target} · ${alert.title}`) : request.targetWindow ? '关注时段未触发风险提示' : result.integrationNotice ? "当前未触发风险提示" : "预测范围内未发现明显风险"}</h3>{alert && <span data-level={alert.severity}>{level[alert.severity]}风险</span>}</div>
               <p>{alert?.summary || (request.targetWindow ? '没有与关注时段相交的预警；这不表示未来一定没有故障。' : result.message) || "可继续查看频谱态势和指标变化，定期刷新预测。"}</p>
               {alert && <small>预计时段：{alert.start} — {alert.end} · {leadText} · 详细原因与建议可交给AI研判</small>}
-              {/* 无风险时给出"判定依据 + 交叉指引"：用户常把"图偏蓝但无预警"当成 bug，
-                  或以为"没预警=没问题"。这里说明预警只覆盖频率维度，KPI 维度要找 AI 研判。 */}
-              {!alert && <small>判定依据：频谱表逐频段功率 &lt; −95 dBm（要求 ≥40/50 频段越阈且连续 ≥3 分钟）或占用率 &gt; 80%。
-                本提示仅覆盖<b>频率维度</b>；KPI 维度（弱覆盖 / 拥塞）的异常请<b>交给 AI 研判核对</b>。</small>}
+              {!alert && <small>{result.integrationNotice ? "仅为频谱阈值提示，不能排除其他网络异常。" : "未触发提示不代表未来一定没有故障。"}</small>}
             </section>
             <div className="ain-forecast-chart-stack">
               {/* 区域电磁态势序列提到弹窗层级、放在频谱三视图之前：

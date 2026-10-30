@@ -31,30 +31,40 @@
 .history-section { border-top: 1px solid #e8eef5; margin-top: 14px; padding-top: 12px; }
 .history-section h3 { margin: 0 0 10px; font-size: 15px; }
 .history-answer { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; }
-.history-plan { padding: 11px 12px; margin-top: 10px; border: 1px solid #e0e9f3; border-radius: 6px; }
-.history-plan h4 { margin: 0 0 5px; font-size: 14px; color: #315779; }
-/* 方案来源标签 + "建议/本次参数/效果"三段式（10-30 清单第 3 点）
-   独立审计：标签从 h4 移出成独立段落，这里给它块级样式，避免长标签换行时背景断行 */
-/* 注意特异性：`.history-plan > p`（1 类+1 类型）会盖过 `.history-plan-source`（1 类），
-   所以这里用 `.history-plan > p.history-plan-source`（2 类+1 类型）才能让 11px 生效
-   （独立审计 P3：标签从 h4 移出后被 .history-plan > p 的 13px 覆盖）。 */
-.history-plan > p.history-plan-source { display: inline-block; max-width: 100%; margin: 0 0 6px; padding: 1px 7px; border-radius: 9px; background: #eef4fb; color: #4c6f95; font-size: 11px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
-.history-section-block { margin: 8px 0; }
-.history-section-block h5 { margin: 0 0 4px; font-size: 12px; color: #4a6b8a; font-weight: 600; }
-/* 方案描述移入折叠后不再命中 .history-plan > p，这里补回同样的排版规则 */
+.history-plan { padding: 12px 14px; margin-top: 10px; border: 1px solid #e0e9f3; border-radius: 7px; }
+.history-plan h4 { margin: 0 0 10px; font-size: 14px; color: #315779; }
+.history-plan-source { display: inline-block; margin-left: 10px; padding: 1px 7px; border-radius: 9px; background: #eef4fb; color: #4c6f95; font-size: 11px; font-weight: 400; vertical-align: middle; }
 .history-plan-desc { font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-.history-plan > p, .history-effect > p { font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-effect > p { font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .history-page details { margin-top: 8px; font-size: 12px; }
 .history-page summary { color: #537a9e; cursor: pointer; line-height: 1.8; }
-.history-parameters { margin: 7px 0; }
-.history-parameters > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 14px; padding: 4px 0; border-bottom: 1px solid #edf2f7; }
-.history-parameters dd { margin: 0; color: #385b7d; }
-.history-effect { margin-top: 10px; padding-top: 8px; border-top: 1px solid #edf2f7; }
+.history-page summary:focus-visible { outline: 2px solid #2780d8; outline-offset: 3px; border-radius: 3px; }
+.history-plan-guidance, .history-evaluation-notes { display: grid; gap: 5px; margin: 10px 0; font-size: 12px; line-height: 1.7; }
+.history-plan-guidance > div, .history-evaluation-notes > div { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 8px; }
+.history-plan-guidance dt, .history-evaluation-notes dt { color: #6a7e93; }
+.history-plan-guidance dd, .history-evaluation-notes dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-evaluation-notes { color: #6a7e93; }
+.history-evaluations { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e8eef5; }
+.history-evaluations h5 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 8px; font-size: 13px; color: #315779; }
+.history-evaluations h5 > span { color: #6a7e93; font-size: 11px; font-weight: 400; }
+.history-page .history-version { margin: 6px 0 0; border: 1px solid #e1e9f2; border-radius: 5px; overflow: hidden; }
+.history-version > summary { padding: 8px 10px; background: #f7f9fc; overflow-wrap: anywhere; }
+.history-version-name { font-weight: 600; color: #385b7d; }
+.history-version-state { display: inline-block; margin-left: 10px; font-size: 11px; color: #6a7e93; }
+.history-version > summary time { display: block; margin-left: 15px; color: #6a7e93; font-size: 11px; }
+.history-version-failed .history-version-state, .history-version-cancelled .history-version-state { color: #ae5a35; }
+.history-version-draft .history-version-state, .history-version-pending .history-version-state { color: #9c6d2a; }
+.history-version[open] > summary { border-bottom: 1px solid #e1e9f2; background: #f0f6fd; }
+.history-version-body { padding: 3px 12px 10px; }
+.history-parameters { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 9px 0; font-size: 12px; }
+.history-parameters > div { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 3px 0; max-width: 100%; }
+.history-parameters dt { color: #6a7e93; overflow-wrap: anywhere; }
+.history-parameters dd { margin: 0; color: #385b7d; font-weight: 600; overflow-wrap: anywhere; }
+.history-effect { margin-top: 8px; padding-top: 0; }
 .history-table-wrap { overflow-x: auto; }
 .history-effect table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
 .history-effect th, .history-effect td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #e7eef5; white-space: nowrap; }
 .history-effect thead { background: #f5f8fc; color: #627b94; }
-.history-draft { color: #9c6d2a; background: #fff8e9; padding: 6px 8px; margin-top: 8px; }
 .history-error { padding: 10px 12px; background: #fff5ef; border: 1px solid #edd3bb; color: #945d2f; border-radius: 6px; line-height: 1.7; overflow-wrap: anywhere; }
 .history-error button { margin: 6px 0 0 8px; }
 .history-storage-note { margin-top: 10px; }
@@ -65,6 +75,9 @@
   .history-layout { grid-template-columns: minmax(0, 1fr); }
   .history-layout > aside { max-height: 230px; }
   .history-detail { max-height: none; padding: 13px; }
+  .history-plan { padding: 11px; }
+  .history-version-body { padding: 3px 9px 8px; }
+  .history-plan-guidance > div, .history-evaluation-notes > div { grid-template-columns: 4em minmax(0, 1fr); }
   .history-heading h1 { font-size: 21px; }
   .history-toolbar { flex-wrap: wrap; gap: 8px; }
   .history-toolbar > input { flex-basis: 100%; }

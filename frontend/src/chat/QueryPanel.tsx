@@ -187,14 +187,10 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         {!forecastMode && <ForecastComparePanel key={scope ? `${scope.scenario}|${scope.start}|${scope.end}` : "none"}
           scope={scope ?? null} disabled={disabled} archiveParentId={query.archiveId} />}
       </section>
-      {forecastMode ? <section className="ain-ai-management-empty" aria-label="预测处理方案与仿真">
-        <h3>预测处理方案与仿真</h3>
-        <p>预测风险的处置方案在**上方「预测风险研判」卡片内**（「生成处置方案」按钮）：方案、参数与效果评估都在那里，评估窗口是预测基准前的实测窗口，不是预测时段实测。</p>
-        <p>本区域只对应现存网络异常的研判；两者不要混看。</p>
-      </section> : data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
+      {!forecastMode && (data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
         diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans}
         sourceQuestion={diagnosisQuestion} pending={query.pending} archiveParentId={query.archiveId} />
-        : <section className="ain-ai-management-empty" aria-label="处理建议与效果"><h3>处理建议与效果</h3><p>{dataStatus}。加载数据并完成研判后，查看处理方案、配置参数和仿真预计效果。</p></section>}
+        : <section className="ain-ai-management-empty" aria-label="处理建议与效果"><h3>处理建议与效果</h3><p>{dataStatus}。加载数据并完成研判后，查看处理方案、配置参数和仿真预计效果。</p></section>)}
     </div>
 
     <div className="ain-query-footer"><details className="ain-query-history-details">

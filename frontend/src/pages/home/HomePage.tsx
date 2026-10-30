@@ -1,37 +1,44 @@
-import { Link } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { FORECAST_HORIZONS, FORECAST_LIMITS } from "../../forecast/config";
+import { MAX_HISTORY_QUESTIONS } from "../../history/store";
 import { REPLAY_CONFIG, REPLAY_SPEEDS } from "../../replay/config";
 import "./HomePage.css";
 
 const capabilities = [
   {
     kind: "observe",
-    title: "观察网络，定位异常",
-    description: "空间主图、网络概括、指标趋势与用户横向对比同步展示，选中对象后查看位置和服务连接。",
-    tags: ["空间分布", "指标趋势", "用户对比"],
-    question: "哪里出现了网络问题？",
+    title: "观察与研判",
+    description: "联动查看空间分布、指标趋势与用户对比；固定时刻提问，核查问题、原因和证据。",
+    tags: ["历史回放", "固定时刻", "证据核查"],
+    guide: "replay-guide",
+    question: "如何回放与选择分析时刻",
   },
   {
-    kind: "diagnose",
-    title: "固定时刻，核查原因",
-    description: "用自然语言询问异常与处理建议，结合回答中的问题、候选原因和证据图表，理解判断依据。",
-    tags: ["自然语言", "原因研判", "证据图表"],
-    question: "为什么变差，依据是什么？",
+    kind: "forecast",
+    title: "预测与预警",
+    description: "查看未来频谱风险与区域态势，结合预测基准、覆盖范围和证据理解趋势变化。",
+    tags: ["频谱风险", "区域态势", "未来时段"],
+    guide: "forecast-guide",
+    question: "如何理解预测范围与更新",
   },
   {
     kind: "plan",
-    title: "比较方案，查看预计效果",
-    description: "查看处理建议，修改支持编辑的参数并导出方案草稿；预计效果根据后端返回展示，缺失时提示待评估。",
-    tags: ["方案建议", "参数编辑", "预计效果"],
-    question: "怎样调整，预计有什么改善？",
+    title: "方案与评估",
+    description: "比较候选方案，调整可编辑参数并重新评估，在相同历史基线上比较预计效果。",
+    tags: ["候选方案", "参数调整", "效果对比"],
+    guide: "simulation-guide",
+    question: "如何调整参数与比较结果",
+  },
+  {
+    kind: "record",
+    title: "分析记录",
+    description: "按问题回看研判、证据、方案与历次评估，保留每次参数和结果，支持搜索与导出。",
+    tags: ["问题归档", "评估时间线", "导出备份"],
+    guide: "record-guide",
+    question: "如何查找与保存分析记录",
   },
 ] as const;
-
-const workflow = [
-  { title: "进入工作台", description: "从 1 月 2 日 13:50 开始演示（与 REPLAY_CONFIG.playbackStart 一致），数据加载后自动回放。" },
-  { title: "固定当前时刻", description: "固定查看时刻；主时钟可暂停或继续，也可查看已到达的历史。" },
-  { title: "提问并核查证据", description: "可指定历史日期/时段提问，图表同步；也可固定当前查看证据。" },
-  { title: "查看方案与预计效果", description: "比较建议、调整参数，退出分析后返回当前。" },
-];
 
 function FeatureIcon({ kind }: { kind: typeof capabilities[number]["kind"] }) {
   return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
@@ -39,11 +46,13 @@ function FeatureIcon({ kind }: { kind: typeof capabilities[number]["kind"] }) {
       <path d="M6 7 12 5 18 9M6 7 8 18 18 9M12 5 8 18" />
       <circle cx="6" cy="7" r="2" /><circle cx="12" cy="5" r="2" />
       <circle cx="18" cy="9" r="2" /><circle cx="8" cy="18" r="2" />
-    </> : kind === "diagnose" ? <>
-      <path d="M5 4h14v12H9l-4 4V4ZM8 8h8M8 12h5" />
-    </> : <>
+    </> : kind === "forecast" ? <>
+      <path d="M4 18h16M5 14l5-5 4 3 5-7M15 5h4v4" />
+    </> : kind === "plan" ? <>
       <path d="M5 5v14h14M9 15v-4M13 15V8M17 15V5" />
       <path d="m8 6 4-3 5 1" />
+    </> : <>
+      <path d="M6 4h12v16H6V4ZM9 8h6M9 12h6M9 16h4" />
     </>}
   </svg>;
 }
@@ -61,7 +70,7 @@ function WorkspaceIllustration() {
     </div>
     <div className="ain-home-v2-preview-ai">
       <div className="ain-home-v2-preview-ai-heading"><strong>AI 交互</strong><span>固定时刻分析</span></div>
-      <div className="ain-home-v2-preview-answer"><span>问题研判与证据</span><span>处理方案与预计效果</span></div>
+      <div className="ain-home-v2-preview-answer"><span>现状研判 / 未来风险</span><span>方案比较 / 历次评估</span></div>
     </div>
     <div className="ain-home-v2-preview-grid">
       <div className="ain-home-v2-preview-map">
@@ -88,49 +97,79 @@ function WorkspaceIllustration() {
 }
 
 export default function HomePage() {
+  const { hash, key } = useLocation();
+  useEffect(() => {
+    if (!hash) return;
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(hash.slice(1));
+      target?.scrollIntoView({ block: "start" });
+      target?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [hash, key]);
+
   return <main className="ain-home-v2">
     <section className="ain-home-v2-hero" aria-labelledby="ain-home-v2-title">
       <div className="ain-home-v2-intro">
         <span className="ain-home-v2-eyebrow">AI-NetTune / 无线网络诊断与仿真</span>
         <h1 id="ain-home-v2-title">看见网络变化，<br /><em>让每个判断有据可循。</em></h1>
-        <p className="ain-home-v2-lead">随历史数据观察网络，在关注的时刻固定视图提问，将问题研判、证据核查、处理建议和预计效果放在同一个工作台。</p>
+        <p className="ain-home-v2-lead">从历史回放发现问题，固定时刻核查证据；再查看未来趋势、比较处置方案，并在分析记录中回看每次判断与评估。</p>
         <div className="ain-home-v2-actions">
           <Link className="ain-button ain-primary" to="/workbench">进入网络工作台 <span aria-hidden="true">→</span></Link>
-          <a className="ain-home-v2-guide-link" href="#ain-home-v2-flow">了解使用流程 <span aria-hidden="true">↗</span></a>
+          <Link className="ain-home-v2-guide-link" to="#ain-home-v2-flow">查看使用指南 <span aria-hidden="true">↗</span></Link>
         </div>
         <dl className="ain-home-v2-source">
           <div><dt>当前案例</dt><dd>{REPLAY_CONFIG.scenario} · 七天历史回放</dd></div>
           <div><dt>数据时段 · 北京时间</dt><dd>{REPLAY_CONFIG.start} — {REPLAY_CONFIG.end}</dd></div>
-          <div><dt>基础速度</dt><dd>默认{REPLAY_CONFIG.initialSpeed}× · 1×时现实{REPLAY_CONFIG.realSecondsPerMinute}秒推进模拟1分钟</dd></div>
+          <div><dt>演示起点</dt><dd>{REPLAY_CONFIG.playbackStart} · 默认 {REPLAY_CONFIG.initialSpeed}×</dd></div>
         </dl>
       </div>
       <WorkspaceIllustration />
     </section>
 
     <section className="ain-home-v2-capabilities" aria-labelledby="ain-home-v2-capabilities-title">
-      <div className="ain-home-v2-section-heading"><h2 id="ain-home-v2-capabilities-title">从网络现象，到有依据的处理建议</h2><p>观察、研判与方案集中在同一页面</p></div>
+      <div className="ain-home-v2-section-heading"><h2 id="ain-home-v2-capabilities-title">从网络变化，到方案比较</h2><p>四项能力，串起一次完整分析</p></div>
       <div className="ain-home-v2-feature-grid">
         {capabilities.map(item => <article className="ain-home-v2-feature" key={item.kind}>
           <div className="ain-home-v2-feature-title"><span className="ain-home-v2-icon"><FeatureIcon kind={item.kind} /></span><h3>{item.title}</h3></div>
           <p>{item.description}</p>
           <div className="ain-home-v2-tags">{item.tags.map(tag => <span key={tag}>{tag}</span>)}</div>
-          <p className="ain-home-v2-question">{item.question}</p>
+          <Link className="ain-home-v2-question" to={`#${item.guide}`}>{item.question}<span aria-hidden="true"> →</span></Link>
         </article>)}
       </div>
     </section>
 
-    <section className="ain-home-v2-flow" id="ain-home-v2-flow" aria-labelledby="ain-home-v2-flow-title">
-      <div className="ain-home-v2-section-heading"><h2 id="ain-home-v2-flow-title">如何开始</h2><p>固定AI与数据查看时刻；主时钟支持暂停与继续，退出后同步当前</p></div>
-      <ol className="ain-home-v2-steps">{workflow.map(step => <li key={step.title}><h3>{step.title}</h3><p>{step.description}</p></li>)}</ol>
-    </section>
+    <section className="ain-home-v2-flow" id="ain-home-v2-flow" tabIndex={-1} aria-labelledby="ain-home-v2-flow-title">
+      <div className="ain-home-v2-section-heading"><h2 id="ain-home-v2-flow-title">使用指南</h2><p>工作台保留操作与结果，使用说明在这里查阅</p></div>
+      <div className="ain-home-v2-guide-grid">
+        <article className="ain-home-v2-guide" id="replay-guide" tabIndex={-1} aria-labelledby="replay-guide-title">
+          <div className="ain-home-v2-guide-heading"><span>01</span><h3 id="replay-guide-title">回放与分析时刻</h3></div>
+          <p>数据加载后自动回放。主时钟控制数据进度；固定分析时刻或选择历史只改变查看与提问范围，主时钟仍可暂停或继续。退出分析后回到当前。</p>
+          <p>历史查看仅限主时钟已到达的时段。默认参考近 {REPLAY_CONFIG.historyMinutes} 分钟，可调整时长或自定义起点。</p>
+          <div className="ain-home-v2-speed-guide"><strong>回放速度</strong><span>1×：现实 {REPLAY_CONFIG.realSecondsPerMinute} 秒 → 数据 1 分钟</span><span>默认 {REPLAY_CONFIG.initialSpeed}×：现实 1 秒 → 数据 {Math.round((60 / REPLAY_CONFIG.realSecondsPerMinute) * (REPLAY_CONFIG.initialSpeed ?? 1))} 秒</span><small>支持 {REPLAY_SPEEDS.join(" / ")}×；循环后返回演示起点。</small></div>
+        </article>
 
-    <section className="ain-home-v2-status" aria-labelledby="ain-home-v2-status-title">
-      <div className="ain-home-v2-status-title"><h2 id="ain-home-v2-status-title">当前功能状态</h2><span>以现有接口返回为准</span></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已具备</span><p><strong>历史回放与AI研判</strong>以仿真实时数据流（历史 CSV 回放）驱动，支持{REPLAY_SPEEDS.join(" / ")}倍速和循环；默认近{REPLAY_CONFIG.historyMinutes}分钟参考，可调整时长或自定义开始时间；仅使用截至查看时刻的采样。</p></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已接入</span><p><strong>未来预测与预警</strong>可打开预测弹窗或直接提问未来时段，范围30分钟至24小时；实时跟随且主时钟播放中时按5分钟自动更新。当前为简化外推，预测方法、数据是否充足及可信边界以实际返回和弹窗说明为准。</p></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已接入</span><p><strong>独立分析记录页</strong>把每次研判、方案参数与仿真效果写入浏览器 IndexedDB（最多 100 个问题），支持搜索、单条导出、批量管理与删除；跨标签页同步，删除后不会被迟到的写入复活。</p></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge is-limited">临时记录</span><p><strong>工作台内查询摘要</strong>只用于当前会话的快速回看；需要长期保留的内容以独立记录页为准。</p></div>
-      <p className="ain-home-v2-boundary">本阶段通过历史数据回放观察网络，处理方案用于参数讨论与预计效果比较，不下发真实网络配置。</p>
+        <article className="ain-home-v2-guide" id="forecast-guide" tabIndex={-1} aria-labelledby="forecast-guide-title">
+          <div className="ain-home-v2-guide-heading"><span>02</span><h3 id="forecast-guide-title">预测范围与更新</h3></div>
+          <p>打开预测弹窗选择未来 {FORECAST_HORIZONS[0]} 分钟至 {FORECAST_HORIZONS[FORECAST_HORIZONS.length - 1] / 60} 小时，或直接提问未来时段。范围表示从基准时刻起覆盖多久，不代表能提前同样长的时间发现问题。</p>
+          <p>开启跟随后，弹窗打开、处于实时视图且回放中时，每 {FORECAST_LIMITS.followStepMinutes} 个模拟分钟更新；暂停或固定分析时需手动刷新，关闭弹窗后停止自动更新。</p>
+          <details><summary>预测方法与图表口径</summary><p>当前使用历史趋势外推，未接入训练后的预测模型。频谱预警依据频段功率与占用率；区域态势依据 RSRP、SINR 或吞吐采样估算，两者历史取样窗口可不同，需分别查看时间范围。</p></details>
+        </article>
+
+        <article className="ain-home-v2-guide" id="simulation-guide" tabIndex={-1} aria-labelledby="simulation-guide-title">
+          <div className="ain-home-v2-guide-heading"><span>03</span><h3 id="simulation-guide-title">方案选择与效果评估</h3></div>
+          <p>研判后选择候选方案，修改允许编辑的参数并重新评估，也可导出方案草稿。候选方案来自预设模板，参数变更后需重新计算预计效果。</p>
+          <p>评估以同一历史窗口的采样为基线，按经验系数估算配置变化的影响，用于比较方案；它不是未来实测结果，也不会下发真实网络配置。</p>
+          <details><summary>如何回看多次尝试</summary><p>建议参数的评估与手动调整后的评估分别保存。记录中可按时间对照每组参数及其结果，失败的评估和未评估的草稿也会保留状态。</p></details>
+        </article>
+
+        <article className="ain-home-v2-guide" id="record-guide" tabIndex={-1} aria-labelledby="record-guide-title">
+          <div className="ain-home-v2-guide-heading"><span>04</span><h3 id="record-guide-title">记录查找与保存</h3><Link to="/history">查看记录 →</Link></div>
+          <p>在分析记录页按问题回看研判、证据、方案参数与历次评估，支持搜索、导出和批量删除。工作台内的查询摘要用于当前会话快速回看。</p>
+          <p>记录保存在当前浏览器，最多 {MAX_HISTORY_QUESTIONS} 个问题及其关联内容；满额后需先导出或删除部分记录，已有记录不会自动淘汰。</p>
+          <p className="ain-home-v2-guide-note">同一浏览器的标签页可同步，记录不会自动共享给他人或其他设备。需要留存时请导出备份。</p>
+        </article>
+      </div>
     </section>
   </main>;
 }

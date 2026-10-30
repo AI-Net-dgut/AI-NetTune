@@ -76,22 +76,12 @@
   color: #1f3a5f;
 }
 
-/* 口径说明：空间维度 vs 频率维度，避免"图偏蓝却无预警"被当成 bug */
-.ain-spatial-scope {
-  margin: 0 0 8px;
-  padding: 6px 9px;
-  border-left: 3px solid #bdd7f5;
-  border-radius: 4px;
-  background: #f7fbff;
-  font-size: 11px;
-  line-height: 1.6;
-  color: #52657d;
-}
-
-.ain-spatial-scope b {
-  color: #2f6fb3;
-  font-weight: 600;
-}
+.ain-spatial-caption { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 12px; margin: -2px 0 7px; color: #7890ab; font-size: 10px; line-height: 1.6; }
+.ain-spatial-help { flex: 1; min-width: 100px; }
+.ain-spatial-help summary { width: fit-content; color: #3975b7; cursor: pointer; }
+.ain-spatial-help[open] { flex-basis: 100%; }
+.ain-spatial-help p { margin: 5px 0; overflow-wrap: anywhere; }
+.ain-spatial-help summary:focus-visible { outline: 2px solid #4389ec; outline-offset: 2px; }
 
 /* 预测专用容器：不能复用现存问题地图的 .ain-spatial-stage。
    该公共类在 SpatialCharts / VisualCompact 中有深色背景及 block 布局。 */

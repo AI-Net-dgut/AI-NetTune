@@ -61,7 +61,7 @@
 .ain-home-v2-section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 5px 16px; margin-bottom: 11px; }
 .ain-home-v2-section-heading h2 { font-size: 17px; color: #214566; }
 .ain-home-v2-section-heading > p { font-size: 11px; color: #72879a; }
-.ain-home-v2-feature-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ain-home-v2-feature-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .ain-home-v2-feature { display: flex; flex-direction: column; min-width: 0; padding: 15px 16px 12px; border: 1px solid #d4e4ee; border-radius: 10px; background: #fff; }
 .ain-home-v2-feature-title { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
 .ain-home-v2-feature-title h3 { font-size: 14px; }
@@ -70,25 +70,29 @@
 .ain-home-v2-feature > p { font-size: 12px; line-height: 1.8; color: #658096; }
 .ain-home-v2-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; margin-bottom: 10px; }
 .ain-home-v2-tags > span { border: 1px solid #e0eaf2; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #5c7e95; background: #f6fafc; }
-.ain-home-v2-feature > .ain-home-v2-question { margin-top: auto; padding-top: 9px; border-top: 1px solid #e7eff4; color: #2d6580; font-size: 11px; }
-.ain-home-v2-flow { scroll-margin-top: 110px; }
-.ain-home-v2-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 0; padding: 14px 0; list-style: none; border: 1px solid #d4e4ee; border-radius: 10px; background: #ffffffb3; }
-.ain-home-v2-steps li { position: relative; padding: 0 16px; min-width: 0; }
-.ain-home-v2-steps li + li { border-left: 1px solid #dce8ef; }
-.ain-home-v2-steps h3 { font-size: 13px; color: #2d5778; }
-.ain-home-v2-steps p { margin-top: 5px; color: #74899c; font-size: 11px; line-height: 1.8; }
-
-.ain-home-v2-status { margin-top: 18px; padding: 14px 16px 12px; border: 1px solid #d4e4ee; border-radius: 10px; background: #f5fafddb; }
-.ain-home-v2-status-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 9px; }
-.ain-home-v2-status-title h2 { font-size: 13px; }
-.ain-home-v2-status-title > span { color: #8192a0; font-size: 10px; }
-.ain-home-v2-status-item { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; }
-.ain-home-v2-badge { flex-shrink: 0; min-width: 52px; text-align: center; border: 1px solid #c6e5df; border-radius: 4px; padding: 1px 5px; color: #217b68; background: #e9f5ef; font-size: 10px; }
-.ain-home-v2-badge.is-pending { border-color: #e7ddc8; color: #937135; background: #fbf6ea; }
-.ain-home-v2-badge.is-limited { border-color: #d9e5ee; color: #687f96; background: #eef4f8; }
-.ain-home-v2-status-item p { color: #6d8395; font-size: 11px; line-height: 1.8; }
-.ain-home-v2-status-item strong { margin-right: 9px; color: #355771; font-weight: 600; }
-.ain-home-v2-boundary { margin-top: 10px !important; border-top: 1px solid #dce7ef; padding-top: 9px; color: #7c8e9d; font-size: 10px; line-height: 1.8; }
+.ain-home-v2-feature > .ain-home-v2-question { display: block; margin-top: auto; padding-top: 9px; border-top: 1px solid #e7eff4; color: #2d6580; font-size: 11px; text-decoration: none; }
+.ain-home-v2-question:hover { color: #008695; text-decoration: underline; }
+.ain-home-v2-flow,
+.ain-home-v2-guide { scroll-margin-top: 80px; }
+.ain-home-v2-guide-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ain-home-v2-guide { min-width: 0; padding: 15px 16px; border: 1px solid #d4e4ee; border-radius: 10px; background: #ffffffc9; }
+.ain-home-v2-guide:target { border-color: #76bdc8; box-shadow: 0 0 0 2px #d5f0f2; }
+.ain-home-v2-guide-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+.ain-home-v2-guide-heading > span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; background: #e8f5f8; color: #21818c; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+.ain-home-v2-guide-heading h3 { color: #2d5778; font-size: 14px; }
+.ain-home-v2-guide-heading > a { margin-left: auto; color: #327595; font-size: 11px; text-decoration: none; white-space: nowrap; }
+.ain-home-v2-guide-heading > a:hover { text-decoration: underline; }
+.ain-home-v2-guide > p,
+.ain-home-v2-guide details p { color: #607d94; font-size: 12px; line-height: 1.85; overflow-wrap: anywhere; }
+.ain-home-v2-guide > p + p { margin-top: 7px; }
+.ain-home-v2-guide details { margin-top: 9px; border-top: 1px solid #e1ebf1; padding-top: 8px; }
+.ain-home-v2-guide summary { width: fit-content; color: #3c718a; font-size: 11px; cursor: pointer; }
+.ain-home-v2-guide details p { margin-top: 6px; }
+.ain-home-v2-guide > .ain-home-v2-guide-note { color: #7c8f9e; font-size: 11px; }
+.ain-home-v2-speed-guide { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin-top: 10px; border-radius: 6px; padding: 9px 10px; background: #eef7fa; color: #496f86; font-size: 11px; }
+.ain-home-v2-speed-guide strong { grid-row: span 2; color: #315f7b; font-weight: 600; }
+.ain-home-v2-speed-guide small { grid-column: 1 / -1; color: #738c9c; font-size: 10px; }
+.ain-home-v2 :focus-visible { outline: 2px solid #1685ff; outline-offset: 3px; }
 
 @media (max-width: 1000px) {
   .ain-home-v2 { padding: 20px; }
@@ -96,6 +100,7 @@
   .ain-home-v2 h1 { font-size: 30px; }
   .ain-home-v2-feature-title h3 { font-size: 13px; }
   .ain-home-v2-feature { padding: 13px; }
+  .ain-home-v2-feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ain-home-v2-preview-clock small { font-size: 9px; }
 }
 
@@ -104,16 +109,22 @@
   .ain-home-v2-hero { grid-template-columns: 1fr; gap: 16px; }
   .ain-home-v2-intro { padding: 0; }
   .ain-home-v2 h1 { font-size: clamp(27px, 5vw, 36px); }
-  .ain-home-v2-feature-grid { grid-template-columns: 1fr; gap: 9px; }
+  .ain-home-v2-feature-grid { gap: 9px; }
   .ain-home-v2-feature { padding: 13px 15px; }
   .ain-home-v2-feature-title { margin-bottom: 7px; }
   .ain-home-v2-feature-title h3 { font-size: 14px; }
   .ain-home-v2-tags { margin-top: 9px; margin-bottom: 8px; }
-  .ain-home-v2-steps { grid-template-columns: 1fr 1fr; gap: 14px 0; }
-  .ain-home-v2-steps li:nth-child(3) { border-left: 0; }
-  .ain-home-v2-status-item { align-items: flex-start; }
-  .ain-home-v2-status-item strong { display: block; }
-  .ain-home-v2-flow { scroll-margin-top: 150px; }
+  .ain-home-v2-guide-grid { grid-template-columns: 1fr; gap: 9px; }
+  .ain-home-v2-flow,
+  .ain-home-v2-guide { scroll-margin-top: 130px; }
+}
+
+@media (max-width: 480px) {
+  .ain-home-v2-feature-grid { grid-template-columns: 1fr; }
+  .ain-home-v2-guide { padding: 13px 14px; }
+  .ain-home-v2-guide-heading { gap: 7px; }
+  .ain-home-v2-guide-heading h3 { font-size: 13px; }
+  .ain-home-v2-guide-heading > a { font-size: 10px; }
 }
 
 @media (max-width: 380px) {

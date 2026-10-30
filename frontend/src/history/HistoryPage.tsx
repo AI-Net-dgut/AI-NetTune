@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { listRecords, deleteRecords, downloadRecords, retryRecords, historyProblem, MAX_HISTORY_QUESTIONS } from './store';
 import type { HistoryRecord } from './store';
 import { object, text, questionEntries, recordContent, searchable } from './historyModel';
-import type { QuestionEntry, EffectView } from './historyModel';
+import type { QuestionEntry, EffectView, EvaluationView } from './historyModel';
 import HistoryErrorBoundary from './HistoryErrorBoundary';
 import './HistoryPage.css';
 
@@ -15,13 +15,37 @@ function Parameters({ values }: { values: { label: string; value: string }[] }) 
   return values.length ? <dl className="history-parameters">{values.map((v, i) => <div key={i}><dt>{v.label}</dt><dd>{v.value}</dd></div>)}</dl> : null;
 }
 function Effect({ effect }: { effect: EffectView }) {
-  return <div className="history-effect"><p className="history-muted">{effect.label} · {savedTime(effect.time)}</p>
-    {effect.error ? <p role="alert">{effect.error}</p> : <>{effect.summary && <p>{effect.summary}</p>}
-      {effect.metrics.length ? <div className="history-table-wrap"><table><thead><tr><th>指标</th><th>原配置</th><th>采用方案</th></tr></thead>
+  return <div className="history-effect">
+    {effect.error ? <p className="history-error" role="alert">{effect.error}</p> : <>{effect.summary && <p>{effect.summary}</p>}
+      {effect.metrics.length ? <div className="history-table-wrap"><table><thead><tr><th>指标</th><th>原配置</th><th>仿真预计</th></tr></thead>
         <tbody>{effect.metrics.map((m, i) => <tr key={i}><th>{m.label}</th><td>{m.before} {m.unit}</td><td>{m.after} {m.unit}</td></tr>)}</tbody></table></div>
         : <p className="history-muted">尚未返回可对比的效果指标。</p>}</>}
-    {effect.parameters.length > 0 && <details><summary>本次效果对应的参数</summary><Parameters values={effect.parameters}/></details>}
+    {(effect.method || effect.assumptions.length > 0 || effect.limitations.length > 0) && <dl className="history-evaluation-notes">
+      {effect.method && <div><dt>评估方法</dt><dd>{effect.method}</dd></div>}
+      {effect.assumptions.length > 0 && <div><dt>假设</dt><dd>{effect.assumptions.join('；')}</dd></div>}
+      {effect.limitations.length > 0 && <div><dt>限制</dt><dd>{effect.limitations.join('；')}</dd></div>}
+    </dl>}
   </div>;
+}
+const evaluationLabels: Record<EvaluationView['state'], string> = {
+  completed: '已评估', failed: '评估失败', draft: '未评估', unavailable: '暂无可比指标', pending: '评估未完成', cancelled: '评估已中断',
+};
+function Evaluation({ version, number, latest }: { version: EvaluationView; number: number; latest: boolean }) {
+  return <details className={`history-version history-version-${version.state}`} open={latest} data-record-ids={version.recordIds.join(' ')}>
+    <summary title={`记录 ID：${version.recordIds.join('；')}`}>
+      <span className="history-version-name">版本 {number} · {version.source === 'suggested' ? '建议参数' : '参数评估'}</span>
+      <span className="history-version-state">{latest ? '最新 · ' : ''}{evaluationLabels[version.state]}</span>
+      <time>{savedTime(version.time)}</time>
+    </summary>
+    <div className="history-version-body">
+      {version.parameters.length ? <Parameters values={version.parameters}/> : <p className="history-muted">未记录参数。</p>}
+      {version.effect ? <Effect effect={version.effect}/> : <p className="history-muted">{
+        version.state === 'pending' ? '本次评估尚未保存结果，请保留此版本参数后重新评估。'
+          : version.state === 'cancelled' ? '本次评估已中断，未保存效果。'
+            : '这组参数尚未保存对应的仿真效果。'
+      }</p>}
+    </div>
+  </details>;
 }
 export function RecordDetails({ entry }: { entry: QuestionEntry }) {
   const { record } = entry, content = recordContent(entry), scope = object(record.scope);
@@ -47,69 +71,21 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
     <section className="history-section"><h3>解决方案与预计效果</h3>
       {!content.plans.length && <p className="history-answer">{content.suggestion || '本次未生成处理方案或仿真效果。'}</p>}
       {content.plans.map(plan => <article className="history-plan" key={plan.id}>
-        {/* 来源标签从 h4 移出：标题保持简短（a11y 可及名不被 37 字说明撑长），标签单独一行 */}
         <h4>{plan.name}</h4>
-        <p className="history-plan-source">
-          {plan.source === 'system' ? '系统建议方案（模板生成；AI 仅负责文字研判，不参与选方案）' : 'AI 选择方案'}
-        </p>
-        {/* 10-30 清单第 3 点：默认顺序固定为"方案 → 本次评估参数 → 效果"。
-            独立审计 P2：若本次参数还没有对应效果，下面的效果就不是"对应当前参数"的，
-            必须在文案上明确区分，不能用同一句话糊过去。 */}
-        {plan.deviated && <p className="history-draft">
-          <strong>已偏离</strong>原始建议值：
-          {/* 按参数名配对，避免快照顺序不同导致"建议 X → 本次 Y"张冠李戴 */}
-          {plan.parameters.map(p => {
-            const sug = plan.suggested.find(s => s.label === p.label)?.value;
-            if (sug === undefined || sug === p.value) return null;
-            return <span key={p.label}>{p.label} 建议 {sug} → 本次 {p.value}；</span>;
-          })}
-          {/* 长度不同/参数缺失/重名时可能一条差异都列不出 → 必须给兜底，不能留空列表
-              （三道独立审计都点了这条） */}
-          {!plan.parameters.some(p => {
-            const sug = plan.suggested.find(s => s.label === p.label)?.value;
-            return sug !== undefined && sug !== p.value;
-          }) && <span>建议参数 {plan.suggested.length} 项、本次记录 {plan.parameters.length} 项；</span>}
-          {/* 只在确实有结果时才说"下面"；没有任何结果时，状态由下方单独一句说明，
-              不再把"尚无对应效果"重复三遍（独立审计 P3） */}
-          {plan.latestMatched
-            ? '下面的效果对应上面这组参数。'
-            : plan.latest
-              ? '本次参数尚无对应效果，下面的结果是其它参数版本的。'
-              : ''}
-        </p>}
-        <div className="history-section-block">
-          <h5>本次评估参数</h5>
-          {plan.parameters.length ? <Parameters values={plan.parameters}/> : <p className="history-muted">未记录参数。</p>}
-        </div>
-        {plan.latest ? <div className="history-section-block">
-          <h5>{plan.latestMatched ? '仿真预计效果（对应上方参数）' : '最近一次评估的效果（参数与上方不同）'}</h5>
-          <Effect effect={plan.latest}/>
-        </div> : (!plan.others.length ? <p className="history-muted">尚未保存仿真效果。</p> : null)}
-        {/* draft 句只在"上方确实有结果"时才说"上面的结果"，否则与失败提示自相矛盾；
-            没有结果时不再重复一句"尚无对应的新效果"（独立审计 P3：同一件事说三遍） */}
-        {plan.draft && plan.latest && <p className="history-draft">参数已修改，尚无对应的新效果；上面的结果只适用于它自己记录的参数。</p>}
-        {/* 唯一一次仿真失败时，失败原因只在折叠区里 → 可见区域必须留一句提示
-            （独立审计 P3：不能因为修"两提示并存"而把失败提示整个藏起来）。
-            注意 status=completed 但 metrics=[] 也算"无可对比结果"，所以措辞用"可对比"。 */}
-        {!plan.latest && plan.others.length > 0 && <p className="history-draft">
-          本次参数还没有可对比的效果记录；原因见下方"其他评估版本"。
-        </p>}
-        {plan.suggested.length > 0 && plan.deviated && <details>
-          <summary>建议参数（原始模板值）</summary>
-          <Parameters values={plan.suggested}/>
-          <p className="history-muted">方案描述里的"下调/调整"等措辞描述的是模板建议，不代表本次评估实际使用的参数。</p>
-        </details>}
-        {plan.others.length > 0 && <details>
-          <summary>其他评估版本（{plan.others.length}）</summary>
-          {plan.others.map((e, i) => <Effect key={`${e.id}-${i}`} effect={e}/>)}
-        </details>}
-        {(plan.tasks.length > 0 || plan.conditions.length > 0 || plan.tradeoffs.length > 0) && <details>
-          <summary>人工操作与适用条件</summary>
-          {([{ title: '人工操作', values: plan.tasks }, { title: '适用条件', values: plan.conditions }, { title: '影响与取舍', values: plan.tradeoffs }]).map(group => group.values.length > 0 && <div key={group.title}><strong>{group.title}</strong><ul>{group.values.map((v, i) => <li key={i}>{v}</li>)}</ul></div>)}
-        </details>}
-        {plan.description && <details><summary>方案说明（原始建议措辞）</summary><p className="history-plan-desc">{plan.description}</p></details>}
+        <details className="history-recommendation">
+          <summary><strong>建议方案</strong><span className="history-plan-source">系统建议 · 模板</span></summary>
+          {plan.description && <p className="history-plan-desc">{plan.description}</p>}
+          <dl className="history-plan-guidance">
+            {([{ title: '人工操作', values: plan.tasks }, { title: '适用条件', values: plan.conditions }, { title: '影响与取舍', values: plan.tradeoffs }]).map(group => group.values.length > 0 && <div key={group.title}><dt>{group.title}</dt><dd>{group.values.join('；')}</dd></div>)}
+          </dl>
+          {!plan.description && !plan.tasks.length && !plan.conditions.length && !plan.tradeoffs.length && <p className="history-muted">未记录方案说明；建议参数见下方版本记录。</p>}
+        </details>
+        <section className="history-evaluations" aria-label={`${plan.name}的评估版本记录`}>
+          <h5>评估版本记录<span>{plan.evaluations.length} 个版本 · 按时间顺序</span></h5>
+          {plan.evaluations.map((version, i) => <Evaluation key={`${entry.record.id}:${plan.id}:${version.id}:${i}`} version={version} number={i + 1} latest={i === plan.evaluations.length - 1}/>)}
+        </section>
       </article>)}
-      {content.plans.some(p => p.effects.length) && <p className="history-muted">以上是仿真预计效果，不代表真实网络配置或实际验证结果。</p>}
+      {content.plans.some(p => p.evaluations.some(v => v.effect)) && <p className="history-muted">以上为仿真预计效果，不代表真实网络配置或实际验证结果。</p>}
     </section>
   </>;
 }

@@ -43,18 +43,18 @@ export function questionEntries(records: HistoryRecord[]): QuestionEntry[] {
 export interface ParameterView { label: string; value: string }
 export interface EffectView {
   id: string; time: string; label: string; summary: string; error: string;
+  method: string; assumptions: string[]; limitations: string[];
   parameters: ParameterView[]; metrics: { label: string; before: string; after: string; unit: string }[];
 }
+export interface EvaluationView {
+  id: string; recordIds: string[]; time: string;
+  source: 'suggested' | 'manual';
+  state: 'completed' | 'failed' | 'draft' | 'unavailable' | 'pending' | 'cancelled';
+  parameters: ParameterView[]; effect: EffectView | null;
+}
 export interface PlanView {
-  id: string; name: string; description: string;
-  parameters: ParameterView[];           // 本次评估所用参数（最新一次）
-  suggested: ParameterView[];            // 模板给出的**建议参数**（不随手动修改变化）
-  source: 'system' | 'ai';               // 方案来源：模板生成=system；AI 只负责文字解释
-  draft: boolean; effects: EffectView[];
-  latest: EffectView | null;             // 可展示的效果（优先与当前参数一致的那条）
-  latestMatched: boolean;                // latest 是否**就是**当前参数的效果（决定文案口径）
-  others: EffectView[];                  // 其他评估版本（折叠）
-  deviated: boolean;                     // 本次参数是否偏离建议值
+  id: string; name: string; description: string; source: 'system';
+  evaluations: EvaluationView[];
   tasks: string[]; conditions: string[]; tradeoffs: string[];
 }
 const metricLabels: Record<string, [string, string]> = {
@@ -72,19 +72,35 @@ function parameters(plan: Record<string, unknown>, values?: unknown): ParameterV
 }
 function effect(raw: unknown, item: HistoryRecord, plan: Record<string, unknown>, values: unknown, initial = false): EffectView | null {
   const r = object(raw), p = object(item.payload);
-  // 预测结果也有 result 字段；只有真正的仿真结构才能作为效果展示。
-  if (!Array.isArray(r.metrics) && !text(p.error)) return null;
-  // 标签必须与参数无关：卡片标题可能写"最近一次评估的效果（参数与上方不同）"，
-  // 效果块若写死"本次参数的仿真效果"就会自我否定（独立审计 P3）。
-  // 该效果用的是哪组参数，由块内"本次效果对应的参数"一行给出。
+  const error = initial ? '' : text(p.error);
+  // 预测结果也有 result 字段；只有仿真结构或明确的失败才作为效果展示。
+  const failed = r.status === 'failed' || (!initial && item.status === 'failed');
+  if (!Array.isArray(r.metrics) && !error && !failed) return null;
   return { id: item.id, time: text(p.completedAt) || item.createdAt, label: initial ? '建议参数的预计效果' : '仿真预计效果',
-    summary: text(r.summary), error: text(p.error) || (r.status === 'failed' ? '仿真未成功，暂无有效效果。' : ''),
+    summary: text(r.summary), error: error || (failed ? '仿真未成功，暂无有效效果。' : ''),
+    method: text(r.method), assumptions: array(r.assumptions).map(text).filter(Boolean), limitations: array(r.limitations).map(text).filter(Boolean),
     parameters: parameters(plan, values ?? r.parameterValues),
     metrics: array(r.metrics).map(rawMetric => {
       const m = object(rawMetric), key = text(m.key), meta = metricLabels[key];
       return { label: [text(m.objectId), meta?.[0] || key || '指标'].filter(Boolean).join(' · '), unit: meta?.[1] || '', before: text(m.before) || '—', after: text(m.after) || '—' };
     }),
   };
+}
+// 按参数名和值做多重集比较，兼容旧快照的参数顺序及重名参数。
+function sameParameters(a: ParameterView[], b: ParameterView[]) {
+  const signature = (values: ParameterView[]) => values.map(v => JSON.stringify([v.label, v.value])).sort();
+  return a.length === b.length && JSON.stringify(signature(a)) === JSON.stringify(signature(b));
+}
+function sameEffect(a: EffectView | null, b: EffectView | null) {
+  if (!a || !b) return a === b;
+  return sameParameters(a.parameters, b.parameters)
+    && JSON.stringify([a.summary, a.error, a.metrics, a.method, a.assumptions, a.limitations])
+      === JSON.stringify([b.summary, b.error, b.metrics, b.method, b.assumptions, b.limitations]);
+}
+function evaluationState(item: HistoryRecord, result: EffectView | null): EvaluationView['state'] {
+  if (result?.error || item.status === 'failed') return 'failed';
+  if (item.status === 'pending' || item.status === 'cancelled') return item.status;
+  return result ? result.metrics.length ? 'completed' : 'unavailable' : 'draft';
 }
 export function recordContent(entry: QuestionEntry) {
   const { record, members } = entry, p = object(record.payload), response = object(p.response), d = object(response.diagnosis);
@@ -97,102 +113,81 @@ export function recordContent(entry: QuestionEntry) {
   if (evidence.length) parts.push(`判断依据：${evidence.join('；')}`);
   const reply = text(response.reply) || text(p.reply) || parts.join('\n\n');
   const plans = new Map<string, PlanView>();
-  const snapshots = new Map<string, Record<string, unknown>>();
-  const ensure = (raw: unknown, fallback: string) => {
-    const plan = object(raw); if (!Object.keys(plan).length) return null;
-    const id = text(plan.id) || text(plan.name) || fallback;
+  const initialActions = new Set(['选择方案', '生成预测处置方案', '选择预测方案']);
+  const inputTime = (item: HistoryRecord) => text(object(item.payload).inputAt) || text(item.createdAt);
+  const addSuggested = (plan: PlanView, snapshot: Record<string, unknown>, item: HistoryRecord) => {
+    // 模板效果始终使用它自身的建议参数，不能套用该记录的手动 values。
+    const initial = effect(snapshot.simulation, item, snapshot, undefined, true);
+    const values = initial?.parameters ?? parameters(snapshot);
+    const existing = plan.evaluations.find(v => v.source === 'suggested'
+      && sameParameters(v.parameters, values) && sameEffect(v.effect, initial));
+    if (existing) {
+      if (!existing.recordIds.includes(item.id)) existing.recordIds.push(item.id);
+      return;
+    }
+    plan.evaluations.push({ id: item.id, recordIds: [item.id], time: item.createdAt,
+      source: 'suggested', state: initial ? initial.error ? 'failed' : initial.metrics.length ? 'completed' : 'unavailable' : 'draft',
+      parameters: values, effect: initial });
+  };
+  const ensure = (raw: unknown, item: HistoryRecord, fallback: string) => {
+    const snapshot = object(raw); if (!Object.keys(snapshot).length) return null;
+    const id = text(snapshot.id) || text(snapshot.name) || fallback;
     if (!plans.has(id)) {
-      plans.set(id, { id, name: text(plan.name) || '处理方案', description: text(plan.description),
-        parameters: parameters(plan), suggested: parameters(plan),
-        // 方案来自后端模板；AI 只负责文字研判，不参与选方案（10-30 清单第 3 点要求标清楚来源）
-        source: 'system',
-        draft: false, effects: [], latest: null, latestMatched: false, others: [], deviated: false,
-        tasks: array(plan.tasks).map(text).filter(Boolean), conditions: array(plan.conditions).map(text).filter(Boolean), tradeoffs: array(plan.tradeoffs).map(text).filter(Boolean) });
-      snapshots.set(id, plan);
+      const plan: PlanView = { id, name: text(snapshot.name) || '处理方案', description: text(snapshot.description), source: 'system', evaluations: [],
+        tasks: array(snapshot.tasks).map(text).filter(Boolean), conditions: array(snapshot.conditions).map(text).filter(Boolean), tradeoffs: array(snapshot.tradeoffs).map(text).filter(Boolean) };
+      plans.set(id, plan);
+      addSuggested(plan, snapshot, item);
     }
     return plans.get(id)!;
   };
-  for (const [i, raw] of array(response.plans).entries()) {
-    const plan = ensure(raw, `plan-${i}`);
-    if (plan) {
-      const snapshot = object(raw), initial = effect(snapshot.simulation, record, snapshot, undefined, true);
-      if (initial) plan.effects.push(initial);
-    }
-  }
-  const inputTime = (item: HistoryRecord) => text(object(item.payload).inputAt) || text(item.createdAt);
+  for (const [i, raw] of array(response.plans).entries()) ensure(raw, record, `plan-${i}`);
   const operations = [record, ...members].filter(r => r.kind === 'parameters' || r.kind === 'simulation').sort((a, b) => {
     const byTime = inputTime(a).localeCompare(inputTime(b));
-    // 同一时间戳时优先保留显式保存的草稿，不让迟到结果覆盖它。
-    return byTime || Number(a.kind === 'parameters') - Number(b.kind === 'parameters');
+    // 同时归档的参数快照先于结果，合并为一个参数/效果版本。
+    return byTime || Number(a.kind === 'simulation') - Number(b.kind === 'simulation');
   });
-  const manualInputs = new Map<string, string>();
-  const needsEvaluation = new Set<string>();
   for (const item of operations) {
-    const payload = object(item.payload), plan = ensure(payload.plan, item.id);
+    const payload = object(item.payload), plan = ensure(payload.plan, item, item.id);
     if (!plan) continue;
     const snapshot = object(payload.plan);
     for (const key of ['tasks', 'conditions', 'tradeoffs'] as const) {
       if (Array.isArray(snapshot[key])) plan[key] = array(snapshot[key]).map(text).filter(Boolean);
     }
-    if (item.kind === 'parameters') {
-      manualInputs.set(plan.id, inputTime(item));
-      plan.parameters = parameters(snapshot, payload.values);
-      if (payload.action !== '选择方案') needsEvaluation.add(plan.id);
-      else needsEvaluation.delete(plan.id);
-      if (payload.action === '选择方案' && !plan.effects.length) {
-        const initial = effect(snapshot.simulation, item, snapshot, payload.values, true);
-        if (initial) plan.effects.push(initial);
+    if (item.kind === 'parameters' && initialActions.has(text(payload.action))) {
+      addSuggested(plan, snapshot, item);
+      if (sameParameters(parameters(snapshot, payload.values), parameters(snapshot))
+        && !text(payload.error) && item.status !== 'failed' && item.status !== 'pending' && item.status !== 'cancelled') continue;
+    }
+    const run = effect(payload.result, item, snapshot, payload.values);
+    const values = run?.parameters ?? parameters(snapshot, payload.values);
+    if (item.kind === 'simulation' && /初始预计效果$/.test(item.question)) {
+      const initial = plan.evaluations.find(v => v.source === 'suggested'
+        && sameParameters(v.parameters, values) && (!v.effect || sameEffect(v.effect, run)));
+      if (initial) {
+        initial.effect = run;
+        initial.state = evaluationState(item, run);
+        if (!initial.recordIds.includes(item.id)) initial.recordIds.push(item.id);
+      } else {
+        plan.evaluations.push({ id: item.id, recordIds: [item.id], time: inputTime(item), source: 'suggested',
+          state: evaluationState(item, run), parameters: values, effect: run });
       }
+      continue;
+    }
+    // 仅把结果并入发起前保存的同一组参数。没有 inputAt 的旧结果独立成版，
+    // 避免把迟到的效果错误配给请求期间新保存的草稿。
+    const draft = item.kind === 'simulation' && text(payload.inputAt)
+      ? [...plan.evaluations].reverse().find(v => v.source === 'manual' && v.state === 'draft'
+        && v.time <= inputTime(item) && sameParameters(v.parameters, values)) : undefined;
+    if (draft) {
+      draft.effect = run;
+      draft.state = evaluationState(item, run);
+      draft.recordIds.push(item.id);
     } else {
-      const run = effect(payload.result, item, snapshot, payload.values);
-      if (run) {
-        // 仿真依据“发起时的参数版本”。旧记录没有inputAt时，不覆盖已有手工保存版本。
-        const manualTime = manualInputs.get(plan.id);
-        if (!manualTime || (text(payload.inputAt) && inputTime(item) > manualTime)) {
-          plan.parameters = parameters(snapshot, payload.values);
-          needsEvaluation.add(plan.id);
-        }
-        const duplicateInitial = /初始预计效果$/.test(item.question) && plan.effects.length && JSON.stringify(object(payload.result).metrics) === JSON.stringify(object(snapshots.get(plan.id)?.simulation).metrics);
-        if (!duplicateInitial) plan.effects.push(run);
-      }
+      plan.evaluations.push({ id: item.id, recordIds: [item.id], time: inputTime(item), source: 'manual',
+        state: evaluationState(item, run), parameters: values, effect: run });
     }
   }
-  // 参数比较必须按**参数名**配对，不能按下标：不同快照的 parameters 顺序/长度可能不同
-  // （独立审计 P3：按下标会把"发射功率"与"下倾角"张冠李戴，还会出现"偏离但列不出差异"）。
-  // 先比数组长度（同名参数不会被 Map 折叠），再按 名称→值列表 做多重集比较。
-  const multi = (list: ParameterView[]) => {
-    const map = new Map<string, string[]>();
-    for (const v of list) map.set(v.label, [...(map.get(v.label) ?? []), v.value]);
-    return map;
-  };
-  const sameParameters = (a: ParameterView[], b: ParameterView[]) => {
-    if (a.length !== b.length) return false;
-    const left = multi(a), right = multi(b);
-    if (left.size !== right.size) return false;
-    for (const [label, values] of left) {
-      const other = right.get(label);
-      if (!other || other.length !== values.length) return false;
-      const sorted = [...values].sort(), target = [...other].sort();
-      if (sorted.some((v, i) => v !== target[i])) return false;
-    }
-    return true;
-  };
-  for (const plan of plans.values()) {
-    plan.effects.sort((a, b) => text(b.time).localeCompare(text(a.time)));
-    plan.draft = needsEvaluation.has(plan.id) && !plan.effects.some(e => !e.error && e.metrics.length > 0 && sameParameters(e.parameters, plan.parameters));
-    // 默认只突出"本次评估参数 + 与它一致的效果"；其余版本折叠，但每个版本保留自己的参数
-    // （10-30 清单第 3 点：用户会把最新效果误当成原始建议值的效果）。
-    // 关键：**找不到与当前参数一致的效果时，仍展示一条（否则看不到任何结果），
-    // 但必须用 latestMatched=false 让界面改口径**，不能再说"对应上方参数"——
-    // 独立审计 P2：这正是本改动要消灭的误读。
-    const usable = plan.effects.filter(e => !e.error && e.metrics.length > 0);
-    const matched = usable.find(e => sameParameters(e.parameters, plan.parameters)) ?? null;
-    const pick = matched ?? usable[0] ?? null;
-    plan.latest = pick;
-    plan.latestMatched = matched !== null;
-    plan.others = plan.effects.filter(e => e !== pick);
-    plan.deviated = !sameParameters(plan.parameters, plan.suggested);
-  }
+  for (const plan of plans.values()) plan.evaluations.sort((a, b) => a.time.localeCompare(b.time));
   return { reply, suggestion: text(d.suggestion), error: text(p.error), plans: [...plans.values()],
     future: object(object(p.handoff).targetWindow ?? object(p.handoff).forecast), malformed: !Object.keys(p).length };
 }

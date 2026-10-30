@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { fetchForecastPlans, simulatePlan } from "../services/backend";
 import { record } from "../history/store";
 import type { SimulationResult, TreatmentPlan } from "../types/plan";
+import { ReplyText } from "../chat/DiagnosisAnswer";
 import { METRIC_META } from "../types/backend";
 import type { ForecastHandoff } from "./types";
 
@@ -64,7 +66,7 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
       analysisTime: result.baseTime, status: "completed",
       payload: { plan, action: extra?.action ?? "生成预测处置方案", values: extra?.values, forecast: payload.basis ?? payload.risk },
     });
-    if (extra?.sim) {
+    if (extra?.sim || extra?.error) {
       record({
         kind: "simulation", parentId,
         question: `预测方案效果 · ${plan.name}`,
@@ -184,71 +186,85 @@ export default function ForecastPlans({ handoff, parentId }: { handoff: Forecast
   const baseline = state.payload?.basisWindow;
 
   return <section className="ain-forecast-plans" aria-label="预测风险处置方案">
-    <header><strong>预测风险的处置方案</strong><span>{result.alerts.find(a => a.id === alertId)?.target ?? "整体预测"}</span></header>
-    <p className="ain-ai-note">
-      这些方案**只来自本轮预测的风险**，与「处理建议与效果」里的现存问题方案相互独立。
-    </p>
+    <header><strong>处理方案与评估</strong><span>{result.alerts.find(a => a.id === alertId)?.target ?? "整体预测"} · 预测风险</span></header>
     {!state.payload && !state.pending && !state.error &&
-      <button type="button" className="ain-button" onClick={() => void load()}>生成处置方案</button>}
-    {state.pending && <p role="status">正在按预测风险生成方案…</p>}
+      <button type="button" className="ain-button" onClick={() => void load()}>加载建议方案</button>}
+    {state.pending && <p role="status">正在加载本次风险的建议方案…</p>}
     {state.error && <div role="alert"><p>{state.error}</p>
-      <button type="button" onClick={() => void load()}>重试生成方案</button></div>}
+      <button type="button" onClick={() => void load()}>重试加载方案</button></div>}
     {state.payload && <>
-      {state.payload.message && <p className="ain-ai-note">{state.payload.message}</p>}
-      {state.payload.disclaimer && <p className="ain-forecast-plans-basis">{state.payload.disclaimer}</p>}
+      {state.payload.message && <p className="ain-forecast-brief-note" role="status">{state.payload.message}</p>}
       {state.payload.plans.length > 0 && <>
+        <h4>建议方案 <small>系统模板 · 可调整参数</small></h4>
         <ul className="ain-forecast-plans-list">
           {state.payload.plans.map(p => <li key={p.id}>
-            <label>
+            <label className={p.id === selectedId ? "is-selected" : ""}>
               <input type="radio" name={`forecast-plan-${result.id}`} checked={p.id === selectedId}
                 onChange={() => choose(p)} />
-              <strong>{p.name}</strong>{p.description ? ` · ${p.description}` : ""}
+              <span><strong>{p.name}</strong>{p.description && <small>{p.description}</small>}</span>
             </label>
           </li>)}
         </ul>
         {selected && <div className="ain-forecast-plans-params">
-          <p>
-            参数基线：<strong>默认工参模板</strong>（倾角/功率为模板默认值，<strong>不是</strong> CSV 实测配置）；
-            KPI 与效果评估取自 {baseline?.start} ~ {baseline?.end} 的历史实测窗口。
-          </p>
-          {selected.parameters.map(p => <label key={p.id}>
-            <span>{p.label}{p.unit ? `（${p.unit}）` : ""}</span>
-            {p.type === "enum" && p.options?.length
-              ? <select value={values[p.id] ?? ""} onChange={e => { setValues(v => ({ ...v, [p.id]: e.target.value })); invalidate(); }}>
-                {p.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-              : <input value={values[p.id] ?? ""} onChange={e => { setValues(v => ({ ...v, [p.id]: e.target.value })); invalidate(); }} />}
-            <small>当前 {String(p.currentValue ?? "-")}{p.unit ?? ""} · 建议 {String(p.suggestedValue ?? "-")}{p.unit ?? ""}</small>
-          </label>)}
-          <button type="button" className="ain-button" disabled={sim.pending} onClick={() => void runSim()}>
-            {sim.pending ? "正在评估…" : "在预测基准前的实测窗口评估"}
-          </button>
-          <p className="ain-ai-note">评估用的是基准前的实测数据，**不是**预测时段的实测结果；改参数或换方案会作废上一次结果。</p>
+          <h4>配置参数 <small>默认工参模板，非实测配置</small></h4>
+          <div className="ain-forecast-param-grid">
+            {selected.parameters.map(p => <label key={p.id}>
+              <span>{p.label}{p.unit ? `（${p.unit}）` : ""}</span>
+              {p.type === "enum" && p.options?.length
+                ? <select value={values[p.id] ?? ""} onChange={e => { setValues(v => ({ ...v, [p.id]: e.target.value })); invalidate(); }}>
+                  {p.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                : <input value={values[p.id] ?? ""} onChange={e => { setValues(v => ({ ...v, [p.id]: e.target.value })); invalidate(); }} />}
+              <small>模板 {String(p.currentValue ?? "—")} · 建议 {String(p.suggestedValue ?? "—")}</small>
+            </label>)}
+          </div>
+          <div className="ain-forecast-evaluate-row">
+            <button type="button" className="ain-button" disabled={sim.pending || !baseline} onClick={() => void runSim()}>
+              {sim.pending ? "正在评估…" : "评估当前参数"}
+            </button>
+            <span>基于历史窗口估算，不执行网络配置。</span>
+          </div>
+          {!baseline && <p role="alert">缺少评估基准窗口，暂不能重新评估。</p>}
         </div>}
-        {sim.error && <p role="alert">{sim.error}</p>}
-        {sim.result && !resultIsCurrent && <p className="ain-ai-note" role="status">
-          参数或方案已变更，上一次评估结果（{sim.inputValues && Object.keys(sim.inputValues).length ? JSON.stringify(sim.inputValues) : "旧参数"}）已作废，请重新评估。
+        {sim.error && <p role="alert">评估失败：{sim.error}</p>}
+        {sim.result && !resultIsCurrent && <p className="ain-forecast-brief-note" role="status">
+          参数已变更，请重新评估；原结果保留在分析记录中。
         </p>}
         {shown && <div className="ain-forecast-plans-sim">
-          <p>
-            <strong>{shown.summary || "评估完成"}</strong>
-            <span className="ain-forecast-plans-tag">
-              {shownIsDefault ? "默认建议参数（后端已计算）" : "本次参数评估结果"}
-            </span>
-          </p>
-          <ul>{shown.metrics.map(m => {
-            const meta = METRIC_META[m.key] ?? { label: String(m.key), unit: "" };
-            const delta = m.before !== null && m.after !== null ? Number((m.after - m.before).toFixed(2)) : null;
-            return <li key={`${m.key}-${m.objectId}`}>
-              {meta.label}（{m.objectId}）：{m.before ?? "—"} → {m.after ?? "—"} {meta.unit}
-              {delta !== null ? `（${delta > 0 ? "+" : ""}${delta}${meta.unit}）` : ""}
-            </li>;
-          })}</ul>
-          {shown.method && <p className="ain-ai-note">方法：{shown.method}</p>}
-          {shown.assumptions?.length ? <p className="ain-ai-note">假设：{shown.assumptions.join("；")}</p> : null}
-          {shown.limitations?.length ? <p className="ain-ai-note">限制：{shown.limitations.join("；")}</p> : null}
+          <h4>预计效果 <small>{shownIsDefault ? "建议参数" : "本次参数"} · 历史窗口评估</small></h4>
+          {shown.status !== "completed" && <p role="status">{shown.status === "failed" ? "本次评估未成功" : "本方案暂不支持效果评估"}：{shown.summary}</p>}
+          {shown.metrics.length > 0 ? <div className="ain-forecast-metrics-scroll"><table className="ain-forecast-metrics">
+            <thead><tr><th scope="col">指标 / 对象</th><th scope="col">原配置</th><th scope="col">方案预计</th><th scope="col">变化</th></tr></thead>
+            <tbody>{shown.metrics.map(m => {
+              const meta = METRIC_META[m.key] ?? { label: String(m.key), unit: "" };
+              const delta = m.before !== null && m.after !== null ? Number((m.after - m.before).toFixed(2)) : null;
+              const deltaUnit = meta.unit === "dBm" ? "dB" : meta.unit;
+              return <tr key={`${m.key}-${m.objectId}`}>
+                <th scope="row">{meta.label}<small>{m.objectId}</small></th>
+                <td>{m.before ?? "—"}{m.before !== null && <small>{meta.unit}</small>}</td>
+                <td>{m.after ?? "—"}{m.after !== null && <small>{meta.unit}</small>}</td>
+                <td>{delta === null ? "—" : `${delta > 0 ? "+" : ""}${delta}`}<small>{delta !== null ? deltaUnit : ""}</small></td>
+              </tr>;
+            })}</tbody>
+          </table></div> : <p className="ain-forecast-brief-note">本次未返回可对比的指标。</p>}
         </div>}
+        {selected && <details className="ain-forecast-details">
+          <summary>评估依据与适用条件</summary>
+          <p>实测参考窗口：{baseline ? `${baseline.start} — ${baseline.end}（北京时间）` : "未提供"}。此处为历史窗口的方案效果估算，不代表未来实测结果。</p>
+          {state.payload.disclaimer && <ReplyText text={state.payload.disclaimer} />}
+          {shown?.summary && <p>{shown.summary}</p>}
+          {shown?.method && <p>方法：{shown.method}</p>}
+          {shown?.assumptions?.length ? <p>假设：{shown.assumptions.join("；")}</p> : null}
+          {shown?.limitations?.length ? <p>限制：{shown.limitations.join("；")}</p> : null}
+          {selected.tasks.length > 0 && <p>人工检查：{selected.tasks.join("；")}</p>}
+          {selected.conditions.length > 0 && <p>适用条件：{selected.conditions.join("；")}</p>}
+          {selected.tradeoffs.length > 0 && <p>权衡：{selected.tradeoffs.join("；")}</p>}
+          <Link to="/#simulation-guide">查看方案与评估说明</Link>
+        </details>}
       </>}
+      {!state.payload.plans.length && state.payload.disclaimer && <details className="ain-forecast-details">
+        <summary>方案说明</summary><ReplyText text={state.payload.disclaimer} />
+      </details>}
     </>}
   </section>;
 }

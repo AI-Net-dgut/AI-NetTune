@@ -200,21 +200,16 @@ export default function SpatialFrameGrid({
         {/* 预测时长不在这里单独提供下拉：弹窗顶部那一个才是权威控件（它驱动接口11
             重新预测），本组件只按它换算每帧时长，避免两个下拉各说各话。 */}
       </header>
-      {/* 口径说明：这张图和上方预警看的是两个不同指标，必须写清楚，
-          否则"图偏蓝却没有预警"会被当成 bug（实测队友与多人第一反应都是这样）。 */}
-      <p className="ain-spatial-scope">
-        本图是<b>空间维度</b>（网络表插值）：每个格子是该位置用户 KPI 的估计值，用来看<b>哪个区域</b>在变化。
-        上方预警是<b>频率维度</b>（频谱表逐频段）：功率 &lt; −95 dBm 或占用率 &gt; 80% 且满足频段数与持续时间才触发。
-        两者指标不同，<b>“图偏蓝但未触发预警”属正常现象</b>。
-      </p>
-      {/* 时间尺度必须单独说明（10-30 清单第 6 点）：本图的"每帧时长/历史取样长度"
-          会随上方"查看未来范围"变化，而顶部"参考历史"是另一套窗口，两者不是同一个。 */}
-      <p className="ain-forecast-chart-note">
-        本图时间尺度：每帧 <b>{series.frameMinutes}</b> 分钟、历史取样 <b>{frameMinutes * pastFrames}</b> 分钟
-        （{pastFrames} 帧）、未来 {futureCount} 帧。
-        它与顶部「参考历史」是<b>两套窗口</b>：调整"查看未来范围"会同时改变每帧时长与历史取样长度，
-        所以不同范围下的这张图不是同一批历史数据的对比。
-      </p>
+      <div className="ain-spatial-caption">
+        <span>空间 KPI 估计，与频谱告警口径不同。</span>
+        <details className="ain-spatial-help">
+          <summary>图表说明</summary>
+          <p>每个格子为该位置网络 KPI 的插值估计，用于观察区域变化；上方预警按频谱逐频段数值判定，不能仅凭此图颜色判断是否触发告警。</p>
+          <p>每帧 {num(series.frameMinutes)} 分钟；本图历史范围：{series.past[0]?.start ?? "无历史帧"} — {series.past.at(-1)?.end ?? baseTime}。
+            调整查看未来范围会改变每帧时长和历史取样范围。本图与弹窗顶部的参考历史是两套窗口。</p>
+          {series.note && <p>{series.note}</p>}
+        </details>
+      </div>
 
       <div className="ain-forecast-spatial-stage">
         <figure className={`ain-spatial-main${isFuture ? " is-future" : ""}`}>
@@ -262,7 +257,6 @@ export default function SpatialFrameGrid({
           );
         })}
       </div>
-      <p className="ain-spatial-note">{series.note}</p>
     </section>
   );
 }

@@ -1,4 +1,5 @@
 import type { ReplayConfig } from "./config";
+import { Link } from "react-router-dom";
 import { REPLAY_SPEEDS } from "./config";
 import type { ReplayAction, ReplayState } from "./replayState";
 import { formatReplayTime } from "./replayState";
@@ -20,22 +21,18 @@ export default function ReplayControls({ state, act, loading, onReload, config }
       <div className="ain-replay-actions">
         <button className="ain-button" type="button" disabled={loading || !state.ready}
           onClick={() => act({ type: state.playing ? 'pause' : 'play' })}>{state.playing ? '暂停回放' : '继续回放'}</button>
-        <label>倍速<select aria-label="回放倍速" value={state.speed} disabled={loading || !state.ready}
-          onChange={event => act({ type: "speed", value: Number(event.target.value) })}>
-          {REPLAY_SPEEDS.map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select></label>
-        {/* 10-30 清单第 1 点：换算要贴在倍速控件旁（原先只在底部小字里，不醒目）。
-            1× 时现实 10 秒推进模拟 1 分钟 → 每秒推进 6 秒；4× 即每秒 24 秒。 */}
-        <span className="ain-replay-speed-hint">
-          1× = 现实每秒推进 {Math.round(60 / config.realSecondsPerMinute)} 秒 ·
-          当前 {state.speed}× = 每秒 {Math.round((60 / config.realSecondsPerMinute) * state.speed)} 秒
-          （默认 {config.initialSpeed}×）
-        </span>
+        <div className="ain-replay-speed-control">
+          <label>倍速<select aria-label="回放倍速" value={state.speed} disabled={loading || !state.ready}
+            onChange={event => act({ type: "speed", value: Number(event.target.value) })}>
+            {REPLAY_SPEEDS.map(speed => <option key={speed} value={speed}>{speed}×</option>)}</select></label>
+          <span className="ain-replay-speed-hint">每秒推进 {Math.round((60 / config.realSecondsPerMinute) * state.speed)} 秒</span>
+          <Link className="ain-replay-speed-guide" to="/#replay-guide">速度说明</Link>
+        </div>
         <button className="ain-button" type="button" disabled={disabled} onClick={() => act({ type: "restart" })}>重新开始</button>
         <label className="ain-replay-loop"><input type="checkbox" checked={state.loop} disabled={loading || !state.ready}
           onChange={event => act({ type: "loop", value: event.target.checked })} />循环</label>
         <button className="ain-button" type="button" disabled={loading || state.locked} onClick={onReload}>重载数据</button>
       </div>
     </div>
-    <p className="ain-replay-note">数据来源：仿真实时数据流（历史 CSV 回放）· 1×时现实{config.realSecondsPerMinute}秒推进模拟1分钟 · 初始播放：{config.playbackStart ?? config.start} · 参考范围可在AI区调整 · 循环后返回演示起点</p>
   </section>;
 }

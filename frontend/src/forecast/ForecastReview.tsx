@@ -24,15 +24,25 @@ export default function ForecastReview({ handoff }: { handoff: ForecastHandoff }
     }).catch(reason => { if (active) setState({ pending: false, result: null, error: reason instanceof Error ? reason.message : "预测研判失败" }); });
     return () => { active = false; abort.abort(); };
   }, [result, alertId, attempt, question, targetWindow, handoff, alert?.title]);
+  const reply = state.result?.reply.trim() ?? "";
+  const firstParagraph = reply.split(/\n\s*\n/)[0] ?? "";
+  const hasMore = reply !== firstParagraph || firstParagraph.length > 180;
+  // 摘录去掉成对的加粗标记再截取，避免截断后露出半个 Markdown 标记。
+  const plainExcerpt = firstParagraph.replace(/\*\*([^*]+)\*\*/g, "$1");
+  const excerpt = hasMore ? (plainExcerpt.length > 180 ? `${plainExcerpt.slice(0, 180)}…` : plainExcerpt) : reply;
   return <article className="ain-forecast-review" aria-label="预测风险研判" aria-busy={state.pending}>
-    <header><strong>{result.source === "demo" ? "示例 · " : ""}预测风险研判</strong><span>{alert ? `${alert.target} · ${alert.title}` : "整体预测态势"}</span></header>
+    <header><strong>{result.source === "demo" ? "示例 · " : ""}预测风险研判</strong><span>{alert ? (alert.title.includes(alert.target) ? alert.title : `${alert.target} · ${alert.title}`) : "整体预测态势"}</span></header>
     {question && <p className="ain-ai-user-question"><strong>本次未来提问</strong>{question}</p>}
     {targetWindow && <p className="ain-forecast-review-scope">关注时段：{targetWindow.start} — {targetWindow.end}（北京时间）</p>}
     <p className="ain-forecast-review-scope">基准：{result.baseTime} · 预测至：{result.forecast.end}（北京时间）</p>
-    {result.integrationNotice && <p className="ain-forecast-chart-note">研判依据本次预警摘要与历史网络指标。当前后端尚未将完整频谱数值交给AI；下方文字建议未经过配置参数仿真评估。</p>}
     {state.pending && <p role="status">正在研判这份预测结果…</p>}
     {state.error && <div role="alert"><p>{state.error}</p><button type="button" onClick={() => { setState({ pending: true, result: null, error: "" }); setAttempt(n => n + 1); }}>重试预测研判</button></div>}
-    {state.result && <><p className="ain-forecast-review-source">{state.result.source === "demo" ? "界面示例 · 未调用大模型" : state.result.source === "rule" ? "规则研判" : "AI研判"}</p><ReplyText text={state.result.reply} /></>}
+    {state.result && <div className="ain-forecast-verdict">
+      <p className="ain-forecast-review-source">{state.result.source === "demo" ? "界面示例 · 未调用大模型" : state.result.source === "rule" ? "规则研判" : "AI研判"}{hasMore ? " · 研判摘录" : ""}</p>
+      <ReplyText text={excerpt} />
+      {hasMore && <details className="ain-forecast-details"><summary>查看完整研判</summary><ReplyText text={reply} /></details>}
+      {result.integrationNotice && <p className="ain-forecast-brief-note">依据预警摘要与历史指标，尚未结合完整频谱数值。</p>}
+    </div>}
     {/* 预测风险的处置方案：与「处理建议与效果」里现存问题的方案分开（审计第 6 条） */}
     <ForecastPlans handoff={handoff} parentId={reviewRecordId || undefined} />
   </article>;

@@ -106,18 +106,68 @@
 .ain-forecast-horizon { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: #355574; font-size: 12px; }
 .ain-forecast-horizon select { min-width: 160px; padding: 5px 8px; border: 1px solid #cbd9e9; border-radius: 6px; color: #24496d; background: #fff; }
 
-/* 预测风险的处置方案（审计第 6 条）：与「处理建议与效果」区分开 */
-.ain-forecast-plans { margin-top: 10px; padding-top: 9px; border-top: 1px dashed #cfe0f2; }
-.ain-forecast-plans header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
-.ain-forecast-plans header span { color: #5b7fa6; font-size: 12px; }
-.ain-forecast-plans-basis { margin: 6px 0; padding: 7px 9px; border-left: 3px solid #d8a13a; background: #fffdf5; color: #6a5326; font-size: 12px; line-height: 1.55; }
-.ain-forecast-plans-list { list-style: none; margin: 6px 0; padding: 0; }
-.ain-forecast-plans-list li { margin: 4px 0; }
-.ain-forecast-plans-list label { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: #2a4a6b; }
-.ain-forecast-plans-params { margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
-.ain-forecast-plans-params label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #2a4a6b; flex-wrap: wrap; }
-.ain-forecast-plans-params input { width: 90px; padding: 4px 7px; border: 1px solid #cbd9e9; border-radius: 6px; font: inherit; font-size: 12px; }
-.ain-forecast-plans-params small { color: #6b8aa8; }
-.ain-forecast-plans-sim { margin-top: 6px; padding: 8px 10px; background: #f2f8ff; border-radius: 6px; font-size: 12px; color: #2a4a6b; }
-.ain-forecast-plans-sim ul { margin: 4px 0 0; padding-left: 18px; }
-.ain-forecast-plans-tag { margin-left: 8px; padding: 1px 6px; border-radius: 9px; background: #e7f0fb; color: #4a6f96; font-size: 11px; }
+/* 研判、方案、参数和效果使用同一套紧凑层级，完整说明按需展开。 */
+.ain-forecast-review { min-width: 0; }
+.ain-forecast-review > header { align-items: flex-start; }
+.ain-forecast-review > header > strong { flex-shrink: 0; }
+.ain-forecast-review > header > span { overflow-wrap: anywhere; }
+.ain-forecast-review .ain-forecast-verdict { margin: 7px 0; }
+.ain-forecast-review .ain-forecast-review-source { margin: 0 0 3px; }
+.ain-forecast-review .ain-forecast-brief-note,
+.ain-forecast-plans .ain-forecast-brief-note { margin: 5px 0; font-size: 11px; line-height: 1.6; color: #6b7f95; overflow-wrap: anywhere; }
+.ain-forecast-details { margin: 7px 0; font-size: 11px; line-height: 1.65; color: #607993; overflow-wrap: anywhere; }
+.ain-forecast-details > summary { width: fit-content; color: #3975b7; cursor: pointer; padding: 3px 0; }
+.ain-forecast-details[open] > summary { margin-bottom: 5px; }
+.ain-forecast-details p { margin: 5px 0; }
+.ain-forecast-details a, .ain-forecast-range-row a { color: #2874bf; text-decoration: none; }
+.ain-forecast-details a:hover, .ain-forecast-range-row a:hover { text-decoration: underline; }
+.ain-forecast-details > summary:focus-visible { outline: 2px solid #4389ec; outline-offset: 2px; }
+.ain-forecast-explanation { border-bottom: 1px solid #e5edf7; padding-bottom: 5px; }
+.ain-forecast-time-rows { display: grid; gap: 2px; margin: 4px 0; }
+.ain-forecast-time-rows > div { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 9px; }
+.ain-forecast-time-rows dt { color: #8093aa; }
+.ain-forecast-time-rows dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.ain-forecast-context .ain-forecast-range-row { justify-content: flex-start; align-items: center; gap: 5px 12px; margin-top: 5px; }
+.ain-forecast-range-row .ain-forecast-horizon { margin: 0; }
+.ain-forecast-range-row .ain-forecast-horizon select { min-width: 105px; max-width: 100%; font: inherit; }
+.ain-forecast-range-row > span { font-size: 10px; }
+.ain-forecast-plans { margin-top: 10px; padding-top: 9px; border-top: 1px solid #d8e5f4; min-width: 0; }
+.ain-forecast-plans > header { display: flex; align-items: baseline; justify-content: space-between; gap: 5px 8px; margin-bottom: 6px; }
+.ain-forecast-plans > header span { color: #6a85a0; font-size: 11px; }
+.ain-forecast-plans h4 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 7px 0 5px; font-size: 12px; color: #315373; }
+.ain-forecast-plans h4 small { font-size: 10px; font-weight: 400; color: #7b8ea3; }
+.ain-forecast-plans-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(155px, 100%), 1fr)); gap: 6px; list-style: none; margin: 5px 0 9px; padding: 0; }
+.ain-forecast-plans-list li { min-width: 0; }
+.ain-forecast-plans-list label { display: flex; align-items: flex-start; gap: 7px; height: 100%; padding: 7px 8px; border: 1px solid #dce6f1; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px; color: #2a4a6b; }
+.ain-forecast-plans-list label.is-selected { border-color: #80afe9; background: #edf5ff; }
+.ain-forecast-plans-list input { flex: 0 0 auto; width: 13px; height: 13px; margin: 3px 0 0; accent-color: #2879d6; }
+.ain-forecast-plans-list label > span { display: block; min-width: 0; overflow-wrap: anywhere; }
+.ain-forecast-plans-list strong { display: block; line-height: 1.6; font-size: 12px; }
+.ain-forecast-plans-list small { display: block; color: #71869d; font-size: 10px; line-height: 1.6; margin-top: 2px; }
+.ain-forecast-plans-params { margin: 7px 0; }
+.ain-forecast-param-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 7px 10px; }
+.ain-forecast-param-grid label { display: grid; grid-template-columns: minmax(0, 1fr) 76px; align-items: center; gap: 3px 6px; font-size: 11px; color: #385777; min-width: 0; }
+.ain-forecast-param-grid :is(input, select) { min-width: 0; width: 100%; padding: 4px 6px; border: 1px solid #cbd9e9; border-radius: 5px; background: #fff; color: #24496d; font: inherit; }
+.ain-forecast-param-grid small { grid-column: 1 / -1; font-size: 10px; color: #7b8fa7; }
+.ain-forecast-evaluate-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; margin-top: 8px; }
+.ain-forecast-evaluate-row span { font-size: 10px; color: #7b8fa7; }
+.ain-forecast-review .ain-forecast-evaluate-row button { padding: 5px 10px; color: #fff; background: #2879d6; border-color: #2879d6; }
+.ain-forecast-review button:disabled { cursor: not-allowed; opacity: .55; }
+.ain-forecast-plans-sim { margin-top: 9px; padding: 7px 9px; background: #f0f6fc; border: 1px solid #e0eaf6; border-radius: 6px; font-size: 11px; color: #2a4a6b; }
+.ain-forecast-plans-sim h4 { margin-top: 0; }
+.ain-forecast-metrics-scroll { overflow-x: auto; }
+.ain-forecast-metrics { width: 100%; border-collapse: collapse; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; }
+.ain-forecast-metrics :is(th, td) { padding: 5px 4px; border-bottom: 1px solid #dce7f3; vertical-align: middle; white-space: nowrap; }
+.ain-forecast-metrics thead th { color: #7188a1; font-size: 10px; font-weight: 400; }
+.ain-forecast-metrics th:first-child { text-align: left; }
+.ain-forecast-metrics tbody th { font-weight: 500; }
+.ain-forecast-metrics small { display: block; color: #8395a9; font-size: 9px; font-weight: 400; }
+.ain-forecast-metrics tr:last-child :is(th, td) { border-bottom: 0; }
+@media (max-width: 680px) {
+  .ain-forecast-dialog-heading { align-items: flex-start; gap: 7px; flex-wrap: wrap; }
+  .ain-forecast-dialog-actions { margin-left: auto; }
+  .ain-forecast-context .ain-forecast-context-heading { display: block; }
+  .ain-forecast-context-heading > span { display: block; }
+  .ain-forecast-summary > div { align-items: flex-start; }
+  .ain-forecast-summary h3 { overflow-wrap: anywhere; }
+}
