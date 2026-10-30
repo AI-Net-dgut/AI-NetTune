@@ -1100,12 +1100,25 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
         is_anomaly, anomaly_type, level = False, "正常", "低"
         anomaly_scope = "none"
         evidence = []
-        cause = (f"各AP的RSRP均值{rsrp_avg:.1f}dBm、SINR均值{sinr_avg:.1f}dB、PRB利用率{prb_avg:.1f}%、"
-                 f"吞吐量均值{thr_avg:.1f}Mbps，各项指标均在正常范围")
+        # 文案必须与数值自洽（独立审计 P2）：短样本窗口里 RSRP/SINR 明明越阈，
+        # 原来仍写"各项指标均在正常范围"，同一响应里 performance_hints 又说"样本不足"。
+        _sample_short = len(rows) < MIN_HOUR_ROWS_PER_AP * max(1, len({r["ap_id"] for r in rows}))
+        _over_threshold = (rsrp_avg is not None and rsrp_avg < -105) or (sinr_avg is not None and sinr_avg < 5)
+        if _sample_short:
+            cause = (f"样本不足（{len(rows)} 行），不下故障结论；均值 RSRP {rsrp_avg:.1f}dBm、"
+                     f"SINR {sinr_avg:.1f}dB 仅供参考")
+            confidence = 0.3
+        elif _over_threshold:
+            cause = (f"均值 RSRP {rsrp_avg:.1f}dBm、SINR {sinr_avg:.1f}dB 偏低，但未达到"
+                     f"「同一 AP 连续多分钟越阈」的判据，暂判正常并提示关注")
+            confidence = 0.6
+        else:
+            cause = (f"各AP的RSRP均值{rsrp_avg:.1f}dBm、SINR均值{sinr_avg:.1f}dB、PRB利用率{prb_avg:.1f}%、"
+                     f"吞吐量均值{thr_avg:.1f}Mbps，各项指标均在正常范围")
+            confidence = 0.95
         suggestion, nstatus, affected_aps = "无需处理", "normal", []
         candidates = []
         ap_candidates = []
-        confidence = 0.95
 
     # 3) 多 AP 横向对比（哪台AP最差）—— 指定 AP 时仍列出全部 AP，便于对照
     _cmp_rows = rows_all if ap_filter else rows
@@ -1170,7 +1183,7 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
 
     # ===== 状态语义计算（队友反馈第4点）=====
     # 窗口是"过去 N 分钟"，出现过的异常不等于**此刻**仍在故障，必须分开表达：
-    #   fault_active          窗口末尾 5 分钟内仍有异常 → 当前仍在故障
+    #   fault_active          窗口末尾 10 分钟内仍有异常（_RECOVER_GRACE_SEC=600）→ 当前仍在故障
     #   recovered_in_window   窗口内有异常区间，但末尾已恢复
     #   performance_warning   指标偏低但未达故障判据（不算异常，给提示）
     #   normal                都没有
@@ -2807,8 +2820,12 @@ def analyze_forecast(req: ForecastRequest):
     built = build_series(rows, metrics)
     # 顶层 method 如实聚合：全部 prophet / 全部 moving_average / 混合 mixed / 均无法预测 none
     methods = {s["method"] for ue in built["series"].values() for s in ue.values()}
-    if not methods or methods == {"none"}:
-        top_method = "moving_average"
+    # 全部序列都无法预测（窗口不足 4 个 1 小时桶）时，method 必须是 no_data，
+    # 不能报 moving_average —— 后者会让人以为"降级跑了移动平均"，并把原因
+    # 归到 Prophet 超时上（独立审计 P3：归因错误）。
+    _all_none = (not methods) or methods == {"none"}
+    if _all_none:
+        top_method = "no_data"
     elif methods == {"prophet"}:
         top_method = "prophet"
     elif methods == {"moving_average"}:
@@ -2819,7 +2836,11 @@ def analyze_forecast(req: ForecastRequest):
     reasons = sorted({s.get("degrade_reason") for ue in built["series"].values()
                       for s in ue.values() if s.get("degrade_reason")})
     limitations = []
-    if top_method in ("moving_average", "mixed"):
+    if _all_none:
+        limitations.append(
+            "窗口内可聚合的 1 小时桶不足 4 个，无法给出预测；请扩大时间窗口"
+            "（建议至少 1 天）后重试，这不是模型降级")
+    elif top_method in ("moving_average", "mixed"):
         limitations.append(
             "Prophet 不可用或拟合超时，已降级为移动平均（常数预测），"
             "MAE/RMSE 为测试段相对该常数的离散度")
@@ -3026,7 +3047,7 @@ ALERT_WEAK_POWER_DBM = -95.0        # 频段功率低于此值视为弱覆盖
 # 频段占用率高于此值视为拥塞。
 # 为什么从 85 调到 80：预警还要求"≥40/50 频段同时越阈"，而实测 4 个拥塞事件
 # 的越阈频段数最多只有 39/37/37/39（差 1~3 个），导致拥塞预警**从未触发过**。
-# 全 7 天回测（scripts/backtest_forecast.py）：
+# 全 7 天回测（用 scripts/accept_forecast.py 复跑；仓库内没有独立的 backtest_forecast.py）：
 #   阈值 85% → 触发 0 段；阈值 80% → 触发 114 段，全部落在真值拥塞窗口内，0 误报。
 # 依据：拥塞窗口占用率均值 75.6%~77.4%、最高 94.8%；正常窗口均值 37%~40%、最高 70.8%。
 ALERT_CONGESTION_OCC_PCT = 80.0
@@ -3376,12 +3397,16 @@ def forecast_preview(req: ForecastPreviewRequest):
             # 原实现取"首个合格段 → 最后命中点"，中间恢复的间隙被并进同一条风险，
             # 用户会以为"从头到尾一直在故障"。现在每段独立成一条风险。
             runs = _split_crossing_runs(hit_minutes, min_crossing_minutes)
-            if not runs:
-                continue          # 没有够长的连续段 → 视为噪声，不告警
-
             already = bool(hist_frames[metric]) and len(
                 _bands_over(hist_frames[metric][-1]["values"], threshold, direction)
             ) >= min_crossing_bands
+            if not runs:
+                # 没有够长的连续段 ≠ 当前没问题（独立审计 P2）：预测时长 <3 分钟时
+                # 连续段必然不足 3 分钟，而基准时刻可能已经 50/50 频段越阈 ——
+                # 这时绝不能返回"整体正常"（漏报式全清），至少要报"已处于…预计持续"。
+                if not already:
+                    continue
+                runs = [[0, max(0, len(frames) - 1)]]
             unit_text = "dBm" if metric == "power" else "%"
 
             for run_index, segment in enumerate(runs, start=1):

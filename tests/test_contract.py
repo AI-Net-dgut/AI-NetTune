@@ -20,6 +20,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# 报告类用例依赖可写的 reports 目录。受限/只读环境（或沙箱）下它会 PermissionError，
+# 让 3 个报告用例假失败、"tests 67/67"这条基线不成立。项目本身已提供
+# NETTUNE_REPORTS_DIR 逃生口，这里在导入期统一兜底（独立审计 P3）。
+import os as _os
+import tempfile as _tempfile
+
+_default_reports = Path(_os.getenv("NETTUNE_REPORTS_DIR") or str(ROOT / "reports"))
+try:
+    _default_reports.mkdir(parents=True, exist_ok=True)
+    _p = _default_reports / ".write_probe"
+    _p.write_text("ok", encoding="utf-8")
+    _p.unlink()
+except OSError:
+    # 兜底目录必须落在仓库内：系统临时目录在很多受限环境（含沙箱）里同样不可写。
+    # .reports-tmp 已加入 .gitignore。
+    _fallback = ROOT / ".reports-tmp"
+    _fallback.mkdir(parents=True, exist_ok=True)
+    _os.environ["NETTUNE_REPORTS_DIR"] = str(_fallback)
+
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
@@ -1475,12 +1494,18 @@ def test_forecast_preview_insufficient():
 def test_forecast_interface10():
     d = _data(main.analyze_forecast(main.ForecastRequest(
         scenario=SCENARIO, window_start=WEAK_START, window_end=WEAK_END)))
-    assert d["method"] in ("prophet", "moving_average", "mixed")
+    # no_data = 窗口内可聚合的 1 小时桶不足 4 个：此时不能谎报 moving_average
+    # （独立审计：会让人以为是"降级跑了移动平均"，并把原因归到 Prophet 超时）。
+    assert d["method"] in ("prophet", "moving_average", "mixed", "no_data")
     assert d["ues"], "应返回 UE 列表"
     s = d["series"][d["ues"][0]]["rsrp"]
     for key in ("true_mean", "pred_mean", "mae", "rmse", "bins", "true", "predicted"):
         assert key in s, f"序列缺字段 {key}"
-    if s.get("method") != "none":
+    if d["method"] == "no_data":
+        assert s.get("method") == "none", "no_data 时序列也必须是 none"
+        assert any("桶不足" in str(x) for x in (d.get("limitations") or [])), \
+            "no_data 必须说明是桶不足，而不是 Prophet 降级"
+    elif s.get("method") != "none":
         assert s["mae"] is not None, "应给出有量纲的 MAE"
 
 
@@ -1528,7 +1553,19 @@ def test_report_trend_extends_for_short_window():
     """
     import os
     from data_layout import BASE_DIR
+    # 报告目录不可写时（只读部署/受限沙箱）自动改用临时目录，
+    # 否则 3 个报告用例会因 PermissionError 假失败，而项目本身已提供
+    # NETTUNE_REPORTS_DIR 逃生口（独立审计 P3）。
     reports_dir = Path(os.getenv("NETTUNE_REPORTS_DIR") or str(BASE_DIR / "reports"))
+    try:
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        _probe = reports_dir / ".write_probe"
+        _probe.write_text("ok", encoding="utf-8")
+        _probe.unlink()
+    except OSError:
+        import tempfile
+        reports_dir = Path(tempfile.mkdtemp(prefix="nettune-reports-"))
+        os.environ["NETTUNE_REPORTS_DIR"] = str(reports_dir)
 
     def html_of(start: str, end: str) -> str:
         payload = main.export_report(main.ReportRequest(

@@ -24,7 +24,10 @@ sys.path.insert(0, str(ROOT))
 import main  # noqa: E402
 
 ISO = "%Y-%m-%d %H:%M:%S"
-MIN_BANDS, MIN_MINUTES = 40, 3      # 与 main.py 的预警判据保持一致
+# 直接复用 main 的判据，避免"文档改了、验收脚本仍按旧口径统计"却照样报一致
+# （独立审计 P3：此前这里是硬编码 40/3 的副本）。
+MIN_BANDS = main._min_crossing_bands(50)
+MIN_MINUTES = main.ALERT_MIN_CROSSING_MINUTES
 
 
 def _load_spectrum():

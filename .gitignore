@@ -47,6 +47,8 @@ temp/
 
 # 导出的报告（运行时产物，不入库）
 reports/
+# reports/ 不可写时测试的兜底输出目录（只读/受限环境下自动启用）
+.reports-tmp/
 
 # 数据文件：体积大（网络表 14.6MB + 频谱表 103.5MB），不纳入 Git。
 # 交付方式见 data/README.md 与 DEPLOY.md 第 2 节。

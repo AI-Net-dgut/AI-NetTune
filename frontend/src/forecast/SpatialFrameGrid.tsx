@@ -4,6 +4,9 @@ import { fetchSpatialFrames } from "../services/backend";
 import type { SpatialFrame, SpatialFrameSeries } from "../services/backend";
 import "./SpatialFrameGrid.css";
 
+/** 数值兜底：缺字段/NaN 时显示 "?"，避免把 NaN 渲染进界面（独立审计 P3）。 */
+const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? String(Math.round(value)) : "?");
+
 /**
  * 区域电磁态势序列图：过去 N 帧 → 未来 N 帧，可**拖动时间轴**并可**自动播放**。
  *
@@ -185,11 +188,14 @@ export default function SpatialFrameGrid({
         <span className="ain-spatial-dim">空间维度 · 网络表</span>
         {metricControl}
         <span>
-          {metricLabel} · {all.length ? `色阶 ${min.toFixed(0)}~${max.toFixed(0)}${unit}` : "暂无有效数值"} · 每帧 {series.frameMinutes} 分钟 ·
+          {/* 缺字段时 numeric() 会给出 NaN，直接 toFixed 会在界面上渲染出
+              "每帧 NaN 分钟""区域 X NaN~NaN m"（独立审计 P3）。这里统一兜底成"?"。 */}
+          {metricLabel} · {all.length ? `色阶 ${min.toFixed(0)}~${max.toFixed(0)}${unit}` : "暂无有效数值"} ·
+          每帧 {num(series.frameMinutes)} 分钟 ·
           <strong className="ain-spatial-cover">
-            覆盖 未来 {series.future.length * series.frameMinutes} 分钟
+            覆盖 未来 {num(series.future.length * series.frameMinutes)} 分钟
           </strong>
-          · 区域 X {series.xRange[0].toFixed(0)}~{series.xRange[1].toFixed(0)} m
+          · 区域 X {num(series.xRange[0])}~{num(series.xRange[1])} m
         </span>
         {/* 预测时长不在这里单独提供下拉：弹窗顶部那一个才是权威控件（它驱动接口11
             重新预测），本组件只按它换算每帧时长，避免两个下拉各说各话。 */}

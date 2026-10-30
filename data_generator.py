@@ -178,6 +178,21 @@ def write_fault_events(schedule: list) -> None:
     "首次出现 weak_coverage 标签"并不在同一分钟。
     """
     import csv
+    # 只登记**频谱数据覆盖范围内**的事件（独立审计 P2）：频谱表只有 7 天，
+    # 而 30 天网络表有 31 个注入事件；若把 01-08 之后的事件也写进清单，
+    # 前端案例按钮会多出 23 个"点开即数据不足"的入口，并与文档的"8 条"冲突。
+    # 超过频谱覆盖的事件不再列入清单（网络表里仍然有故障注入，只是没有对照频谱）。
+    spectrum_end = None
+    try:
+        import pandas as _pd  # noqa: PLC0415 - 仅用于读频谱末时刻
+        _spec_path = Path(SPECTRUM_OUTPUT_PATH)
+        if _spec_path.exists():
+            head = _pd.read_csv(_spec_path, encoding=OUTPUT_ENCODING, usecols=["timestamp"])
+            spectrum_end = str(head["timestamp"].max())
+    except Exception:  # noqa: BLE001 - 读不到就不过滤，保持旧行为
+        spectrum_end = None
+    if spectrum_end:
+        schedule = [row for row in schedule if row[0] <= spectrum_end]
     rows = []
     for idx, (start, end, ap, ftype, strength) in enumerate(schedule, start=1):
         rows.append({

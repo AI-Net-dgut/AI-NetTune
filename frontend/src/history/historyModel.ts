@@ -5,7 +5,12 @@ export const object = (value: unknown): Record<string, unknown> =>
 export const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 export const text = (value: unknown): string => typeof value === 'string' ? value : typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
 export interface QuestionEntry { record: HistoryRecord; members: HistoryRecord[] }
-export const isQuestionRecord = (r: Pick<HistoryRecord, 'kind' | 'role' | 'parentId' | 'payload'>) => r.kind === 'forecast-analysis' || (r.kind === 'analysis'
+// 问题级记录（会作为列表根）：分析问答、预测研判，以及 archivePlan 之外的三类归档
+// （预测预览 / 空间态势 / 回测）。后三类此前被 store 静默丢弃，现已允许入库，
+// 必须同时被识别为根，否则它们会在列表里"入库但不可见"（独立审计 P2）。
+export const isQuestionRecord = (r: Pick<HistoryRecord, 'kind' | 'role' | 'parentId' | 'payload'>) =>
+  r.kind === 'forecast-analysis' || r.kind === 'forecast' || r.kind === 'spatial' || r.kind === 'backtest'
+  || (r.kind === 'analysis'
   && r.role !== 'evidence'
   // 旧版辅助请求有父问题，但精简后可能已丢失chart；不能依靠chart来识别角色。
   && !(r.role !== 'question' && r.parentId && !object(object(r.payload).response).diagnosis));

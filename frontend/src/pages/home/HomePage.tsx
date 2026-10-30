@@ -27,7 +27,7 @@ const capabilities = [
 ] as const;
 
 const workflow = [
-  { title: "进入工作台", description: "从1月2日09:15开始演示，数据加载后自动回放。" },
+  { title: "进入工作台", description: "从 1 月 2 日 13:50 开始演示（与 REPLAY_CONFIG.playbackStart 一致），数据加载后自动回放。" },
   { title: "固定当前时刻", description: "固定查看时刻；主时钟可暂停或继续，也可查看已到达的历史。" },
   { title: "提问并核查证据", description: "可指定历史日期/时段提问，图表同步；也可固定当前查看证据。" },
   { title: "查看方案与预计效果", description: "比较建议、调整参数，退出分析后返回当前。" },
@@ -128,7 +128,8 @@ export default function HomePage() {
       <div className="ain-home-v2-status-title"><h2 id="ain-home-v2-status-title">当前功能状态</h2><span>以现有接口返回为准</span></div>
       <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已具备</span><p><strong>历史回放与AI研判</strong>以仿真实时数据流（历史 CSV 回放）驱动，支持{REPLAY_SPEEDS.join(" / ")}倍速和循环；默认近{REPLAY_CONFIG.historyMinutes}分钟参考，可调整时长或自定义开始时间；仅使用截至查看时刻的采样。</p></div>
       <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已接入</span><p><strong>未来预测与预警</strong>可打开预测弹窗或直接提问未来时段，范围30分钟至24小时；实时跟随且主时钟播放中时按5分钟自动更新。当前为简化外推，预测方法、数据是否充足及可信边界以实际返回和弹窗说明为准。</p></div>
-      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge is-limited">临时记录</span><p><strong>工作台内查询摘要</strong>保留最近6次提问摘要及分析截止时间，离开页面或刷新后不保留；独立分析记录页尚未接入保存功能。</p></div>
+      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge">已接入</span><p><strong>独立分析记录页</strong>把每次研判、方案参数与仿真效果写入浏览器 IndexedDB（最多 100 个问题），支持搜索、单条导出、批量管理与删除；跨标签页同步，删除后不会被迟到的写入复活。</p></div>
+      <div className="ain-home-v2-status-item"><span className="ain-home-v2-badge is-limited">临时记录</span><p><strong>工作台内查询摘要</strong>只用于当前会话的快速回看；需要长期保留的内容以独立记录页为准。</p></div>
       <p className="ain-home-v2-boundary">本阶段通过历史数据回放观察网络，处理方案用于参数讨论与预计效果比较，不下发真实网络配置。</p>
     </section>
   </main>;

@@ -36,7 +36,7 @@ function changed() {
 // 于是 A 页在 B 页删除后仍显示旧记录；A 页迟到的分析结果还会把已删记录重新写回。
 // 做法：删除成功后广播 id（BroadcastChannel 优先，localStorage 作兼容兜底），
 // 收到广播的页面把 id 加入 rejectedIds 并从 memory 移除 —— 既同步列表，也拦住迟到写入。
-type SyncChannel = { postMessage: (message: unknown) => void; onmessage: ((event: { data: unknown }) => void) | null };
+type SyncChannel = { postMessage: (message: unknown) => void; onmessage: ((event: { data: unknown }) => void) | null; close?: () => void };
 const SYNC_NAME = 'aintune-history';
 const DELETED_KEY = 'aintune-history-deleted';
 // 持久化墓碑（独立审计 P3）：删除广播只在**活着的页面**之间生效，
@@ -94,6 +94,14 @@ function applyDeleted(ids: string[]) {
 }
 // 初始化：把历史墓碑并入 rejectedIds（上一次会话删掉的记录不会被迟到写入复活）
 for (const id of Object.keys(loadTombstones())) rejectedIds.add(id);
+// 页面卸载时关闭通道：模块作用域创建的 BroadcastChannel 若从不 close，
+// 非浏览器宿主（SSR/测试/预渲染）require 之后事件循环永不退出，
+// HMR 反复求值还会叠加通道（独立审计 P3）。
+try {
+    (globalThis as unknown as { window?: Window }).window?.addEventListener?.('pagehide', () => {
+        try { syncChannel?.close?.(); } catch { /* 已关闭或环境不支持。 */ }
+    });
+} catch { /* 非浏览器环境。 */ }
 if (syncChannel) {
     syncChannel.onmessage = (event) => {
         const data = event?.data as { type?: string; ids?: unknown } | undefined;
@@ -220,7 +228,33 @@ function compactPayload(kind: RecordKind, value: unknown): unknown {
     }
     if (kind === 'forecast-analysis') {
         const handoff = object(p.handoff);
-        return { reply: p.reply, error: p.error, handoff: { targetWindow: handoff.targetWindow, forecast: handoff.forecast ?? object(handoff.result).forecast } };
+        const result = object(handoff.result);
+        // 预测研判必须留住"结论是怎么来的"（独立审计 P2）：此前只留 reply/error/handoff，
+        // 预测自身的 method / limitations / disclaimer 全部丢失，事后无法解释
+        // "这是趋势外推还是模型预测""有哪些限制"。
+        return {
+            reply: p.reply, error: p.error,
+            method: result.method ?? p.method,
+            limitations: result.limitations ?? p.limitations,
+            disclaimer: result.disclaimer ?? p.disclaimer,
+            source: result.source ?? p.source,
+            handoff: { targetWindow: handoff.targetWindow, forecast: handoff.forecast ?? result.forecast,
+                basisWindow: handoff.basisWindow, alertId: handoff.alertId },
+        };
+    }
+    if (kind === 'forecast' || kind === 'spatial' || kind === 'backtest') {
+        // 这三类归档原先被整体拒绝；现在允许入库，payload 只需保留"能复现结论"的元信息。
+        const result = object(p.result ?? p.forecast);
+        return {
+            summary: p.summary, error: p.error, at: p.at,
+            scenario: p.scenario, baseTime: p.baseTime,
+            method: result.method ?? p.method,
+            limitations: result.limitations ?? p.limitations,
+            disclaimer: result.disclaimer ?? p.disclaimer,
+            horizonMinutes: p.horizonMinutes ?? result.horizonMinutes,
+            frameMinutes: p.frameMinutes, pastFrames: p.pastFrames, futureFrames: p.futureFrames,
+            windowMinutes: p.windowMinutes, metric: p.metric,
+        };
     }
     return { error: p.error, action: p.action, inputAt: p.inputAt, completedAt: p.completedAt, values: p.values,
         plan: p.plan ? plan(p.plan) : undefined, result: effect(p.result),
@@ -237,7 +271,10 @@ export function record(input: RecordInput): string {
     }
 }
 function saveRecord(input: RecordInput): string {
-    if (input.kind === 'forecast' || input.kind === 'spatial' || input.kind === 'backtest') return '';
+    // 预测预览 / 空间态势 / 回测 三类记录曾被白名单静默丢弃（record() 返回空串），
+    // 导致 forecastRecordIds 永远映射到 ''、预测自身的 method/limitations 不留档，
+    // 而 kindLabels 里其实早就定义了这三种类型的显示名（独立审计 P2）。
+    // 现在允许入库：它们都是"问题级"记录，与 analysis 同列于记录页。
     if (input.role === 'evidence' && !input.parentId) return '';
     if ((input.id && rejectedIds.has(input.id)) || (input.parentId && rejectedIds.has(input.parentId) && !isQuestionRecord(input))) return '';
     const item = structuredClone({ ...memory.get(input.id ?? ''), ...input, payload: compactPayload(input.kind, input.payload), id: input.id || createId(), createdAt: input.createdAt ?? memory.get(input.id ?? '')?.createdAt ?? new Date().toISOString() });

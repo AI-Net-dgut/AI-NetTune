@@ -130,7 +130,7 @@ def _first_spectrum_crossing(spec, ap, start, end, kind=""):
         mask = ((seg.power_dbm < main.ALERT_WEAK_POWER_DBM)
                 | (seg.occupancy_pct > main.ALERT_CONGESTION_OCC_PCT))
     hit = seg.assign(_h=mask).groupby("timestamp")["_h"].sum()
-    hit = hit[hit >= max(5, int(0.8 * 50))]      # 与 main._min_crossing_bands(50) 同口径
+    hit = hit[hit >= main._min_crossing_bands(50)]   # 直接复用主判据，不复制常量
     if hit.empty:
         return None
     return datetime.strptime(str(hit.index[0]), "%Y-%m-%d %H:%M:%S")

@@ -54,11 +54,14 @@ const hasValidForecast = Boolean(
     <section
       className="ain-forecast-section"
       id="ain-forecast-result"
-      aria-labelledby="ain-forecast-title"
+      aria-labelledby="ain-compare-title"
     >
       <div className="ain-forecast-heading">
         <div>
-          <h2 id="ain-forecast-title">历史预测效果对比</h2>
+          {/* id 必须与预测弹窗的 ain-forecast-title 区分开：两者同屏时
+              aria-labelledby 会解析到文档里第一个同名 id，弹窗会被读成
+              "历史预测效果对比"（独立审计 P3，同时违反 id 唯一性）。 */}
+          <h2 id="ain-compare-title">历史预测效果对比</h2>
           <span className="ain-forecast-badge">历史回测</span>
         </div>
 
