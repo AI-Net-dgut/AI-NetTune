@@ -349,27 +349,27 @@ GET /api/network/topology/basic?scenario = 校园 \& timestamp=2026\-01\-01 00:0
 |nodes|array|节点列表，包含 AP 与 UE 两类；每项含 `id` / `type` / `x` / `y`|
 |links|array|AP\-UE 连接链路列表；每项含两端节点 ID 及 `rsrp` / `sinr` / `throughput` 核心指标|
 
-## 接口 7：实时增量监测数据
+## 接口 7：故障事件清单
 
 GET /api/data/events?scenario=校园
 
-可选参数:
+参数：
 
-- `last_time`：上次拉取的最大时间戳，格式 `yyyy-MM-dd HH:mm:ss`；不传则默认返回最近 10 条数据
+- `scenario`（必填）：场景名，与 `VALID_SCENARIOS` 白名单一致。
 
-响应:
+> 更正（独立审计）：本节此前写成"实时增量监测数据"，带 `last_time` 参数、返回 `{total, columns, records}` 的 KPI 增量行 —— 与实现完全不符。接口 7 实际只读 `data/fault_events.csv`，返回**事件清单**，是预置案例窗口的单一事实来源。
+
+响应：
 
 ```json
 {
   "code": 0,
   "message": "success",
   "data": {
-    "total": 3,
-    "columns": ["timestamp", "ap_id", "user_id", "rsrp", "sinr", "throughput", "network_status"],
-    "records": [
-      {"timestamp": "2026-10-06 18:00:00", "ap_id": "AP-01", "user_id": "UE-03", "rsrp": -91.2, "sinr": 6.3, "throughput": 54.7, "network_status": "normal"},
-      {"timestamp": "2026-10-06 18:00:00", "ap_id": "AP-02", "user_id": "UE-05", "rsrp": -94.8, "sinr": 5.7, "throughput": 49.2, "network_status": "normal"},
-      {"timestamp": "2026-10-06 18:00:00", "ap_id": "AP-03", "user_id": "UE-07", "rsrp": -89.5, "sinr": 7.1, "throughput": 59.8, "network_status": "congestion"}
+    "count": 8,
+    "events": [
+      {"eventId": "EV-001", "scenario": "校园", "apId": "AP-02", "faultType": "weak_coverage",
+       "start": "2026-01-01 10:00:00", "end": "2026-01-01 12:00:00", "rampMinutes": 20}
     ]
   }
 }
@@ -379,17 +379,16 @@ GET /api/data/events?scenario=校园
 
 |字段|类型|说明|
 |---|---|---|
-|total|int|本次返回的增量数据条数|
-|columns|array|字段名列表，与历史查询接口完全一致，可复用前端解析逻辑|
-|records|array|增量数据数组，所有数据的时间戳均大于请求传入的 `last_time`|
+|count|int|事件条数|
+|events|array|事件数组：eventId / scenario / apId / faultType（weak_coverage / congestion）/ start / end / rampMinutes|
 
 **错误码说明**：
 
-- `0`：成功
+- `0`：成功（场景无事件时返回 `count=0, events=[]`）
 
-- `40002`：参数错误，时间格式非法
+- `40002`：scenario 不在白名单
 
-- `50001`：服务端内部异常
+- `50001`：服务端内部异常（如 `data/fault_events.csv` 缺失）
 
 
 
@@ -410,7 +409,9 @@ GET /api/data/events?scenario=校园
 GET /api/predict/result?scenario=校园&start_time=2026-01-04 00:00:00&end_time=2026-01-04 23:59:59&target_type=ap&target_id=AP-01&metric=rsrp
 
 功能：根据时间范围、预测对象与指标，返回时序预测结果（预测值、置信区间与状态标注）。
-契约 v1 已冻结。当前实现为**查询壳**：保持 v1 字段结构不变，内部转调接口 10（/api/analyze/forecast）的 Prophet 预测数据做字段映射，不新建模型、不升级契约版本；降级语义与接口 10 一致（moving_average 时无置信区间，confidence_min/max 等于预测值）。
+契约 v1 已冻结。**当前实现是占位**：`main.py` 里固定返回 `model="placeholder"`、`predict_list=[]`、`total=0`，**不调用** `forecast_model`，也没有转调接口 10。
+
+> 更正（独立审计）：本节此前写"内部转调接口 10 的 Prophet 预测数据做字段映射"，与实现不符；README 同样把接口 8 描述成"查询壳"。真要做真实预测请用接口 10（`/api/analyze/forecast`），或调用接口 11（`/api/forecast/preview`）取预测帧。
 
 ### 请求参数
 
@@ -625,8 +626,8 @@ POST /api/forecast/preview
 |---|---|---|---|
 |scenario|string|是|业务场景，如 校园（与 VALID_SCENARIOS 白名单一致）|
 |baseTime|string|是|模拟主时钟或固定查看时刻，格式 yyyy-MM-dd HH:mm:ss；预测与预警只基于该时刻及以前的数据|
-|history|object|是|历史参考范围：{start, end}，end 必须等于 baseTime；前端可自定义，不保证 60 分钟|
-|horizonMinutes|int|否|预测时长分钟，合法范围 1~1440，默认 30（由前端 config.ts 控制）|
+|history|object|是|历史参考范围：{start, end}，**end 不得晚于 baseTime**（晚于即 40002；早于允许但会用到更短的历史）。窗口上限 800 分钟（超过返回 40003，避免"帧数×频段数 ≤ 40000"被突破）。前端可自定义，不保证 60 分钟|
+|horizonMinutes|int|**是**|预测时长分钟，合法范围 1~1440，**必须是整数**（小数返回 40002）。注意：后端无默认值，省略即参数校验失败；前端的默认值是 120（`config.ts`），不是 30|
 
 ### 响应（顶层）
 
@@ -662,6 +663,7 @@ POST /api/forecast/preview
 |source|string|simulation 或 measurement；禁止用 demo 冒充真实接口|
 |status|string|ready（完成预测）/ insufficient_data（数据不足）/ unavailable（不可用）；后两者必须返回空的 alerts/spectra/impacts，且省略 spectrumViews 或返回 null，不得夹带过时结论|
 |alerts|array|风险数组，无风险时为空数组|
+|alertsTruncated|bool|`alerts` 是否因超过前端上限（200 条）被截断；为 true 时 `message` 会写明"仅展示前 200 条"。**不要**忽略该字段判断风险是否完整|
 |spectra|array|频谱数据数组，功率与占用率为不同记录（metric 区分）|
 |impacts|array|SINR、时延等相关指标预测数组（无网络性能预测能力时可不返回）|
 |spectrumViews|object \| null|无风险时的概览视图组（可选）；含义与 alerts 内 spectrumViews 相同|
@@ -697,7 +699,8 @@ POST /api/forecast/preview
    - 拥塞：`occupancy_pct > 80`（`ALERT_CONGESTION_OCC_PCT`）。**v2.9 由 85 下调为 80**：
   预警还要求"≥40/50 频段同时越阈"，而实测 4 个拥塞事件的越阈频段数最多 39/37/37/39，
   差 1~3 个导致拥塞预警从未触发；全 7 天回测 80% → 触发 114 段且全部命中真值、0 误报
-   - 越阈频段数 ≥ `max(3, 频段数/10)`（当前 50 段即 5 段）才算命中，避免单频段噪声触发。
+   - 越阈频段数 ≥ `max(5, int(频段数 × 0.8))`（`ALERT_MIN_CROSSING_RATIO = 0.8`；当前 50 段即 **40 段**）才算命中，避免单频段噪声触发。
+     > 更正（独立审计）：本节此前误写为 `max(3, 频段数/10)`（50 段即 5 段），与上一行"≥40/50"及代码都不符；按 5 段实现的客户端会严重误报。
 2. 用**历史最后一帧**判断基准时刻是否已越阈，给出两种语义（与责任分工要求的"持续风险/提前预警分别验收"对应）：
 
 | 情形 | title 形态 | start | severity |
@@ -711,9 +714,12 @@ POST /api/forecast/preview
 > **重要限制（数据侧）**：本判据能给出提前量的前提是历史窗口里存在"朝阈值滑动"的渐变趋势。
 > 但当前仿真数据的事件是**单分钟阶跃**（事件前 20 分钟 `RSRP < −110 dBm` 的行数恒为 0），
 > 事件前历史完全平坦 → 趋势门限判为无趋势 → 提前量恒为 0。
-> 实测（v2.8 数据，2026-10 重新生成后）：**提前预警可触发**。基准时刻 `2026-01-01 10:08`
-> （弱覆盖事件 10:00 起、渐变 20 分钟）给出「AP-02 预计 14 分钟后功率跌破 −95 dBm」，
-> 实际越阈约在 10:22；拥塞事件（01-01 20:00 起）实测提前 1–19 分钟。
+> 实测（v2.8 数据，2026-10 重新生成后）：**提前预警可触发**。基准时刻 `2026-01-01 10:11`
+> （弱覆盖事件 10:00 起、渐变 20 分钟）给出「AP-02 预计 17 分钟后功率跌破 −95 dBm」（目标 10:28），
+> 实际越阈约在 10:12；拥塞事件（01-01 20:00 起）实测提前 1–19 分钟。
+>
+> 更正（独立审计）：本节此前写"基准 10:08 会给出「预计 14 分钟」"，实测该基准 **0 条预警**
+> （趋势尚未形成），首条预警出现在 10:11。数字已按实际返回更正。
 >
 > ⚠️ 旧结论作废：v2.7 数据是单分钟阶跃（事件前 25 分钟 RSRP < −105 的样本数恒为 0），
 > 当时"提前预警 0 次、已发生·持续 4 次"是**数据缺陷导致的能力不可用**，不是模型限制。
@@ -883,9 +889,10 @@ POST /api/forecast/analyze
 
 ### 网络表事件口径（v2.8，取代旧的 EV 事件表口径）
 
-> 更正：本节此前描述 `network_data_7d_events.csv` 与 `data/fault_events.csv`（EV-001~004、
-> has_evolution 字段），但**这两个文件从未存在**，EV 编号只出现在文档里。
-> 实际的故障注入由 `data_generator.py` 的 `FAULT_SCHEDULE` 驱动，现按真实实现描述。
+> 更正：本节此前描述 `network_data_7d_events.csv`（EV-001~004、has_evolution 字段）但该文件从未存在。
+> `data/fault_events.csv` **确实存在**（8 条 EV-001~008），由 `data_generator.py` 与网络表同步生成，
+> 是接口 7 `/api/data/events` 的单一事实来源（见本文档接口 7）。
+> 故障注入本身由 `data_generator.py` 的 `FAULT_SCHEDULE` 驱动，现按真实实现描述。
 
 **事件来源**：`FAULT_SCHEDULE` 是写死的绝对时间表（如 `2026-01-01 10:00–12:00 AP-02 弱覆盖`、
 `2026-01-01 20:00–22:00 AP-01 拥塞`），第 4 天起由 `build_fault_schedule()` 按天延伸。

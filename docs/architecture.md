@@ -18,7 +18,7 @@
 │     ↓                                                            │
 │   services(9)  →  types(2)     HTTP 与字段映射（不反向依赖 UI）  │
 └───────────────────────────────┬──────────────────────────────────┘
-                                │ HTTP，17 条 /api 路由（16 条业务接口 + 1 条报告下载）
+                                │ HTTP，18 条 /api 路由（17 条业务接口 + 1 条报告下载挂载）
 ┌───────────────────────────────▼──────────────────────────────────┐
 │ 后端  FastAPI + Python 3.13                                       │
 │                                                                  │
@@ -102,8 +102,8 @@ data/spectrum_7d.csv ──load_spectrum()──► _SPEC{df, bands, min_ts, max
 
 | 手段 | 现状 |
 |---|---|
-| 契约测试 | `tests/test_contract.py` 49 项，覆盖接口关键语义 |
-| HTTP 冒烟 | `_review/smoke_all_endpoints.py`，覆盖 **16 条业务接口**（`/api/download/reports` 为报告文件下载，不在冒烟内），每轮改动后执行 |
+| 契约测试 | `tests/test_contract.py` **67 项**，覆盖接口关键语义（数字随测试增长，以 `python tests/run_tests.py` 输出为准） |
+| HTTP 冒烟 | `scripts/smoke_endpoints.py`（已入仓库），覆盖 **17 条业务接口**（含 `/api/forecast/plans`；`/api/download/reports` 为报告文件下载，不在冒烟内），每轮改动后执行（当前 17/17） |
 | 数据对账 | `scripts/audit_data.py`，两表异常组逐条对齐（当前 一致 9 / 不符 0） |
 | 口径一致率 | `scripts/compare_verdicts.py`，研判 vs 频谱 56 窗口（当前 100%） |
 | 能力验收 | `scripts/accept_forecast.py`，命中/漏报/提前量/误报/持续/一致率 |

@@ -169,6 +169,10 @@ npm run dev
 | 11   | POST | /api/forecast/preview | 预测预警 v2：真实频谱数据 → 历史帧 + 未来帧 + 风险预警（`baseTime` 防未来） |
 | 12   | POST | /api/forecast/analyze | 预测研判 v2：按 `forecastId`/`alertId` 生成文字研判（LLM 不可用降级规则模板） |
 | 13   | GET  | /api/health           | 部署自检：数据文件 / 依赖 / 大模型就绪状态（不依赖数据，永远可访问） |
+| 14   | POST | /api/plan/simulate    | 方案对比仿真：改参数后在同一窗口重算"原配置 vs 方案"（预测来源方案需按其依据窗口评估） |
+| 15   | GET  | /api/forecast/spatial_frames | 区域电磁态势帧序列（过去 N 帧 + 未来 N 帧，二维网格场） |
+| 16   | GET  | /api/navigate/signal  | 信号导航建议（位置感知 + 覆盖分析 + 移动方向/距离/预期增益） |
+| 17   | POST | /api/forecast/plans   | 预测风险→处置方案（带 `origin=forecast`、`basis{forecastId,risk,basisWindow}`、`disclaimer`；无风险时返回空列表） |
 
 详细请求 / 响应格式见 [docs/api.md](docs/api.md)。
 
@@ -181,7 +185,7 @@ npm run dev
 * 请求参数：`scenario`（必填）、`start_time` / `end_time`（必填，yyyy-MM-dd HH:mm:ss）、`target_type`（ap/ue，必填）、`target_id`（可选）、`metric`（rsrp/sinr/throughput，必填）、`interval`（可选，默认 15min）
 * 返回字段：`predict_list[]` 每项含 `time` / `position` / `predict_value` / `confidence_min` / `confidence_max` / `status`；另含 `model`（placeholder → prophet/lstm）与 `total`
 * 状态标注：`normal`（正常）/ `warning`（预警）/ `abnormal`（异常）
-* 当前状态：**查询壳**——契约 v1 字段保持稳定，内部转调接口 10（/api/analyze/forecast）的 Prophet 预测数据并映射字段，不新建模型；前端可先行联调
+* 当前状态：**占位**——契约 v1 字段结构保留，但实现固定返回 `model="placeholder"` / `predict_list=[]` / `total=0`，**不调用**任何预测模型（也不再转调接口 10）。需要真实预测请用接口 10 或接口 11
 
 #### 接口 9：拓扑增强数据（GET /api/network/topology/enhanced）
 
@@ -237,7 +241,7 @@ AI-NetTune/
 │   └── start_backend.ps1 # Windows 一键启动（自动挑 ≥3.10 解释器，-Reload / -Port）
 ├── tests/
 │   ├── run_tests.py   # 零依赖测试运行器（不需要 pytest / httpx）
-│   └── test_contract.py  # 接口契约测试（25 项）
+│   └── test_contract.py  # 接口契约测试（67 项，以 run_tests 输出为准）
 ├── data/              # 数据文件（.gitignore 忽略大文件，仅保留 README.md）
 │   ├── README.md              # 数据交付清单（大小 / SHA256 / 时间范围）
 │   ├── network_data_30d.csv   # 30 天，129,600 条 × 18 列（后端默认读取）
