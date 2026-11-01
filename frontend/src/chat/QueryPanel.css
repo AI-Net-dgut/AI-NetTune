@@ -111,8 +111,11 @@
 .ain-ai-v3 .ain-ai-signal-key { display: flex; flex-wrap: wrap; gap: 3px 9px; margin-bottom: 5px; }
 .ain-ai-v3 .ain-ai-signal-key span { display: inline-flex; align-items: center; gap: 4px; }
 .ain-ai-v3 .ain-ai-signal-key i { width: 8px; height: 8px; border-radius: 2px; }
-.ain-ai-v3 .ain-query-footer { display: flex; align-items: flex-start; gap: 12px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #e6edf6; }
-.ain-ai-v3 .ain-query-history-details { flex: 1; min-width: 0; color: #4d6d8f; font-size: 12px; }
+/* 记录列表与导出按钮原来是同一行 flex：列表被按钮挤成窄条、卡片内部还出现滚动。
+   改成**块级堆叠**：记录占满整宽，按钮另起一行。 */
+.ain-ai-v3 .ain-query-footer { display: block; margin-top: 14px; padding-top: 10px; border-top: 1px solid #e6edf6; }
+.ain-ai-v3 .ain-query-history-details { display: block; width: 100%; flex: none; min-width: 0; color: #4d6d8f; font-size: 12px; }
+.ain-ai-v3 .ain-query-footer .ain-report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; }
 .ain-ai-v3 .ain-query-history-details > summary { cursor: pointer; }
 .ain-ai-v3 .ain-query-history-details > summary span { margin-left: 5px; color: #8a9caf; }
 .ain-ai-v3 .ain-query-history { max-height: 260px; overflow: auto; margin-top: 8px; display: block; }
