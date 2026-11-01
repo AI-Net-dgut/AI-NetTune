@@ -1653,6 +1653,30 @@ def test_data_numeric_bounds():
 
 
 # ---------------------------------------------------------------- 核查清单 2026-11-01 第 3/4 条
+def test_compound_question_returns_renderable_chain():
+    """复合问法必须返回可渲染的步骤与结果，且预测时长沿用用户请求（核查清单第 5 条）。"""
+    prev, sessions_before = main.ENABLE_LLM, set(main._SESSIONS)
+    main.ENABLE_LLM = False
+    try:
+        d = _data(main.agent_chat(main.ChatRequest(
+            message="哪个 AP 最差，未来 3 小时会怎样", scenario=SCENARIO,
+            session_id="test-chain-1")))
+        assert d.get("kind") == "chain", f"复合问法应走编排，实得 kind={d.get('kind')} intent={d.get('intent')}"
+        steps = d.get("chain") or []
+        assert len(steps) >= 2, f"至少两步，实得 {len(steps)}"
+        for key in ("tool", "title", "summary"):
+            assert all(key in step for step in steps), f"步骤缺字段 {key}"
+        # 不能只回一句"已执行两步"：reply 里必须含实际结论（对象名或风险条数）
+        assert "AP-" in d["reply"] or "风险" in d["reply"], f"reply 太敷衍：{d['reply']}"
+        # 预测时长沿用用户请求的 3 小时，而不是写死 60
+        assert d.get("horizon_minutes") == 180, f"应沿用 180 分钟，实得 {d.get('horizon_minutes')}"
+        assert any(step.get("horizonMinutes") == 180 for step in steps), "预测步骤里也要带实际时长"
+    finally:
+        main.ENABLE_LLM = prev
+        for key in set(main._SESSIONS) - sessions_before:
+            main._SESSIONS.pop(key, None)
+
+
 def test_causal_question_routes_to_diagnosis():
     """「为什么信号差」必须进故障研判，不能被黑名单打成 KPI 查询（核查清单第 3 条）。
 

@@ -87,10 +87,24 @@ export interface Diagnosis {
   comparison: ApComparison[];
   alarms: { time: string; ap: string; type: string; level: string; cause: string }[];
 }
+export interface ChainStep {
+  tool: string;
+  title?: string;
+  status?: string;
+  summary?: string;
+  window?: { start?: string; end?: string };
+  horizonMinutes?: number;
+  baseTime?: string;
+}
 export interface ChatResult {
   reply: string; intent: string; scope: QueryScope; diagnosis: Diagnosis | null;
   plans?: TreatmentPlan[];
   chart: { type: string; option: Record<string, unknown> } | null;
+  /** 多步编排（核查清单第 5 条）："找对象 → 查证据 → 看未来"的每一步及结果，
+   *  不能只回一句"已执行两步"。 */
+  chain?: ChainStep[];
+  worstAp?: string;
+  horizonMinutes?: number;
   /** 意图识别来源：llm=大模型识别 / rule=规则命中 / fallback=规则未命中兜底。
    *  界面必须如实展示，不能让"规则兜底"看起来像"大模型回答"（核查清单第 4 条）。 */
   intentSource?: "llm" | "rule" | "fallback";

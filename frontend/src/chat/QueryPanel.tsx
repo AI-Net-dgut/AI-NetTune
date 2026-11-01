@@ -179,6 +179,28 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           {mismatch && <p className="ain-ai-warning">本次返回范围与已加载数据不同，请核对范围后使用结果。</p>}
           {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，右侧建议暂不可采用，辅助图使用已加载数据。</p>}
           {!query.pending && !query.error && result && !result.diagnosis && <div className="ain-ai-tool-reply"><ReplyText text={result.reply} />
+            {/* 多步编排：把每一步的实际结果列出来（核查清单第 5 条：
+                不要只返回"已执行两步"的文案，要能看出每步做了什么、结论是什么） */}
+            {result.chain && result.chain.length > 0 && (
+              <ol className="ain-ai-chain" aria-label="本次工具编排步骤">
+                {result.chain.map((step, index) => (
+                  <li key={`${step.tool}-${index}`} className={`ain-ai-chain-step${step.status && step.status !== 'ok' ? ' is-warn' : ''}`}>
+                    <span className="ain-ai-chain-no">{index + 1}</span>
+                    <div>
+                      <strong>{step.title || step.tool}</strong>
+                      {step.summary && <p>{step.summary}</p>}
+                      {(step.window?.start || step.baseTime) && (
+                        <p className="ain-ai-note">{
+                          step.window?.start
+                            ? `范围：${step.window.start} — ${step.window.end ?? ''}`
+                            : `基准：${step.baseTime ?? ''}${step.horizonMinutes ? `（未来 ${step.horizonMinutes} 分钟）` : ''}`
+                        }</p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
             <p className="ain-ai-result-scope">返回范围：{scopeLabel(result.scope)}</p></div>}
           {analysis && <><div className="ain-ai-analysis-caption">{result === analysis ? "本次研判" : "关联研判（保留）"}{result !== analysis && diagnosisQuestion && ` · ${diagnosisQuestion}`}</div>
             <DiagnosisReply result={analysis} onEvidence={selection => setEvidenceSelection(previous => ({ ...selection, id: (previous?.id ?? 0) + 1, diagnosisId: query.diagnosisId, requestId: query.requestId }))} /></>}

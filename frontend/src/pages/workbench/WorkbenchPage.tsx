@@ -119,7 +119,11 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
       if (future.kind === 'error') {
         setAnalysisNotice({ key: replayContextKey(current), text: `${future.message} 本次未发送，查看范围未改变。` }); return;
       }
-      if (future.kind === 'forecast') {
+      // 复合问法（"哪个 AP 最差，未来 3 小时会怎样"）不能抢先开预测弹窗：
+      // 后端的工具链编排会先研判找对象、再做预测，并返回可渲染的步骤（核查清单第 5 条）。
+      // 只有**纯未来**问题才走弹窗。
+      const compound = ["最差", "最严重", "哪个 AP", "哪个ap", "哪里最"].some(k => message.includes(k));
+      if (future.kind === 'forecast' && !compound) {
         if (current.viewMode === 'history') {
           setAnalysisNotice({ key: replayContextKey(current), text: '历史回顾期间不提供未来预测，请返回当前后再提问。' }); return;
         }

@@ -472,6 +472,24 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
     intentSource: rawSource === "llm" || rawSource === "rule" || rawSource === "fallback" ? rawSource : undefined,
     intentDegradeReason: str(debug.degrade_reason) || undefined,
     sessionIsNew: multi.session_new === true ? true : multi.session_new === false ? false : undefined,
+    // 多步编排的步骤必须透传（核查清单第 5 条：不能只返回"已执行两步"的文案）
+    chain: Array.isArray(data.chain)
+      ? data.chain.map(rawStep => {
+        const step = obj(rawStep);
+        const win = obj(step.window);
+        return {
+          tool: str(step.tool),
+          title: str(step.title) || undefined,
+          status: str(step.status) || undefined,
+          summary: str(step.summary) || undefined,
+          window: step.window ? { start: str(win.start) || undefined, end: str(win.end) || undefined } : undefined,
+          horizonMinutes: step.horizonMinutes == null ? undefined : numeric(step.horizonMinutes),
+          baseTime: str(step.baseTime) || undefined,
+        };
+      })
+      : undefined,
+    worstAp: str(data.worst_ap) || undefined,
+    horizonMinutes: data.horizon_minutes == null ? undefined : numeric(data.horizon_minutes),
     plans: parsePlans(data.plans, scope),
     diagnosis: intent === "fault_diagnosis" && data.detail ? parseDiagnosis(data.detail, scope) : null,
     chart: rawChart?.option ? { type: str(rawChart.type), option: obj(rawChart.option) } : null,

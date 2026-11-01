@@ -1811,6 +1811,27 @@ def _worst_ap(diagnosis: dict) -> str | None:
     return (best or {}).get("ap_id")
 
 
+_CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _cn_amount_value(text: str) -> float | None:
+    """把 '半' / '2.5' / '十二' / '三个' 这类量词转成数值（模块级，供编排与工具复用）。"""
+    if text in ("半", "半个小时", "半小时"):
+        return 0.5
+    text = text.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return float(text)
+    if text in _CN_DIGITS:
+        return float(_CN_DIGITS[text])
+    m_ = re.fullmatch(r"([一二两三四五六七八九])?十([一二三四五六七八九])?", text)
+    if m_:
+        tens = _CN_DIGITS[m_.group(1)] if m_.group(1) else 1
+        ones = _CN_DIGITS[m_.group(2)] if m_.group(2) else 0
+        return float(tens * 10 + ones)
+    return None
+
+
 def _plan_chain(req, scenario, params) -> dict | None:
     """工具链编排（阶段2）：一句话触发多步。
 
@@ -1823,7 +1844,9 @@ def _plan_chain(req, scenario, params) -> dict | None:
     """
     text = req.message
     wants_worst = any(k in text for k in ("最差", "最严重", "哪个ap", "哪个 AP", "哪里最"))
-    wants_future = any(k in text for k in ("预测", "预警", "趋势", "接下来"))
+    # "未来 N 小时" 也是未来意图（原先只认 预测/预警/趋势/接下来，
+    # 于是"哪个 AP 最差，未来 3 小时会怎样"落回单工具预测、没进编排）
+    wants_future = any(k in text for k in ("预测", "预警", "趋势", "接下来", "未来", "会怎样", "会不会"))
     if not (wants_worst and wants_future):
         return None
 
@@ -1831,31 +1854,60 @@ def _plan_chain(req, scenario, params) -> dict | None:
     window_end = req.window_end or TOOL_WINDOW_END
     steps: list[dict] = []
 
+    # 预测时长必须沿用用户请求（核查清单第 5 条）：原来固定 60 分钟，
+    # 用户说"未来 3 小时"也只给 60 分钟。这里复用 tool_forecast 的中文时长解析。
+    horizon = 60
+    _m = re.search(r'未来\s*(半|\d+(?:\.\d+)?|[零一二两三四五六七八九十]+)\s*(?:个)?\s*(分钟|分|小时|天)',
+                   req.message)
+    if _m:
+        _amount = _cn_amount_value(_m.group(1))
+        if _amount is not None:
+            _unit = _m.group(2)
+            horizon = int(round(_amount * (1440 if _unit == "天" else 60 if _unit == "小时" else 1)))
+    elif "半小时" in req.message:
+        horizon = 30
+    horizon = max(5, min(horizon, 1440))
+
     diag = analyze_anomaly(AnomalyRequest(scenario=scenario,
                                          window_start=window_start,
                                          window_end=window_end))["data"]
     worst = _worst_ap(diag)
-    steps.append({"tool": "analyze_anomaly", "status": "ok",
-                  "summary": f"研判完成，最差对象 {worst or '未识别'}（{diag.get('anomaly_type')} / {diag.get('level')}）"})
+    steps.append({"tool": "analyze_anomaly", "title": "查对象与证据", "status": "ok",
+                  "summary": f"研判完成：最差对象 {worst or '未识别'}（{diag.get('anomaly_type')} / {diag.get('level')}）",
+                  "window": {"start": window_start, "end": window_end}})
 
     forecast_payload = None
+    alerts_count = 0
+    first_alert = ""
     if worst:
         base_dt = datetime.strptime(window_end, "%Y-%m-%d %H:%M:%S")
         hist_start = (base_dt - timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:%S")
         forecast_payload = forecast_preview(ForecastPreviewRequest(
             scenario=scenario, baseTime=window_end,
             history=_TimeRange(start=hist_start, end=window_end),
-            horizonMinutes=60))["data"]
-        steps.append({"tool": "forecast_preview", "status": "ok",
-                      "summary": f"未来 60 分钟预警 {len(forecast_payload.get('alerts') or [])} 条"})
+            horizonMinutes=horizon))["data"]
+        alerts = forecast_payload.get("alerts") or []
+        alerts_count = len(alerts)
+        first_alert = (alerts[0].get("title") or "") if alerts else ""
+        steps.append({"tool": "forecast_preview", "title": "看未来风险",
+                      "status": "ok",
+                      "summary": (f"未来 {horizon} 分钟：{alerts_count} 条风险"
+                                  + (f"，首条「{first_alert}」" if first_alert else "（未检出越阈）")),
+                      "horizonMinutes": horizon,
+                      "baseTime": window_end})
 
+    # reply 要给出**结果摘要**，不能只说"已执行两步"（核查清单第 5 条）
+    reply = (f"先研判再预测：{diag.get('anomaly_type') or '正常'}，最差对象 {worst or '未识别'}；"
+             f"随后对它做了未来 {horizon} 分钟预测，"
+             + (f"检出 {alerts_count} 条风险，首条「{first_alert}」。" if alerts_count else "未检出越阈风险。")
+             + "下方按步骤列出每步的依据；需要处置方案可继续追问")
     return {
         "kind": "chain",
         "intent": "worst_ap_forecast",
         "chain": steps,
-        "reply": (f"已按两步执行：先研判找出最差对象，再对它做未来 60 分钟预测。"
-                  f"最差对象为 {worst or '未识别'}。"),
+        "reply": reply,
         "worst_ap": worst,
+        "horizon_minutes": horizon,
         "diagnosis": diag,
         "forecast": forecast_payload,
         "chart": None,

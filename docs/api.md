@@ -974,7 +974,10 @@ POST /api/forecast/analyze
 | `multi_turn.inherited` | object | 本轮从上一轮继承的槽位（指代词如"它/那个/再"触发） |
 | `multi_turn.session_new` | boolean | 本句之前该会话是否为空（= 新会话，或旧会话已被后端按 50 条上限淘汰）。前端据此提示"上文已失效"，不要假装还记得 |
 | `kind` | string | `chain` 表示本次为**多步编排**（其余为单工具，无此字段） |
-| `chain` | array | 编排轨迹：`[{tool, status, summary}]`，如 `analyze_anomaly → forecast_preview` |
+| `chain` | array | 编排步骤（**可直接渲染**，前端应逐条展示，不能只回"已执行两步"）：`[{tool, title, status, summary, window?, horizonMinutes?, baseTime?}]`，例如 `analyze_anomaly（查对象与证据）→ forecast_preview（看未来风险）` |
+| `worst_ap` | string | 编排第一步识别出的最差对象（无则省略） |
+| `horizon_minutes` | number | 编排里预测步骤**实际使用**的时长，沿用用户请求（"未来 3 小时" → 180），不是固定 60 |
+| `reply` | string | 结论摘要（含对象名与风险条数），用于不展开步骤时也能看懂 |
 
 **接口 11 `/api/forecast/preview`**
 
