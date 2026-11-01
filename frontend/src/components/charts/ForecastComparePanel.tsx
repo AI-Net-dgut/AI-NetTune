@@ -24,6 +24,22 @@ export default function ForecastComparePanel({ scope, disabled = false, archiveP
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
 
+  // 用接口返回的实际切分拼说明；取第一条含 split_points 的序列即可
+  const splitHint = (() => {
+    const series = forecast?.series;
+    if (!series) return "";
+    for (const ue of Object.values(series)) {
+      for (const item of Object.values(ue)) {
+        const row = item as { total_points?: number; train_points?: number; test_points?: number };
+        if (row?.total_points && row.train_points != null && row.test_points != null) {
+          const pct = ((row.train_points / row.total_points) * 100).toFixed(1);
+          return `${row.total_points} 点 → ${row.train_points} 训练 / ${row.test_points} 测试（训练占 ${pct}%）`;
+        }
+      }
+    }
+    return "";
+  })();
+
   // 卸载时取消在途请求
   useEffect(() => () => controller.current?.abort(), []);
 
@@ -62,7 +78,11 @@ export default function ForecastComparePanel({ scope, disabled = false, archiveP
     ) : null}
     <ForecastCompareChart forecast={forecast} pending={pending} error={error} />
     <p className="ain-ai-note">
-      口径：按 1 小时桶聚合，前 80% 训练、后 20% 测试；MAE/RMSE 是测试段逐点误差（有量纲），
+      {/* 切分必须按接口返回的实际值展示（核查清单第 7 条）：
+          实现是 split = max(int(n*0.8), n-horizon)，不是固定的前 80%/后 20%。
+          例：168 个 1 小时桶 + horizon 24 → 144 训练 / 24 测试（约 85.7% / 14.3%）。 */}
+      口径：按 1 小时桶聚合，训练/测试按 `split = max(80%, n−horizon)` 切分
+      {splitHint ? `（本次：${splitHint}）` : ""}；MAE/RMSE 是测试段逐点误差（有量纲），
       MAPE 仅作参考（对 dBm 类指标意义有限）。降级模式下预测为常数，MAE 即测试段离散度。
     </p>
   </details>;

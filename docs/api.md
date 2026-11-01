@@ -604,6 +604,7 @@ POST /api/analyze/forecast
 |series[ue][metric]|object|单个 UE × 指标的预测结果（含 method 字段：prophet / moving_average / none）|
 |bins / true|array|全量 1 小时桶实测序列（前端对比图横轴与实测线）|
 |predicted|array|测试段预测值；长度 = `n - split`，其中 `split = max(int(n*0.8), n-horizon)`。默认 30 天窗口（n=720、horizon=24）时为 **24 点**；降级路径（moving_average）已与 Prophet 使用**同一套切分**，两条路径的 predicted 长度与 true_mean 可直接比较|
+|total_points / train_points / test_points / split_points|number|**实际切分**（前端必须按这些值展示，不要写死"前 80%/后 20%"）：`split = max(int(n*0.8), n-horizon)`。实测 2 天窗口（48 桶）→ 38/10；7 天窗口（168 桶）→ **144/24（训练占 85.7%）**|
 |true_mean / pred_mean / mape|number|测试段实测均值 / 预测均值 / 平均绝对百分比误差（%）|
 |forecast_bins / forecast|array|未来 24 小时预测的时间轴与预测值|
 |lower / upper|array|未来 24 小时置信区间下 / 上限（与 forecast 等长）；**降级为 moving_average 时无置信区间，lower/upper 恒等于 forecast**，前端不应绘制置信带|

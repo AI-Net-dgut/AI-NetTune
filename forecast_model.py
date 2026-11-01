@@ -122,6 +122,12 @@ def _ma_fallback(vals: list[float], horizon: int, reason: str = "") -> dict:
         "lower": [round(pred_c, 2)] * horizon,
         "upper": [round(pred_c, 2)] * horizon,
         "degrade_reason": reason,
+        # 实际切分（前端必须按真实值展示，不能写死"前 80%/后 20%"）：
+        # split = max(int(n*0.8), n-horizon)，168 点 + horizon 24 → 144/24 ≈ 85.7%/14.3%
+        "split_points": split,
+        "train_points": len(train),
+        "test_points": len(test),
+        "total_points": n,
     }
 
 
@@ -232,6 +238,11 @@ def prophet_series(bins: list[str], vals: list[float], horizon: int) -> dict:
             "forecast": [round(float(v), 2) for v in f_future["yhat"]],
             "lower": [round(float(v), 2) for v in f_future["yhat_lower"]],
             "upper": [round(float(v), 2) for v in f_future["yhat_upper"]],
+            # 与降级路径同一套切分口径，前端按实际值展示（不用写死 80/20）
+            "split_points": split,
+            "train_points": split,
+            "test_points": n - split,
+            "total_points": n,
         }
     except TimeoutError as e:
         _prophet_state["disabled"] = True

@@ -210,10 +210,13 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           <ReplyText text={entry.answer} /><p className="ain-ai-note">{entry.analysisMode === "history" ? "历史回顾" : "固定时刻分析"} · 分析截至：{entry.analysisTime ?? "未记录"}（北京时间）</p><p className="ain-ai-note">{entry.scope}（北京时间）</p></article>)}</div>
     </details>
       <span className="ain-report-actions">
+        {/* 按钮名必须说清导的是什么（核查清单第 11 条）：后端按"时段整窗"重新研判，
+            不携带本次提问的 AP、也不带手改参数；写作"分析报告"会被当成"本次问答快照"。 */}
         <button type="button" className="ain-ai-text-button" disabled={!scope || exporting || forecastMode}
-          title={forecastMode ? "预测研判可在分析记录中查看与导出" : "按当前展示范围生成报告：研判结论、证据链、候选原因、分 AP 对比、小时趋势与处理方案"}
-          onClick={() => runExport("html")}>{exporting ? "生成中…" : "导出分析报告"}</button>
+          title={forecastMode ? "预测研判可在分析记录中查看与导出" : "按当前展示时段导出**全网**报告：后端会重新研判整窗，结论含全部 AP；本次提问的 AP 与手改参数不会被带入。如需保留本次问答与评估，请到分析记录页导出该条记录"}
+          onClick={() => runExport("html")}>{exporting ? "生成中…" : "导出该时段全网报告"}</button>
         <button type="button" className="ain-ai-text-button" disabled={!scope || exporting || forecastMode}
+          title="同上，Markdown 版"
           onClick={() => runExport("md")}>下载 Markdown</button>
       </span>
       <button type="button" className="ain-ai-text-button" disabled={query.pending || !query.history.length} onClick={query.clearHistory}>清空记录</button>

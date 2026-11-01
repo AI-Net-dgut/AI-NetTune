@@ -107,6 +107,9 @@ export interface ForecastSeriesItem {
   /** 逐点 MAPE；对 dBm 这类负值大绝对值的指标意义有限，仅作参考 */
   mape: number | null;
   bins: string[]; true: number[]; predicted: number[];
+  /** 实际切分（后端按 max(int(n*0.8), n-horizon) 计算，不是固定 80/20）。
+   *  界面必须按这些值展示，例如"168 点 → 144 训练 / 24 测试（训练占 85.7%）"。 */
+  total_points?: number; train_points?: number; test_points?: number; split_points?: number;
 }
 export interface ForecastResult {
   scenario: string; window_start: string; window_end: string; method: string;
