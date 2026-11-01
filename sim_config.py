@@ -34,6 +34,9 @@ _VERSIONS: list[dict] = []           # 历史版本（最近 50 条）
 # power  +1 dBm → RSRP +0.9 dB，PRB -1.5%
 # tilt   -1°    → RSRP +0.5 dB（下倾角减小，边缘覆盖改善）
 COEF = {
+    # plan_model 生成的参数 id 实际是 tx_power（不是 power），tilt 一致；
+    # 只认 power 会导致"方案参数被过滤掉、按钮永远禁用"（实测踩到）。
+    "tx_power": {"rsrp": 0.9, "prb_usage": -1.5, "throughput": 1.8},
     "power": {"rsrp": 0.9, "prb_usage": -1.5, "throughput": 1.8},
     "tilt": {"rsrp": 0.5, "prb_usage": -0.8, "throughput": 1.1},
 }
