@@ -242,6 +242,7 @@ _DATA_SCENARIOS = tuple(sorted(_DF_IDX.keys()))
 # 字段：timestamp/observation_id(AP-01..03)/band_id(band-0..49)/lower_mhz/upper_mhz
 #       /power_dbm/occupancy_pct/network_status(normal|weak_coverage|congestion)/scenario
 import pandas as _pd
+import sim_config  # 仿真内闭环：配置生效/回滚（见 sim_config.py）
 SPECTRUM_PATH = resolve_data_file("SPECTRUM_DATA_PATH", SPECTRUM_CANDIDATES, "频谱表", STARTUP_ISSUES)
 _SPEC = {"df": None, "max_ts": None, "bands": None}
 
@@ -410,7 +411,11 @@ def filter_rows(scenario, start_time, end_time, ap_id=None, user_id=None):
         if user_id and r["user_id"] != user_id:
             continue
         rows.append(r)
-    return rows
+    # 仿真内闭环（申报书创新点④）：有"已应用"的配置时，生效时刻之后的行按经验系数叠加偏移。
+    # 无生效配置时 adjust_rows 原样返回同一个列表，热路径零开销。
+    # 这一步让**研判 / 预测 / 热力 / 拓扑 / 趋势**都读到同一份"生效后"的数据，
+    # 而不是各画各的；回滚后自然回到原始历史（原始 CSV 从未被改写）。
+    return sim_config.adjust_rows(rows)
 
 def avg(rows, key):
     try:
@@ -4287,5 +4292,4 @@ def get_enhanced_topology(
             "avg_sinr": round(avg(rows, "sinr"), 2),
         },
     })
-
 
