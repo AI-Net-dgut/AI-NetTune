@@ -7,7 +7,7 @@
  * - 任何失败只在本条内提示，不改动上层状态，因此挂上它是零风险。
  */
 import { useCallback, useEffect, useState } from "react";
-import { applySimConfig, fetchSimConfig, rollbackSimConfig, type SimConfigStatus } from "../../services/backend";
+import { applySimConfig, fetchSimConfig, fetchSimVersions, rollbackSimConfig, type SimConfigStatus, type SimConfigVersion } from "../../services/backend";
 
 export default function SimConfigBar({ scenario, apIds, params, baseline, effectiveFrom, note, planId, disabled = false }: {
   scenario: string;
@@ -20,6 +20,7 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
   disabled?: boolean;
 }) {
   const [status, setStatus] = useState<SimConfigStatus | null>(null);
+  const [history, setHistory] = useState<SimConfigVersion[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -31,6 +32,11 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
     } catch {
       // 后端未起/接口暂不可用：静默降级为"未知"，不影响页面其它功能
       setStatus(null);
+    }
+    try {
+      setHistory(await fetchSimVersions());
+    } catch {
+      setHistory([]);   // 版本历史只是展示，失败就为空，绝不抛给界面
     }
   }, []);
 
@@ -101,5 +107,21 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
     </div>
     {notice && <p className="ain-sim-ok" role="status">{notice}</p>}
     {error && <p className="ain-sim-error" role="alert">{error}</p>}
+    {/* 版本历史（只读展示，切片 4 的零风险部分）：让人看到"这次改了什么、改过几次"，
+        不参与任何计算，接口失败也只是列表为空。 */}
+    <details className="ain-sim-history">
+      <summary>配置版本（{history.length || status?.versions || 0}）</summary>
+      {history.length
+        ? <ul>
+          {history.slice(0, 6).map(item => (
+            <li key={item.id}>
+              <strong>{item.id}</strong>
+              <span>{item.apIds.join("、")} · {Object.entries(item.params).map(([k, v]) => `${k} ${v}`).join(" · ")}</span>
+              <span>生效 {item.effectiveFrom} · 应用 {item.appliedAt}</span>
+            </li>
+          ))}
+        </ul>
+        : <p className="ain-sim-note">暂无历史版本（或接口暂不可用）。</p>}
+    </details>
   </section>;
 }

@@ -568,6 +568,22 @@ export async function fetchSimConfig(signal?: AbortSignal): Promise<SimConfigSta
   return parseSimStatus(await request("/sim/config", signal));
 }
 
+/** 版本历史（含已回滚/被替代）。只读展示用，失败时返回空数组，不抛给界面。 */
+export async function fetchSimVersions(signal?: AbortSignal): Promise<SimConfigVersion[]> {
+  const data = obj(await request("/sim/versions", signal));
+  const list = Array.isArray(data.versions) ? data.versions : [];
+  return list.map(raw => {
+    const v = obj(raw);
+    const params = obj(v.params);
+    return {
+      id: str(v.id), scenario: str(v.scenario), apIds: strings(v.apIds),
+      params: Object.fromEntries(Object.entries(params).map(([k, val]) => [k, numeric(val)])),
+      effectiveFrom: str(v.effectiveFrom), appliedAt: str(v.appliedAt),
+      note: str(v.note) || undefined, planId: str(v.planId) || undefined,
+    };
+  });
+}
+
 export async function applySimConfig(payload: {
   scenario: string; apIds: string[]; params: Record<string, number>; baseline: Record<string, number>;
   effectiveFrom: string; note?: string; planId?: string;

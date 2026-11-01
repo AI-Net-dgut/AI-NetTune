@@ -9,6 +9,13 @@
 .ain-management-integrated .ain-sim-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .ain-management-integrated .ain-sim-ok { margin: 6px 0 0; font-size: 11px; color: #2f7d4a; }
 .ain-management-integrated .ain-sim-error { margin: 6px 0 0; font-size: 11px; color: #b3261e; }
+/* 版本历史（只读，切片 4 零风险部分） */
+.ain-management-integrated .ain-sim-history { margin-top: 6px; font-size: 11px; color: #5b7186; }
+.ain-management-integrated .ain-sim-history summary { cursor: pointer; }
+.ain-management-integrated .ain-sim-history ul { margin: 4px 0 0; padding-left: 14px; }
+.ain-management-integrated .ain-sim-history li { margin-bottom: 3px; line-height: 1.6; overflow-wrap: anywhere; }
+.ain-management-integrated .ain-sim-history li strong { margin-right: 6px; color: #33587c; }
+.ain-management-integrated .ain-sim-history li span { display: block; }
 .ain-app.ain-shell .ain-workbench .ain-ai-v3 .ain-management-integrated { min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .ain-management-integrated .ain-plan-list { display: grid; gap: 6px; }
 .ain-management-integrated .ain-suggestion-card { display: block; width: 100%; text-align: left; padding: 9px 10px; border: 1px solid #dce7f2; border-radius: 7px; background: #fafcff; }
