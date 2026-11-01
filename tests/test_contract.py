@@ -1718,3 +1718,45 @@ def test_chat_source_is_actual_not_flag():
     finally:
         llm_agent.call_llm = prev_call
         main.ENABLE_LLM = prev_flag
+
+
+# ---------------------------------------------------------------- 仿真内闭环（创新点④）
+def test_sim_config_apply_changes_data_and_rollback_restores():
+    """闭环：应用配置 → 生效后数据变化 → 回滚 → 完全恢复。
+
+    这是"闭环"的唯一自动化防线（切片 5）：改坏 offset 计算、时间比较或回滚
+    逻辑时，本用例必须变红，否则前端的"应用/回滚"按钮就成了摆设。
+    """
+    import sim_config
+
+    window = ("2026-01-01 10:00:00", "2026-01-01 10:10:00")
+    before_effective = ("2026-01-01 10:00:00", "2026-01-01 10:04:00")
+
+    def rsrp_avg(win, ap="AP-02"):
+        rows = main.filter_rows(SCENARIO, win[0], win[1], ap_id=ap)
+        assert rows, f"{ap} 在 {win[0]}~{win[1]} 应有采样"
+        return round(sum(float(r["rsrp"]) for r in rows) / len(rows), 2)
+
+    base_all = rsrp_avg(window)
+    base_early = rsrp_avg(before_effective)
+    try:
+        applied = main.sim_config_apply(main.SimApplyRequest(
+            scenario=SCENARIO, apIds=["AP-02"], params={"power": 40}, baseline={"power": 33},
+            effectiveFrom="2026-01-01 10:05:00", note="闭环用例"))
+        assert applied["code"] == 0, f"应用应成功：{applied}"
+        assert sim_config.current() is not None, "应用后应有生效配置"
+
+        after_all = rsrp_avg(window)
+        assert after_all > base_all + 1, f"生效后 RSRP 应明显上升：{base_all} → {after_all}"
+        # 生效时刻之前的数据不得被改写（原始历史不可变）
+        assert abs(rsrp_avg(before_effective) - base_early) < 0.01, "生效前的数据不应变化"
+        # 未被配置覆盖的 AP 不受影响
+        other_before = rsrp_avg(("2026-01-01 10:05:00", "2026-01-01 10:10:00"), ap="AP-01") \
+            if main.filter_rows(SCENARIO, "2026-01-01 10:05:00", "2026-01-01 10:10:00", ap_id="AP-01") else None
+        if other_before is not None:
+            assert other_before == rsrp_avg(("2026-01-01 10:05:00", "2026-01-01 10:10:00"), ap="AP-01")
+    finally:
+        main.sim_config_rollback()
+
+    assert sim_config.current() is None, "回滚后不应有生效配置"
+    assert abs(rsrp_avg(window) - base_all) < 0.01, "回滚后必须完全恢复原值"

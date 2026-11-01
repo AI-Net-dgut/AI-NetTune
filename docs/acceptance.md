@@ -220,3 +220,45 @@ Prophet 切 24 点，报表里 MA 会显得"更准 33%~45%"，同切分下其实
 > **全周 1 分钟粒度**实测 **0.2047%**（18 个误报基准 / 8792 个非事件基准，落在 **14 处**误报点）。
 > 研判与预警使用**同一套故障定义**（网络维 + 频谱维，任一越阈即判故障），边界窗口口径一致率 **100%**。**
 > 唯一做不到的是**零前兆的突发跌落**——那需要更灵敏的前兆判据，而实测其精确率只有 22%，我们选择不做，避免给用户一堆误报。
+
+---
+
+## 六、闭环演示脚本（申报书创新点④"闭环优化"）
+
+**口径**：这里是**仿真内闭环**——把方案参数应用到仿真网络，之后的数据/图表/告警跟着变，可回滚；
+**不下发真实网络配置**，也不需要真实设备。原始历史**永不被改写**（偏移只在读取时叠加）。
+
+复跑步骤（约 1 分钟）：
+
+```powershell
+# 1) 先看应用前的同窗口均值（AP-02，2026-01-01 10:00~10:10）
+python -c "import sys;sys.path.insert(0,r'.');import main;
+rows=main.filter_rows('校园','2026-01-01 10:00:00','2026-01-01 10:10:00',ap_id='AP-02');
+print('应用前 RSRP', round(sum(float(r['rsrp']) for r in rows)/len(rows),2))"
+
+# 2) 应用配置（power 33 → 40 dBm，10:05 起生效）
+python -c "import sys;sys.path.insert(0,r'.');import main;
+r=main.sim_config_apply(main.SimApplyRequest(scenario='校园',apIds=['AP-02'],params={'power':40},
+  baseline={'power':33},effectiveFrom='2026-01-01 10:05:00',note='验收演示'));
+print('code', r['code'], r['data']['version']['id'])"
+
+# 3) 再看同一窗口（应明显上升；10:05 之前的分钟不变）
+# 4) 回滚，恢复原值
+python -c "import sys;sys.path.insert(0,r'.');import main;print(main.sim_config_rollback()['code'])"
+```
+
+**预期结果**（本机实测）：应用前 RSRP ≈ **−96.31 dBm** → 应用后 ≈ **−92.87 dBm**（6/11 分钟生效，
+偏移 +6.3 dB 按分钟摊）；回滚后回到 **−96.31 dBm**，`active` 变为 `null`。
+
+**自动化防线**：`tests/test_contract.py::test_sim_config_apply_changes_data_and_rollback_restores`
+已覆盖"应用→变化→生效前不变→回滚→完全恢复"；变异测试证实：把 `_offsets` 改成恒空，
+该用例立即失败（`生效后 RSRP 应明显上升：-96.31 → -96.31`）。
+
+**边界（答辩时如实说明）**：
+
+| 项 | 说明 |
+|---|---|
+| 生效范围 | 只影响 `effectiveFrom` 之后的采样；之前的历史保持原值 |
+| 偏移模型 | 线性经验系数（power +1 dBm ≈ RSRP +0.9 dB、PRB −1.5%），**不是物理传播模型** |
+| 未覆盖 | 不模拟邻区干扰、切换、负载迁移；不做真实下发与现网验证 |
+| 持久化 | 配置存 `data/sim_config.json`（不入库），只读环境降级为仅内存 |
