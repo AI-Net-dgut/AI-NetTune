@@ -4293,3 +4293,75 @@ def get_enhanced_topology(
         },
     })
 
+
+# ============ 仿真内闭环：把方案参数应用到仿真网络（申报书创新点④） ============
+class SimApplyRequest(BaseModel):
+    scenario: str
+    apIds: list[str]
+    params: dict[str, float]          # {"tilt": 5, "power": 33}
+    baseline: dict[str, float]        # 当前工参，用于算"改了多少"
+    effectiveFrom: str                # yyyy-MM-dd HH:mm:ss，之后的数据才生效
+    note: str = ""
+    planId: str | None = None
+
+
+@app.get("/api/sim/config", summary="接口18：仿真配置状态（当前生效 + 版本数）")
+def sim_config_status():
+    """返回当前生效的仿真配置；未应用时 active 为 null。
+
+    为什么单独一个只读接口：前端要在顶部常驻"仿真配置生效中"横幅，
+    并据此在告警/预测旁标注"当前处于 vN 配置下"，不能靠猜。
+    """
+    return success_response(sim_config.describe())
+
+
+@app.get("/api/sim/versions", summary="接口19：仿真配置版本历史")
+def sim_config_versions():
+    return success_response({"versions": sim_config.versions()})
+
+
+@app.post("/api/sim/apply", summary="接口20：把方案参数应用到仿真网络（可回滚）")
+def sim_config_apply(req: SimApplyRequest):
+    """应用后：effectiveFrom 之后的数据按经验系数偏移，研判/预测/热力/拓扑全部随之变化。
+
+    原始历史**不会被改写**（偏移只在读取时叠加），回滚即恢复原样。
+    """
+    if req.scenario not in VALID_SCENARIOS:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "scenario仅支持" + "/".join(VALID_SCENARIOS))
+    try:
+        _parse_ts(req.effectiveFrom)
+    except (ValueError, TypeError):
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"effectiveFrom 格式应为 yyyy-MM-dd HH:mm:ss（收到 {req.effectiveFrom}）")
+    if not req.apIds:
+        return error_response(ERROR_CODE["PARAM_MISSING"], "apIds 不能为空")
+    try:
+        version = sim_config.apply(req.scenario, req.apIds, req.params, req.effectiveFrom,
+                                   baseline=req.baseline, note=req.note, plan_id=req.planId)
+    except ValueError as exc:
+        return error_response(ERROR_CODE["PARAM_INVALID"], str(exc))
+    return success_response({
+        "version": version,
+        "status": sim_config.describe(),
+        "notice": ("已应用到仿真网络：该时刻之后的数据会按新配置偏移，所有图表与告警随之变化；"
+                   "原始历史未被改写，可随时回滚。"),
+    })
+
+
+@app.post("/api/sim/rollback", summary="接口21：回滚仿真配置（恢复原始历史）")
+def sim_config_rollback(versionId: str | None = Query(None, description="要回滚的版本号；不传则回滚当前生效的")):
+    # 进程内直调时 versionId 会是 Query 默认对象而不是 None（本项目的测试与脚本都直调 handler），
+    # 不防御就会把 Query 实例当版本号、抛 ValueError 变成 40002。
+    _vid = versionId if isinstance(versionId, str) else None
+    try:
+        target = sim_config.rollback(_vid)
+    except ValueError as exc:
+        return error_response(ERROR_CODE["PARAM_INVALID"], str(exc))
+    return success_response({
+        "rolledBack": target,
+        "status": sim_config.describe(),
+        "notice": "已恢复原始历史：该时段数据回到应用前状态。",
+    })
+
+

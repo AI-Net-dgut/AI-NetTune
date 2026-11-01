@@ -141,6 +141,14 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         }} /><button type="submit" className="ain-button ain-primary" disabled={sendBlocked || (currentEmpty && !questionTime) || !draft.trim()}>
           {query.pending ? "分析中…" : followingLive && !questionTime ? "先固定时刻" : "发送"}</button></div>
       <div className="ain-query-input-meta"><span>{followingLive ? (replay?.canAnalyzeQuestionTime ? "历史时间或未来预测可直接发送；未来问题会固定查看时刻并打开预测。" : "可先编辑问题；固定当前时刻后发送，主时钟播放状态不变。") : "未来问题进入预测预警；点击示例填入后可编辑 · Ctrl / Cmd + Enter"}</span><span>{draft.length}/500</span></div>
+      {/* 常驻操作提示（核查清单第 10 条）：主时钟在走时必须让人看见
+          "时钟仍在走 / 分析时刻已固定"的区别，不能只靠一次性的警告条。 */}
+      {followingLive && (
+        <p className="ain-query-livehint" role="status">
+          主时钟正在播放：普通问题需先固定分析时刻（结果会标注分析截至时间）；含历史时间或未来预测的问题可直接发送。
+          点「固定当前时刻」可立即固定。
+        </p>
+      )}
     </form>
     {forecastMode && <p className="ain-ai-note">当前展示预测风险研判。发送当前网络或历史分析问题时，将切换分析对象。</p>}
     {sendNotice && <p className="ain-ai-warning" role="status">{sendNotice}</p>}

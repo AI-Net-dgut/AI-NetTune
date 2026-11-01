@@ -207,6 +207,10 @@ export default function SpatialFrameGrid({
           <p>每个格子为该位置网络 KPI 的插值估计，用于观察区域变化；上方预警按频谱逐频段数值判定，不能仅凭此图颜色判断是否触发告警。</p>
           <p>每帧 {num(series.frameMinutes)} 分钟；本图历史范围：{series.past[0]?.start ?? "无历史帧"} — {series.past.at(-1)?.end ?? baseTime}。
             调整查看未来范围会改变每帧时长和历史取样范围。本图与弹窗顶部的参考历史是两套窗口。</p>
+          {/* 采样与插值必须说清（核查清单第 8 条）：26×26 网格不等于 676 个位置都真有测量，
+              数据来自 3 个移动 UE 的有限轨迹 + IDW 插值 + 逐格外推。 */}
+          <p><strong>采样与插值</strong>：原始数据只有 3 个移动 UE 的轨迹采样，网格由 IDW 插值生成，
+            格点数量不代表该位置有实测；离采样点越远的格子越不可靠。未来帧是趋势外推，不是预测的实测值。</p>
           {series.note && <p>{series.note}</p>}
         </details>
       </div>

@@ -176,7 +176,7 @@ def test_api_routes_map_to_expected_functions():
     """
     api = {r.path: r.endpoint.__name__ for r in main.app.routes
            if hasattr(r, "endpoint") and r.path.startswith("/api")}
-    assert len(api) == 17, f"/api 路由数量应为 17，实得 {len(api)}"
+    assert len(api) == 21, f"/api 路由数量应为 21（17 业务 + 4 仿真闭环），实得 {len(api)}"
 
     expected = {
         "/api/data/query": "data_query",
