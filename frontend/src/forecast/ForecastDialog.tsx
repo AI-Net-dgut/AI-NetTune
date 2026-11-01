@@ -9,7 +9,7 @@ import SpatialFrameGrid from "./SpatialFrameGrid";
 import { forecastTrendOption } from "./charts";
 import type { ForecastRequest, ForecastResult, ForecastHandoff } from "./types";
 import { FORECAST_HORIZONS } from './config';
-import { toEpoch } from '../services/backend';
+import { fetchSimConfig, toEpoch } from '../services/backend';
 import "./ForecastDialog.css";
 
 const level = { high: "高", medium: "中", low: "低" };
@@ -22,6 +22,15 @@ export default function ForecastDialog({ request, result, pending, error, onClos
 }) {
   const [selected, setSelected] = useState<string | null>(null), dialog = useRef<HTMLElement>(null);
   const [globalMetric, setGlobalMetric] = useState("");
+  // 当前生效的仿真配置（闭环切片 4b）：仅用于在标题旁标注，取不到就不显示
+  const [simActiveId, setSimActiveId] = useState("");
+  useEffect(() => {
+    let alive = true;
+    fetchSimConfig()
+      .then(status => { if (alive) setSimActiveId(status.active?.id ?? ""); })
+      .catch(() => { if (alive) setSimActiveId(""); });
+    return () => { alive = false; };
+  }, []);
   const scopedAlerts = (result?.alerts ?? []).filter(a => !request.targetWindow
     || (a.start <= request.targetWindow.end && a.end > request.targetWindow.start));
   const alert = scopedAlerts.find(a => a.id === selected) ?? scopedAlerts[0];
@@ -71,7 +80,11 @@ export default function ForecastDialog({ request, result, pending, error, onClos
         else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { event.preventDefault(); first.focus(); }
       }}>
       <header className="ain-forecast-dialog-heading"><div><span className="ain-forecast-eyebrow">AI-NetTune · 未来风险</span>
-        <div className="ain-forecast-title-row"><h2 id="ain-forecast-title">预测预警</h2><span className="ain-forecast-count">{pending ? "生成中" : error ? "更新失败" : result?.status === "ready" ? `${demo ? "示例 · " : ""}${scopedAlerts.length} 项需关注` : "暂不能预测"}</span></div></div>
+        <div className="ain-forecast-title-row"><h2 id="ain-forecast-title">预测预警</h2><span className="ain-forecast-count">{pending ? "生成中" : error ? "更新失败" : result?.status === "ready" ? `${demo ? "示例 · " : ""}${scopedAlerts.length} 项需关注` : "暂不能预测"}</span>
+          {/* 仿真配置生效标注（闭环切片 4b）：只读 /api/sim/config，失败静默不显示；
+              不做任何数据计算，纯粹告诉用户"本轮预测是在 vN 配置下算的"。 */}
+          {simActiveId && <span className="ain-forecast-sim-tag" title="该配置只影响生效时刻之后的数据，可在方案面板回滚">仿真配置 {simActiveId}</span>}
+        </div></div>
         <div className="ain-forecast-dialog-actions">
           {onToggleFollow && !fixedView && <button type="button" aria-pressed={follow} onClick={onToggleFollow}
             title={`开启后，在主时钟播放中每 ${followStepMinutes} 分钟自动重新预测；暂停或关闭时固定在当前基准，需手动刷新`}>{follow ? "⏱ 跟随主时钟" : "已固定时刻"}</button>}

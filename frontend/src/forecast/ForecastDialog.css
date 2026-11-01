@@ -11,6 +11,8 @@
 .ain-forecast-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 3px; }
 .ain-forecast-title-row h2 { font-size: 22px; font-weight: 700; }
 .ain-forecast-count { padding: 4px 9px; border-radius: 20px; background: #fff0ce; color: #9f6210; font-size: 11px; }
+/* 仿真配置生效标注（闭环切片 4b）：只读展示，无生效配置时不渲染 */
+.ain-forecast-sim-tag { margin-left: 6px; padding: 3px 8px; border-radius: 20px; background: #e7f6ec; color: #2f7d4a; font-size: 11px; white-space: nowrap; }
 .ain-forecast-dialog-actions { display: flex; gap: 6px; align-items: center; }
 .ain-forecast-dialog-actions button { color: #3977cb; white-space: nowrap; }
 .ain-forecast-dialog-actions button:last-child { border-color: transparent; font-size: 22px; padding: 2px 8px; }
