@@ -158,9 +158,22 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     </section>
 
     <section className="ain-effect-summary" aria-labelledby="ain-effect-heading">
-      <div className="ain-ai-subheading"><h4 id="ain-effect-heading">仿真预计效果</h4><span>{currentEffect ? '仿真结果' : selected?.simulation?.status === 'completed' ? '待重新评估' : selected ? '尚未评估' : '尚未选择方案'}</span></div>
+      <div className="ain-ai-subheading"><h4 id="ain-effect-heading">仿真预计效果</h4><span>{
+        // 徽标必须区分"没选""选了没跑""跑失败了""跑过但参数变了"（复审 P3：
+        // 失败态曾显示"尚未评估"，把"已失败"说成"未评估"）
+        currentEffect ? '仿真结果'
+          : selected?.simulation?.status === 'failed' ? '评估失败'
+            : selected?.simulation?.status === 'completed' ? '待重新评估'
+              : selected ? '尚未评估' : '尚未选择方案'
+      }</span></div>
       {currentEffect ? <PlanEffects key={currentEffect.id} result={currentEffect} /> : <div className="ain-effect-pending" role="status">
-        <strong>{selected?.simulation?.status === 'completed' ? '参数或范围已变化，原仿真结果不再展示。' : selected?.simulation ? selected.simulation.summary || '此方案未返回可用仿真结果。' : '尚未选择方案，暂无仿真结果'}</strong>
+        <strong>{
+          // 正文与徽标、与上方"已选 N 个方案"必须自洽：已选中时不能再说"尚未选择方案"
+          selected?.simulation?.status === 'failed' ? (selected.simulation.summary || '仿真失败，请调整参数后重试。')
+            : selected?.simulation?.status === 'completed' ? '参数或范围已变化，原仿真结果不再展示。'
+              : selected?.simulation ? (selected.simulation.summary || '此方案未返回可用仿真结果。')
+                : selected ? '已选择方案，尚未运行仿真' : '尚未选择方案，暂无仿真结果'
+        }</strong>
         <p>{selected
           ? '点下方「运行方案仿真」，这里会展示原配置与新方案的图表和指标对比。'
           : '这里只对接「现存网络异常」的研判：先完成研判并选择方案，才会出现参数与仿真。'

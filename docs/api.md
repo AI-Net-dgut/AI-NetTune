@@ -964,12 +964,14 @@ POST /api/forecast/analyze
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `intent_debug.intent` | string | 识别到的意图 |
-| `intent_debug.source` | string | `rule`（规则命中）/ `llm`（大模型识别）/ `fallback`（兜底） |
+| `intent_debug.source` | string | **按实际结果**标注：`llm`（模型真的给出可用意图）/ `rule`（规则命中：含开关关闭、模型失败、输出不可解析三种情况）/ `fallback`（规则未命中且没走模型）。不要用"是否启用 LLM"推断该字段 |
+| `intent_debug.degrade_reason` | string\|null | 没走成模型的具体原因：`未启用大模型（未配置 LLM_API_KEY 或 NETTUNE_ENABLE_LLM=0）` / `模型调用失败：TimeoutError` / `模型输出无法解析` / `模型输出的 action 不可用`；走模型成功时为 `null` |
 | `intent_debug.rule_hit` | boolean | 关键词规则是否命中 |
 | `intent_debug.llm_enabled` | boolean | 当前是否启用大模型 |
 | `intent_debug.parsed` | object | 解析到的槽位：`scenario` / `ap_id` / `time_range` / `window` |
 | `multi_turn.turns` | number | 该 session 累计轮次 |
 | `multi_turn.inherited` | object | 本轮从上一轮继承的槽位（指代词如"它/那个/再"触发） |
+| `multi_turn.session_new` | boolean | 本句之前该会话是否为空（= 新会话，或旧会话已被后端按 50 条上限淘汰）。前端据此提示"上文已失效"，不要假装还记得 |
 | `kind` | string | `chain` 表示本次为**多步编排**（其余为单工具，无此字段） |
 | `chain` | array | 编排轨迹：`[{tool, status, summary}]`，如 `analyze_anomaly → forecast_preview` |
 

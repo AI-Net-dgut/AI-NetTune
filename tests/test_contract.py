@@ -1645,16 +1645,28 @@ def test_data_numeric_bounds():
 
 # ---------------------------------------------------------------- 核查清单 2026-11-01 第 3/4 条
 def test_causal_question_routes_to_diagnosis():
-    """「为什么信号差」必须进故障研判，不能被黑名单打成 KPI 查询（核查清单第 3 条）。"""
+    """「为什么信号差」必须进故障研判，不能被黑名单打成 KPI 查询（核查清单第 3 条）。
+
+    同时守住边界：非网络问句（"为什么审批这么慢"）与纯概念问句（"什么是弱覆盖"）
+    不能被误判成故障研判（复审 P2/P3）。
+    """
     prev = main.ENABLE_LLM
     main.ENABLE_LLM = False          # 无 LLM 的降级路径才是问题现场
+    sessions_before = set(main._SESSIONS)
     try:
         for msg in ("为什么 AP-03 信号差", "这个 AP 为什么掉线", "网络怎么这么卡，什么原因"):
             d = _data(main.agent_chat(main.ChatRequest(message=msg, scenario=SCENARIO)))
             got = d["intent_debug"]["intent"]
             assert got == "fault_diagnosis", f"「{msg}」应进故障研判，实得 {got}"
+        for msg in ("为什么审批这么慢", "为什么我的键盘这么卡", "什么是弱覆盖"):
+            d = _data(main.agent_chat(main.ChatRequest(message=msg, scenario=SCENARIO)))
+            got = d["intent_debug"]["intent"]
+            assert got != "fault_diagnosis", f"「{msg}」不该进故障研判，实得 {got}"
     finally:
         main.ENABLE_LLM = prev
+        # 清掉本用例新建的会话，避免污染后续用例（复审 P3）
+        for key in set(main._SESSIONS) - sessions_before:
+            main._SESSIONS.pop(key, None)
 
 
 def test_chat_source_is_actual_not_flag():

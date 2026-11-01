@@ -52,7 +52,7 @@
 
 * ✅ 仿真数据生成 + CSV 导入
 
-* ✅ React + TypeScript 前端（首页 / 工作台 / 分析记录三页，已与前端的 12 条业务接口联动）
+* ✅ React + TypeScript 前端（首页 / 工作台 / 分析记录三页，已与后端的 **13 条**业务接口联动；未调用的 8/9/13/16 见下）
 
 ## 技术栈
 
@@ -241,7 +241,7 @@ AI-NetTune/
 │   └── start_backend.ps1 # Windows 一键启动（自动挑 ≥3.10 解释器，-Reload / -Port）
 ├── tests/
 │   ├── run_tests.py   # 零依赖测试运行器（不需要 pytest / httpx）
-│   └── test_contract.py  # 接口契约测试（67 项，以 run_tests 输出为准）
+│   └── test_contract.py  # 接口契约测试（69 项，以 run_tests 输出为准）
 ├── data/              # 数据文件（.gitignore 忽略大文件，仅保留 README.md）
 │   ├── README.md              # 数据交付清单（大小 / SHA256 / 时间范围）
 │   ├── network_data_30d.csv   # 30 天，129,600 条 × 18 列（后端默认读取）

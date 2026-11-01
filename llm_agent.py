@@ -21,13 +21,29 @@ BLACKLIST_PATTERNS = [
     "解释", "怎么看", "啥原因", "是什么",
 ]
 
-# 因果问句 + 网络故障词 → 必须走故障研判，不能被黑名单打成"概念解释"。
+# 与 main.TOOLS 的键保持一致（模型只允许返回这些动作名，其它一律按不可解析降级）
+TOOL_NAMES = {"query_kpi", "fault_diagnosis", "get_heatmap", "get_topology", "forecast", "chat"}
+
+# 因果问句 + 网络故障词 → 走故障研判，不能被黑名单打成"概念解释"。
 # 依据：核查清单第 3 条实测——"为什么 AP-03 信号差"落到 query_kpi，
 # 同一窗口"分析 AP-03 故障"却能进 fault_diagnosis，问原因反而看不到候选原因与方案。
-CAUSAL_DIAGNOSIS_HINTS = [
-    "信号差", "信号弱", "弱覆盖", "掉线", "断线", "卡顿", "卡", "慢", "拥塞",
-    "丢包", "延迟高", "时延高", "速率低", "网速", "不通", "故障", "异常", "覆盖不好",
+#
+# 注意（复审 P2）：**不要放单字**（"卡""慢"）。单字会让"为什么银行卡被冻结了"
+# "为什么审批这么慢"这类与网络无关的问句也进网络研判，返回的却是网络拥塞结论。
+# 所以拆成两类：强词本身就指向网络；弱词必须配合网络上下文才算（"网络怎么这么卡" vs "键盘这么卡"）。
+CAUSAL_HINTS_STRONG = [
+    "信号差", "信号弱", "弱覆盖", "掉线", "断线", "卡顿", "网络卡", "上网卡",
+    "网速", "丢包", "延迟高", "时延高", "速率低", "拥塞", "覆盖不好", "网络差", "网络慢",
 ]
+CAUSAL_HINTS_WEAK = ["太卡", "很卡", "这么卡", "卡得", "不通", "故障", "异常"]
+NETWORK_CONTEXT = [
+    "网络", "信号", "AP", "ap", "基站", "覆盖", "上行", "下行", "蜂窝",
+    "5G", "5g", "WiFi", "wifi", "频谱", "频段", "小区", "用户", "UE", "时延", "丢包",
+]
+# 兼容旧引用（测试/外部脚本可能只引用这一个名字）
+CAUSAL_DIAGNOSIS_HINTS = CAUSAL_HINTS_STRONG + CAUSAL_HINTS_WEAK
+# 纯概念解释标志：即使带故障词也留在黑名单（"解释一下什么是掉线""什么是弱覆盖"）
+CONCEPT_PATTERNS = ["什么是", "是什么意思", "解释", "概念", "定义", "原理", "区别"]
 
 # 白名单：按优先级分层匹配工具意图（明确的指令词优先，避免宽泛词抢意图）
 HEATMAP_PATTERNS = ["热力", "信号分布", "覆盖图", "覆盖热", "地图"]
@@ -201,23 +217,34 @@ def rule_intent(message: str) -> dict:
     if tr:
         params["time_range"] = tr
 
-    # ② 黑名单：问原因/求解释 → 不触发工具白名单（hit=False，留给 LLM 或 KPI 兜底）
-    # ② 因果问句但**确实在问网络故障** → 走故障研判（核查清单第 3 条）：
-    # "为什么信号差""这个 AP 为什么掉线"必须能看到候选原因、证据与方案，
-    # 不能被黑名单打成 query_kpi。纯概念解释（"什么是 SINR""解释一下切换"）仍走黑名单。
-    if any(k in message for k in BLACKLIST_PATTERNS):
-        if any(k in message for k in CAUSAL_DIAGNOSIS_HINTS):
-            return {"intent": "fault_diagnosis", "params": params, "hit": True,
-                    "reason": "因果问句命中网络故障词"}
-        return {"intent": "query_kpi", "params": params, "hit": False}
-
-    # ③ 白名单（明确指令词优先：热力图 > 拓扑 > 研判）
+    # ② 白名单（明确指令词优先：热力图 > 拓扑 > 预测 > 研判）
+    #    必须先于④的因果分支判断 —— 否则"为什么未来两小时会拥塞""为什么热力图这块信号弱"
+    #    会被因果分支抢先判成故障研判，返回的是过去 24 小时的拥塞摘要（复审 P2）。
     if any(k in message for k in HEATMAP_PATTERNS):
         return {"intent": "get_heatmap", "params": params, "hit": True}
     if any(k in message for k in TOPOLOGY_PATTERNS):
         return {"intent": "get_topology", "params": params, "hit": True}
     if any(k in message for k in FORECAST_PATTERNS):
         return {"intent": "forecast", "params": params, "hit": True}
+
+    # ③ 因果问句但**确实在问网络故障** → 走故障研判（核查清单第 3 条）：
+    # "为什么信号差""这个 AP 为什么掉线"必须能看到候选原因、证据与方案，
+    # 不能被黑名单打成 query_kpi。纯概念解释（"什么是 SINR""解释一下切换"）仍走黑名单。
+    _concept_only = any(k in message for k in CONCEPT_PATTERNS)
+    _net_context = any(k in message for k in NETWORK_CONTEXT)
+    _causal_net = (any(k in message for k in CAUSAL_HINTS_STRONG)
+                   or (_net_context and any(k in message for k in CAUSAL_HINTS_WEAK)))
+    if any(k in message for k in BLACKLIST_PATTERNS):
+        if not _concept_only and _causal_net:
+            return {"intent": "fault_diagnosis", "params": params, "hit": True,
+                    "reason": "因果问句命中网络故障词"}
+        return {"intent": "query_kpi", "params": params, "hit": False}
+
+    # ③-2 纯概念解释（"什么是弱覆盖""解释一下 SINR"）即使含故障词也不要进研判：
+    #     否则会把"问定义"答成"你这个网络有故障"（复审 P3）。
+    if _concept_only:
+        return {"intent": "query_kpi", "params": params, "hit": False}
+
     # ③b "分析/排查/诊断/研判"这类动作词 → 走研判（要的是结论+方案，不是指标罗列）。
     # 但若同时出现明确的指标词（RSRP/SINR/吞吐/指标/数据…），说明用户要的是数值，
     # 仍按 KPI 查询处理，避免把"分析一下各 AP 的 RSRP"也变成研判。
@@ -241,16 +268,20 @@ def get_intent(message: str) -> dict:
     try:
         raw = call_llm(build_unified_prompt(message))
         obj = parse_unified_response(raw)
-        if obj and obj.get("action"):
+        # action 必须是**已知工具名字符串**：模型偶尔返回 ["query_kpi"] 这类列表，
+        # 之前会当成成功（source=llm），到 main 里 `intent not in TOOLS` 抛
+        # TypeError → 接口 500（复审 P3）。类型/取值不对一律按"不可解析"降级。
+        action = obj.get("action") if isinstance(obj, dict) else None
+        if isinstance(action, str) and action in TOOL_NAMES:
             return {
-                "intent": obj["action"],
+                "intent": action,
                 "params": obj.get("params", {}) if isinstance(obj.get("params", {}), dict) else {},
                 "hit": False,
                 "scenario": obj.get("scenario", ""),
                 "confidence": obj.get("confidence", 0),
                 "source": "llm",
             }
-        reason = "模型输出无法解析"
+        reason = "模型输出的 action 不可用" if action is not None else "模型输出无法解析"
     except Exception as exc:  # noqa: BLE001 - 降级是设计行为，只记录原因
         reason = f"模型调用失败：{type(exc).__name__}"
     result = rule_intent(message)

@@ -104,7 +104,7 @@ data/spectrum_7d.csv ──load_spectrum()──► _SPEC{df, bands, min_ts, max
 
 | 手段 | 现状 |
 |---|---|
-| 契约测试 | `tests/test_contract.py` **67 项**，覆盖接口关键语义（数字随测试增长，以 `python tests/run_tests.py` 输出为准） |
+| 契约测试 | `tests/test_contract.py` **69 项**，覆盖接口关键语义（数字随测试增长，以 `python tests/run_tests.py` 输出为准） |
 | HTTP 冒烟 | `scripts/smoke_endpoints.py`（已入仓库），覆盖 **17 条业务接口**（含 `/api/forecast/plans`；`/api/download/reports` 为报告文件下载，不在冒烟内），每轮改动后执行（当前 17/17） |
 | 一键全量 | `python scripts/verify_all.py`：测试 / 口径一致率 / 数据对账 / 死代码 / 前端 tsc+eslint（`--smoke` 追加 HTTP 冒烟），逐项打印 PASS/FAIL，任一失败退出码 1 |
 | Prophet 自检 | `python scripts/check_prophet.py`：临时目录可写性、预热耗时与状态、单序列实测 `method`；退出码 0=可用 / 1=已降级（附原因）/ 2=未安装 |

@@ -436,21 +436,16 @@ export async function exportReport(scope: QueryScope, format: "md" | "html" = "h
  * 会话 ID：后端按这个值保存历史轮次与 AP 槽位（供"它/这个/继续"指代）。
  * 之前固定发 "frontend-p0"，同一后端上任何浏览器/标签页都共用一个会话，
  * 会出现"A 页面问 AP-01，B 页面说'那给它出个方案'却继承了 AP-01"（核查清单第 2 条）。
- * 现在每个标签页一个独立会话，存在 sessionStorage（刷新保持、关标签页即失效）。
+ *
+ * 为什么**不**用 sessionStorage：带 opener 打开的新标签（复制标签页 / Ctrl+点击 /
+ * window.open）会**复制** opener 的 sessionStorage，两页拿到同一个 id → 串会话复发
+ * （复审 P2-3，MDN 明确 sessionStorage 在 opener 场景是初始拷贝）。
+ * 因此改成"每次页面加载生成一次、只存内存"：宁可刷新后丢上下文，也不跨页串话。
+ * 用户侧可通过响应里的 multi_turn.session_new 得知"这是新会话"。
  */
-const SESSION_KEY = "aintune-chat-session";
+const CHAT_SESSION_ID = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 function chatSessionId(): string {
-  try {
-    const store = (globalThis as unknown as { sessionStorage?: Storage }).sessionStorage;
-    const existing = store?.getItem(SESSION_KEY);
-    if (existing) return existing;
-    const created = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    store?.setItem(SESSION_KEY, created);
-    return created;
-  } catch {
-    // 隐私模式禁用 sessionStorage：退回每次调用生成临时 ID（宁可丢上下文，也不要串会话）
-    return `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  }
+  return CHAT_SESSION_ID;
 }
 
 export async function chatNetwork(message: string, scenario: string, window?: QueryScope, signal?: AbortSignal, currentTime?: string): Promise<ChatResult> {
@@ -468,8 +463,15 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
   };
   validateScope(scope);
   const intent = str(data.intent), rawChart = data.chart ? obj(data.chart) : null;
+  const debug = data.intent_debug ? obj(data.intent_debug) : {};
+  const multi = data.multi_turn ? obj(data.multi_turn) : {};
+  const rawSource = str(debug.source);
   return {
     reply: requiredString(data.reply, "reply"), intent, scope,
+    // 来源必须原样透出：界面据此显示"规则识别/模型未启用"，不再一律写"AI 回答"
+    intentSource: rawSource === "llm" || rawSource === "rule" || rawSource === "fallback" ? rawSource : undefined,
+    intentDegradeReason: str(debug.degrade_reason) || undefined,
+    sessionIsNew: multi.session_new === true ? true : multi.session_new === false ? false : undefined,
     plans: parsePlans(data.plans, scope),
     diagnosis: intent === "fault_diagnosis" && data.detail ? parseDiagnosis(data.detail, scope) : null,
     chart: rawChart?.option ? { type: str(rawChart.type), option: obj(rawChart.option) } : null,

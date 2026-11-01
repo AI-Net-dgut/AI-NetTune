@@ -1641,6 +1641,10 @@ def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> 
         f"验证后比较覆盖分布、相关指标与连接关系，判断是否改善及是否引入新问题。"
     )
     # ---- LLM 润色：只喂结构化证据，禁止它编数据 ----
+    # 必须尊重 ENABLE_LLM（复审 P3）：此前后端只要配了 Key 就发请求，
+    # NETTUNE_ENABLE_LLM=0 也照样联网；测试里也会因此真打外部接口。
+    if not ENABLE_LLM:
+        return fallback
     try:
         evidence = {
             "scenario": scenario, "window": [win_start, win_end],
@@ -2194,10 +2198,19 @@ def agent_chat(req: ChatRequest):
     intent_source = "rule" if hit else "fallback"
     # 降级原因（模型不可用/输出不可解析时才非空），随响应透出，便于说明"这句为什么没走大模型"
     intent_degrade_reason = ""
+    if not ENABLE_LLM:
+        # 无 key / 显式关闭时也要给出原因，否则"没走大模型"在响应里看不出为什么（复审 P3）
+        intent_degrade_reason = ("未启用大模型（未配置 LLM_API_KEY 或 NETTUNE_ENABLE_LLM=0），"
+                                 "本句由规则识别")
     # 大模型自评的意图理解置信度（0~1）。规则命中路径没有这个值，保持 None —— 
     # 不拿规则分数冒充"概率"，与 B-6 的 rule_score 口径一致。
     intent_confidence: float | None = None
-    turns = _SESSIONS.get(req.session_id, [])
+    # 读取时把会话移到末尾 → FIFO 变 LRU：持续活跃的老标签页不会被新会话挤掉（复审 P3）。
+    turns = _SESSIONS.pop(req.session_id, [])
+    if turns:
+        _SESSIONS[req.session_id] = turns
+    # 是否新会话/是否已被淘汰：前端据此提示"上文已失效"，不要假装还记得
+    session_is_new = not turns
     context_note = _context_line(turns) if turns else ""
     if not hit and ENABLE_LLM:
         try:
@@ -2214,7 +2227,9 @@ def agent_chat(req: ChatRequest):
             # 标记意图来源，便于前端/答辩说明"这句是大模型识别的还是规则识别的"。
             # 必须沿用 llm_agent.get_intent 给出的实际 source（核查清单第 4 条）：
             # 该函数失败时返回的是规则结果，之前只看"有没有 intent"会误标成 llm。
-            intent_source = intent_obj.get("source") or ("llm" if intent_obj.get("intent") and intent_obj.get("source") is None else "rule")
+            # 直接采用 llm_agent.get_intent 给出的实际 source，**不再**用"有 intent 就标 llm"
+            # 兜底（复审 P3：那正是本次要消除的反模式，留着就是活口子）。
+            intent_source = intent_obj.get("source") or "rule"
             if intent_obj.get("degrade_reason"):
                 intent_degrade_reason = str(intent_obj["degrade_reason"])
             if intent_obj.get("intent"):
@@ -2305,6 +2320,8 @@ def agent_chat(req: ChatRequest):
             "session_id": req.session_id,
             "turns": len(_SESSIONS.get(req.session_id, [])),
             "inherited": inherited,
+            # 本句之前该会话是空的（=新会话或被 LRU 淘汰）→ 前端可提示"上文已失效"
+            "session_new": bool(session_is_new),
         })
         # 意图可解释（阶段2）：让前端能显示"我理解你想看 X 在 Y 时段的情况"，
         # 而不是把意图藏在后端。source 用来区分这句是规则命中还是大模型识别的。

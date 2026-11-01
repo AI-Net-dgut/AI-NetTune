@@ -91,6 +91,13 @@ export interface ChatResult {
   reply: string; intent: string; scope: QueryScope; diagnosis: Diagnosis | null;
   plans?: TreatmentPlan[];
   chart: { type: string; option: Record<string, unknown> } | null;
+  /** 意图识别来源：llm=大模型识别 / rule=规则命中 / fallback=规则未命中兜底。
+   *  界面必须如实展示，不能让"规则兜底"看起来像"大模型回答"（核查清单第 4 条）。 */
+  intentSource?: "llm" | "rule" | "fallback";
+  /** 未走大模型的具体原因（模型未配置/调用失败/输出不可解析） */
+  intentDegradeReason?: string;
+  /** 本句之前该会话是否为空（新会话或被后端淘汰）→ 用于提示"上文已失效" */
+  sessionIsNew?: boolean;
 }
 export type ForecastMetric = "rsrp" | "sinr" | "throughput";
 export interface ForecastSeriesItem {

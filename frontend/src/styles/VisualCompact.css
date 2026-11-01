@@ -117,6 +117,18 @@
   font-size: var(--ain-font-note);
 }
 
+/* 意图来源徽标：规则识别 / 规则兜底。与上面的状态徽标并排，字号更小、颜色更弱，
+   避免与"当前故障中"这类结论徽标抢注意力（核查清单第 4 条：来源要可见）。 */
+.ain-shell .ain-ai-v2 .ain-ai-source-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #eef2f7;
+  color: #5b7186;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .ain-shell .ain-ai-v2 .ain-ai-scope {
   color: var(--ain-muted);
   font-size: var(--ain-font-note);

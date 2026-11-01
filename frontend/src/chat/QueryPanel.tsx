@@ -161,7 +161,15 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               : diagnosis?.state === "anomaly" ? "发现异常"
               : diagnosis?.state === "normal" ? "未发现明显异常"
               : "助手回答"}
-          </span></div>
+          </span>
+          {/* 来源必须如实展示（核查清单第 4 条 / 复审 P2）：模型未启用或调用失败时
+              这里是规则识别，不能让界面看起来像"大模型回答"。 */}
+          {!query.pending && query.result?.intentSource && query.result.intentSource !== "llm" && (
+            <span className="ain-ai-source-badge" title={query.result.intentDegradeReason || "未走大模型"}>
+              {query.result.intentSource === "rule" ? "规则识别" : "规则兜底"}
+            </span>
+          )}
+          </div>
         <div className="ain-ai-answer" aria-live="polite" aria-busy={query.pending}>
           {forecastReview}
           {!forecastMode && query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
