@@ -194,9 +194,19 @@
   background: #f6f9fd;
 }
 
+/* 当前帧：光靠边框颜色不够醒目（用户会看不出大图对应哪一帧），
+   加粗描边 + 轻微上移 + 角标，让"现在看的是这一帧"一眼可见。 */
 .ain-spatial-cell.is-active {
   border-color: #2f6fb3;
+  border-width: 2px;
   background: #eef5fd;
+  box-shadow: 0 0 0 2px rgba(47, 111, 179, .18);
+  transform: translateY(-2px);
+}
+.ain-spatial-cell.is-active span::after {
+  content: "（当前）";
+  margin-left: 2px;
+  color: #2f6fb3;
 }
 
 .ain-spatial-cell-canvas {
