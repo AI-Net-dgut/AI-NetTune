@@ -10,6 +10,7 @@ import { buildBaseline } from './managementDraft';
 import { METRIC_META } from '../../types/backend';
 import { displayMetric } from '../../services/metrics';
 import { simulatePlan } from '../../services/backend';
+import SimConfigBar from './SimConfigBar';
 import PlanEffects from './PlanEffects';
 import './ManagementModule.css';
 
@@ -112,6 +113,40 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     <header className="ain-ai-column-heading"><h3 id="ain-management-title" tabIndex={-1}>处理方案与仿真</h3><span>方案预估</span></header>
     {sourceQuestion && <p className="ain-management-muted">对应研判：{sourceQuestion}</p>}
     {pending && <p className="ain-management-muted" role="status">{active ? '辅助图查询中，以下方案来自关联研判，暂不可操作。' : '等待本次研判返回处理建议。'}</p>}
+    {/* 仿真内闭环（申报书创新点④）：把选中方案的参数应用到仿真网络 / 回滚。
+        纯新增组件，不接管下面既有的选择与仿真按钮。 */}
+    <SimConfigBar
+      scenario={data.scope?.scenario ?? ""}
+      apIds={(() => {
+        const ids = (selected as unknown as { objectIds?: unknown })?.objectIds;
+        const list = Array.isArray(ids) ? ids.map(String) : [];
+        if (list.length) return list;
+        const fromParams = (selected?.parameters ?? []).map(p => String((p as unknown as { objectId?: string }).objectId ?? "")).filter(Boolean);
+        return [...new Set(fromParams)];
+      })()}
+      params={(() => {
+        const out: Record<string, number> = {};
+        for (const p of selected?.parameters ?? []) {
+          if (p.id !== "tilt" && p.id !== "power") continue;
+          const value = Number(values[p.id]);
+          if (Number.isFinite(value)) out[p.id] = value;
+        }
+        return out;
+      })()}
+      baseline={(() => {
+        const out: Record<string, number> = {};
+        for (const p of selected?.parameters ?? []) {
+          if (p.id !== "tilt" && p.id !== "power") continue;
+          const value = Number(p.currentValue ?? p.suggestedValue);
+          if (Number.isFinite(value)) out[p.id] = value;
+        }
+        return out;
+      })()}
+      effectiveFrom={String(active?.scope?.end ?? data.scope?.end ?? "")}
+      note={`${sourceQuestion || "研判方案"} · ${selected?.name ?? ""}`.trim()}
+      planId={selected?.id}
+      disabled={disabled || mismatch || pending}
+    />
     <section className="ain-plan-suggestions" aria-labelledby="ain-plan-heading">
       <div className="ain-ai-subheading"><h4 id="ain-plan-heading">处理建议</h4><span>{plans.length ? `${plans.length} 个方案` : '等待研判'}</span></div>
       {plans.length ? <div className="ain-plan-list">{plans.map(plan => <button type="button" key={plan.id} className={`ain-suggestion-card${selected?.id === plan.id ? ' is-selected' : ''}`}

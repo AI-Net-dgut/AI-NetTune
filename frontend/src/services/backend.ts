@@ -534,3 +534,51 @@ export async function fetchForecast(scope: QueryScope, signal?: AbortSignal): Pr
     limitations: strings(data.limitations),
   };
 }
+
+// ---------------------------------------------------------------- 仿真内闭环（申报书创新点④）
+export interface SimConfigVersion {
+  id: string; scenario: string; apIds: string[];
+  params: Record<string, number>; effectiveFrom: string; appliedAt: string;
+  note?: string; planId?: string | null;
+}
+export interface SimConfigStatus {
+  active: SimConfigVersion | null;
+  versions: number;
+}
+
+function parseSimStatus(raw: unknown): SimConfigStatus {
+  const data = obj(raw);
+  const active = data.active ? obj(data.active) : null;
+  const params = obj(active?.params);
+  return {
+    active: active
+      ? {
+        id: str(active.id), scenario: str(active.scenario),
+        apIds: strings(active.apIds),
+        params: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, numeric(v)])),
+        effectiveFrom: str(active.effectiveFrom), appliedAt: str(active.appliedAt),
+        note: str(active.note) || undefined, planId: str(active.planId) || undefined,
+      }
+      : null,
+    versions: numeric(data.versions) || 0,
+  };
+}
+
+export async function fetchSimConfig(signal?: AbortSignal): Promise<SimConfigStatus> {
+  return parseSimStatus(await request("/sim/config", signal));
+}
+
+export async function applySimConfig(payload: {
+  scenario: string; apIds: string[]; params: Record<string, number>; baseline: Record<string, number>;
+  effectiveFrom: string; note?: string; planId?: string;
+}, signal?: AbortSignal): Promise<{ version: SimConfigVersion | null; status: SimConfigStatus; notice: string }> {
+  const data = obj(await request("/sim/apply", signal, payload));
+  const status = parseSimStatus(data.status);
+  return { version: status.active, status, notice: str(data.notice) };
+}
+
+export async function rollbackSimConfig(versionId?: string, signal?: AbortSignal): Promise<{ status: SimConfigStatus; notice: string }> {
+  const path = versionId ? `/sim/rollback?versionId=${encodeURIComponent(versionId)}` : "/sim/rollback";
+  const data = obj(await request(path, signal, {}));
+  return { status: parseSimStatus(data.status), notice: str(data.notice) };
+}
