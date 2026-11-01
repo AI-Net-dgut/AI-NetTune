@@ -476,7 +476,9 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
     chain: Array.isArray(data.chain)
       ? data.chain.map(rawStep => {
         const step = obj(rawStep);
-        const win = obj(step.window);
+        // 不是每个步骤都有 window（预测步骤只有 baseTime/horizonMinutes），
+        // 无条件 obj(undefined) 会抛"接口数据结构不正确"——实测把整条复合问法打成红框。
+        const win = step.window ? obj(step.window) : {};
         return {
           tool: str(step.tool),
           title: str(step.title) || undefined,

@@ -115,7 +115,11 @@
 .ain-ai-v3 .ain-query-history-details { flex: 1; min-width: 0; color: #4d6d8f; font-size: 12px; }
 .ain-ai-v3 .ain-query-history-details > summary { cursor: pointer; }
 .ain-ai-v3 .ain-query-history-details > summary span { margin-left: 5px; color: #8a9caf; }
-.ain-ai-v3 .ain-query-history { max-height: 260px; overflow: auto; margin-top: 8px; }
+.ain-ai-v3 .ain-query-history { max-height: 260px; overflow: auto; margin-top: 8px; display: block; }
+/* 记录卡片必须占满整块宽度（实测在窄容器里会被挤成窄条并出现内部滚动）：
+   显式声明 block + 100% 宽度 + 不裁剪，覆盖任何继承来的 flex/inline 布局。 */
+.ain-ai-v3 .ain-query-history > .ain-query-record { display: block; width: 100%; box-sizing: border-box;
+  max-height: none; overflow: visible; }
 .ain-ai-v3 .ain-query-record { padding: 10px; margin-bottom: 7px; border: 1px solid #e0eaf5; border-radius: 7px; background: #fafcff; }
 .ain-ai-v3 .ain-query-record.is-error { background: #fff8f7; }
 .ain-ai-v3 .ain-query-record-meta { display: flex; align-items: start; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
