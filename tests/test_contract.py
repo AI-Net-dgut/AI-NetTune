@@ -1641,3 +1641,35 @@ def test_data_numeric_bounds():
     assert int((df.throughput.round(2) == 150.0).sum()) == 0, "仍存在吞吐恰好 150 的水平带"
     normal_prb = df[df.network_status == "normal"]["prb_usage"]
     assert normal_prb.quantile(0.95) < 85.0, f"正常行 PRB p95={normal_prb.quantile(0.95):.1f} 逼近拥塞阈值"
+
+
+# ---------------------------------------------------------------- 核查清单 2026-11-01 第 3/4 条
+def test_causal_question_routes_to_diagnosis():
+    """「为什么信号差」必须进故障研判，不能被黑名单打成 KPI 查询（核查清单第 3 条）。"""
+    prev = main.ENABLE_LLM
+    main.ENABLE_LLM = False          # 无 LLM 的降级路径才是问题现场
+    try:
+        for msg in ("为什么 AP-03 信号差", "这个 AP 为什么掉线", "网络怎么这么卡，什么原因"):
+            d = _data(main.agent_chat(main.ChatRequest(message=msg, scenario=SCENARIO)))
+            got = d["intent_debug"]["intent"]
+            assert got == "fault_diagnosis", f"「{msg}」应进故障研判，实得 {got}"
+    finally:
+        main.ENABLE_LLM = prev
+
+
+def test_chat_source_is_actual_not_flag():
+    """模型调用失败时 source 必须是 rule，并给出降级原因（核查清单第 4 条）。"""
+    import llm_agent
+    prev_flag, prev_call = main.ENABLE_LLM, llm_agent.call_llm
+    main.ENABLE_LLM = True
+    try:
+        def _boom(*_a, **_k):
+            raise RuntimeError("401 simulated")
+        llm_agent.call_llm = _boom
+        d = _data(main.agent_chat(main.ChatRequest(message="看看 AP-01 现在怎么样", scenario=SCENARIO)))
+        debug = d["intent_debug"]
+        assert debug["source"] == "rule", f"模型失败时 source 应为 rule，实得 {debug['source']}"
+        assert debug.get("degrade_reason"), "应给出降级原因"
+    finally:
+        llm_agent.call_llm = prev_call
+        main.ENABLE_LLM = prev_flag

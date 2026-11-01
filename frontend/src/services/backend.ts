@@ -432,9 +432,30 @@ export async function exportReport(scope: QueryScope, format: "md" | "html" = "h
     format: str(data.format) || format, bytes: numeric(data.bytes) || 0,
   };
 }
+/**
+ * 会话 ID：后端按这个值保存历史轮次与 AP 槽位（供"它/这个/继续"指代）。
+ * 之前固定发 "frontend-p0"，同一后端上任何浏览器/标签页都共用一个会话，
+ * 会出现"A 页面问 AP-01，B 页面说'那给它出个方案'却继承了 AP-01"（核查清单第 2 条）。
+ * 现在每个标签页一个独立会话，存在 sessionStorage（刷新保持、关标签页即失效）。
+ */
+const SESSION_KEY = "aintune-chat-session";
+function chatSessionId(): string {
+  try {
+    const store = (globalThis as unknown as { sessionStorage?: Storage }).sessionStorage;
+    const existing = store?.getItem(SESSION_KEY);
+    if (existing) return existing;
+    const created = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    store?.setItem(SESSION_KEY, created);
+    return created;
+  } catch {
+    // 隐私模式禁用 sessionStorage：退回每次调用生成临时 ID（宁可丢上下文，也不要串会话）
+    return `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
 export async function chatNetwork(message: string, scenario: string, window?: QueryScope, signal?: AbortSignal, currentTime?: string): Promise<ChatResult> {
   const data = await request("/agent/chat", signal, {
-    message, scenario, session_id: "frontend-p0",
+    message, scenario, session_id: chatSessionId(),
     // 第4周：把当前展示窗口传给后端工具，保证"对话口径=页面口径"
     window_start: window?.start, window_end: window?.end, current_time: currentTime,
   });

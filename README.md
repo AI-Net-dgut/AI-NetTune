@@ -1,4 +1,4 @@
-﻿# AI-NetTune
+# AI-NetTune
 
 **基于 LLM 意图驱动的多模态无线网络智能分析与管控平台**
 
@@ -52,7 +52,7 @@
 
 * ✅ 仿真数据生成 + CSV 导入
 
-* 🚧 React + TypeScript 前端（前后端联调中）
+* ✅ React + TypeScript 前端（首页 / 工作台 / 分析记录三页，已与前端的 12 条业务接口联动）
 
 ## 技术栈
 
@@ -159,7 +159,7 @@ npm run dev
 | 1    | GET  | /api/data/query       | 查询监测数据                                                 |
 | 2    | POST | /api/analyze/anomaly  | 多 KPI 联合故障研判                                          |
 | 3    | POST | /api/agent/chat       | 自然语言对话                                                 |
-| 4    | POST | /api/export/report    | 导出分析报告（后端可生成 Markdown；**前端暂无入口**）         |
+| 4    | POST | /api/export/report    | 导出分析报告（Markdown / HTML；前端记录页有「导出本次记录」，工作台有按当前时段导出。**注意：报告按"时段整窗"重新研判，不携带提问的 AP 与手改参数快照**）|
 | 5    | GET  | /api/data/heatmap     | 信号热力图（Kriging 空间估计 + 方差；缺 PyKrige 时降级 `grid_mean`） |
 | 6    | GET  | /api/network/topology/basic    | 基础网络拓扑：AP / UE 节点 + 窗口内主服务链路 |
 | 7    | GET  | /api/data/events      | 故障事件清单（读 `data/fault_events.csv`，案例窗口的单一事实来源） |

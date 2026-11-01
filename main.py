@@ -2192,6 +2192,8 @@ def agent_chat(req: ChatRequest):
 
     # 2. 第二层：关键词未命中 + 启用LLM时，才调用大模型增强识别（get_intent 内部自带降级）
     intent_source = "rule" if hit else "fallback"
+    # 降级原因（模型不可用/输出不可解析时才非空），随响应透出，便于说明"这句为什么没走大模型"
+    intent_degrade_reason = ""
     # 大模型自评的意图理解置信度（0~1）。规则命中路径没有这个值，保持 None —— 
     # 不拿规则分数冒充"概率"，与 B-6 的 rule_score 口径一致。
     intent_confidence: float | None = None
@@ -2209,9 +2211,13 @@ def agent_chat(req: ChatRequest):
             params = {**params, **_llm_params}
             if params.get("ap_id"):
                 params["ap_id"] = _normalize_ap(params["ap_id"])
-            # 标记意图来源，便于前端/答辩说明"这句是大模型识别的还是规则识别的"
+            # 标记意图来源，便于前端/答辩说明"这句是大模型识别的还是规则识别的"。
+            # 必须沿用 llm_agent.get_intent 给出的实际 source（核查清单第 4 条）：
+            # 该函数失败时返回的是规则结果，之前只看"有没有 intent"会误标成 llm。
+            intent_source = intent_obj.get("source") or ("llm" if intent_obj.get("intent") and intent_obj.get("source") is None else "rule")
+            if intent_obj.get("degrade_reason"):
+                intent_degrade_reason = str(intent_obj["degrade_reason"])
             if intent_obj.get("intent"):
-                intent_source = "llm"
                 raw_conf = intent_obj.get("confidence")
                 try:
                     intent_confidence = float(raw_conf) if raw_conf is not None else None
@@ -2304,7 +2310,8 @@ def agent_chat(req: ChatRequest):
         # 而不是把意图藏在后端。source 用来区分这句是规则命中还是大模型识别的。
         data.setdefault("intent_debug", {
             "intent": intent,
-            "source": intent_source,        # rule / llm / fallback
+            "source": intent_source,        # rule / llm / fallback（按实际结果，不按开关）
+            "degrade_reason": intent_degrade_reason or None,   # 模型不可用时的具体原因
             "rule_hit": hit,
             "llm_enabled": bool(ENABLE_LLM),
             # 意图理解置信度：只有走大模型时才有值，且是"模型自评、未校准"，

@@ -21,6 +21,14 @@ BLACKLIST_PATTERNS = [
     "解释", "怎么看", "啥原因", "是什么",
 ]
 
+# 因果问句 + 网络故障词 → 必须走故障研判，不能被黑名单打成"概念解释"。
+# 依据：核查清单第 3 条实测——"为什么 AP-03 信号差"落到 query_kpi，
+# 同一窗口"分析 AP-03 故障"却能进 fault_diagnosis，问原因反而看不到候选原因与方案。
+CAUSAL_DIAGNOSIS_HINTS = [
+    "信号差", "信号弱", "弱覆盖", "掉线", "断线", "卡顿", "卡", "慢", "拥塞",
+    "丢包", "延迟高", "时延高", "速率低", "网速", "不通", "故障", "异常", "覆盖不好",
+]
+
 # 白名单：按优先级分层匹配工具意图（明确的指令词优先，避免宽泛词抢意图）
 HEATMAP_PATTERNS = ["热力", "信号分布", "覆盖图", "覆盖热", "地图"]
 TOPOLOGY_PATTERNS = ["拓扑", "基站", "连接关系", "连接情况"]
@@ -194,7 +202,13 @@ def rule_intent(message: str) -> dict:
         params["time_range"] = tr
 
     # ② 黑名单：问原因/求解释 → 不触发工具白名单（hit=False，留给 LLM 或 KPI 兜底）
+    # ② 因果问句但**确实在问网络故障** → 走故障研判（核查清单第 3 条）：
+    # "为什么信号差""这个 AP 为什么掉线"必须能看到候选原因、证据与方案，
+    # 不能被黑名单打成 query_kpi。纯概念解释（"什么是 SINR""解释一下切换"）仍走黑名单。
     if any(k in message for k in BLACKLIST_PATTERNS):
+        if any(k in message for k in CAUSAL_DIAGNOSIS_HINTS):
+            return {"intent": "fault_diagnosis", "params": params, "hit": True,
+                    "reason": "因果问句命中网络故障词"}
         return {"intent": "query_kpi", "params": params, "hit": False}
 
     # ③ 白名单（明确指令词优先：热力图 > 拓扑 > 研判）
@@ -217,8 +231,13 @@ def rule_intent(message: str) -> dict:
 
 
 def get_intent(message: str) -> dict:
-    """总入口：LLM 优先，任何异常/输出不可解析都降级到规则版（这就是申报书里的 API 降级）。
-    返回结构兼容 main.py：{intent, params, hit, scenario?, confidence?}"""
+    """总入口：优先让大模型识别，失败/不可解析时降级到规则版。
+
+    返回结构：{intent, params, hit, source, confidence?, degrade_reason?}
+    **source 必须由这里给出实际来源**（核查清单第 4 条）：此前外层只要看到
+    返回里有 intent 就标 "llm"，而本函数异常时返回的是 rule_intent，
+    于是"规则兜底"被标成了"大模型识别"。
+    """
     try:
         raw = call_llm(build_unified_prompt(message))
         obj = parse_unified_response(raw)
@@ -229,7 +248,12 @@ def get_intent(message: str) -> dict:
                 "hit": False,
                 "scenario": obj.get("scenario", ""),
                 "confidence": obj.get("confidence", 0),
+                "source": "llm",
             }
-    except Exception:
-        pass
-    return rule_intent(message)
+        reason = "模型输出无法解析"
+    except Exception as exc:  # noqa: BLE001 - 降级是设计行为，只记录原因
+        reason = f"模型调用失败：{type(exc).__name__}"
+    result = rule_intent(message)
+    result["source"] = "rule"
+    result["degrade_reason"] = reason
+    return result
