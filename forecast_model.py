@@ -3,7 +3,7 @@
 # 设计：
 #   - 输入：filter_rows 过滤后的原始行（与 main.py 同一数据源）
 #   - 聚合：UE × 指标 × 1 小时桶（rsrp/sinr/throughput 均值）
-#   - 训练/测试：前 80% 训练 Prophet，后 20% 测试 → true/predicted/MAPE
+#   - 训练/测试：split = max(int(n*0.8), n-horizon)（默认窗口 → 696/24，不是固定 80/20）→ true/predicted/MAPE
 #   - 未来预测：测试段后再延伸 forecast_horizon 小时，输出 yhat/lower/upper
 #   - 容错：序列过短或 Prophet 失败 → 自动降级 moving_average，保证接口永不崩
 # 答辩口径：预测模块统一表述为"区域信号/频谱态势预测"，页面标注"未来预测"
@@ -20,7 +20,7 @@ logger = logging.getLogger("forecast_model")
 logger.setLevel(logging.ERROR)
 
 DEFAULT_METRICS = ["rsrp", "sinr", "throughput"]
-TRAIN_RATIO = 0.8          # 前 80% 训练
+TRAIN_RATIO = 0.8          # 训练比例下限；实际切分 = max(int(n*TRAIN_RATIO), n-horizon)
 FORECAST_HORIZON = 24      # 未来延伸 24 小时（1 天）
 
 # Prophet 单次拟合的时间上限（秒）。**Prophet 本身是能用的**——本项目演示机
@@ -103,6 +103,11 @@ def _ma_fallback(vals: list[float], horizon: int, reason: str = "") -> dict:
     # 否则两条路径的 mae/rmse/mape/true_mean 与 predicted 长度含义不同却共用同名字段
     # （独立审计 P2：n=720、horizon=24 时 MA 切 144 点、Prophet 切 24 点，
     # 报表里 MA 看起来"更准 33%~45%"，同切分下其实是 Prophet 好 11%~18%）。
+    # 守卫：horizon<=0 时 split=n-horizon≥n → 测试段为空 → sum(test)/len(test) 除零
+    # （复审 P3：接口 10 的 horizon 固定 24，线上不可达；但 build_series(rows, metrics, 0)
+    #  是合法签名调用，不应该抛异常）
+    if horizon <= 0 or n - horizon < 1:
+        horizon = max(1, n - 1)
     split = max(2, max(int(n * TRAIN_RATIO), n - horizon))
     train, test = vals[:split], vals[split:]
     ma = train[-3:] if len(train) >= 3 else train
@@ -193,7 +198,9 @@ def prophet_series(bins: list[str], vals: list[float], horizon: int) -> dict:
     if n < 24:  # 至少 24 个点（1 天）才训练
         return _ma_fallback(vals, horizon)
 
-    split = max(int(n * TRAIN_RATIO), n - horizon)
+    # 与降级路径**同一个公式**（复审 P3：这里原先少了 max(2, …)，两处口径靠
+    # n>=4 的调用约束巧合一致，是下一个分叉点）
+    split = max(2, max(int(n * TRAIN_RATIO), n - horizon))
     train_df = pd.DataFrame({"ds": pd.to_datetime(bins[:split]), "y": vals[:split]})
     test_df = pd.DataFrame({"ds": pd.to_datetime(bins[split:]), "y": vals[split:]})
 

@@ -118,8 +118,9 @@
 }
 
 /* 意图来源徽标：规则识别 / 规则兜底。与上面的状态徽标并排，字号更小、颜色更弱，
-   避免与"当前故障中"这类结论徽标抢注意力（核查清单第 4 条：来源要可见）。 */
-.ain-shell .ain-ai-v2 .ain-ai-source-badge {
+   避免与"当前故障中"这类结论徽标抢注意力（核查清单第 4 条：来源要可见）。
+   作用域不要限定 .ain-ai-v2 —— 问答区根类是 ain-ai-v3，写死 v2 会让样式整条失效（复审 P3）。 */
+.ain-shell .ain-ai-source-badge {
   margin-left: 6px;
   padding: 1px 6px;
   border-radius: 8px;

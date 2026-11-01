@@ -500,6 +500,12 @@ export async function fetchForecast(scope: QueryScope, signal?: AbortSignal): Pr
         bins: Array.isArray(item.bins) ? item.bins.map(String) : [],
         true: Array.isArray(item.true) ? item.true.map(v => numeric(v)) : [],
         predicted: Array.isArray(item.predicted) ? item.predicted.map(v => numeric(v)) : [],
+        // 实际切分必须透传（复审 P1）：这里是**逐字段白名单重建**，
+        // 漏一个键就等于前端永远读不到 —— 面板"本次：168 点 → 144 训练 / 24 测试"依赖它。
+        total_points: item.total_points == null ? undefined : numeric(item.total_points),
+        train_points: item.train_points == null ? undefined : numeric(item.train_points),
+        test_points: item.test_points == null ? undefined : numeric(item.test_points),
+        split_points: item.split_points == null ? undefined : numeric(item.split_points),
       };
     }
   }

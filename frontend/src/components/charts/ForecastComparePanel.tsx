@@ -55,6 +55,9 @@ export default function ForecastComparePanel({ scope, disabled = false, archiveP
       record({kind:'backtest',parentId:archiveParentId,question:'真实与预测对比（历史回测）',scope,analysisTime:scope.end,status:'completed',payload:{forecast:result}});
     } catch (e) {
       if (ac.signal.aborted) return;
+      // 失败时清空上一次的结果：否则图表区换成报错文案，下方口径却还挂着上一轮的
+      // "本次：168 点 → 144 训练 / 24 测试"，自相矛盾（复审 P3）。
+      setForecast(null);
       setError(e instanceof Error ? e.message : "预测对比数据获取失败");
     } finally {
       if (!ac.signal.aborted) setPending(false);
@@ -81,7 +84,7 @@ export default function ForecastComparePanel({ scope, disabled = false, archiveP
       {/* 切分必须按接口返回的实际值展示（核查清单第 7 条）：
           实现是 split = max(int(n*0.8), n-horizon)，不是固定的前 80%/后 20%。
           例：168 个 1 小时桶 + horizon 24 → 144 训练 / 24 测试（约 85.7% / 14.3%）。 */}
-      口径：按 1 小时桶聚合，训练/测试按 `split = max(80%, n−horizon)` 切分
+      口径：按 1 小时桶聚合，训练/测试按 split = max(int(n×0.8), n−horizon) 切分
       {splitHint ? `（本次：${splitHint}）` : ""}；MAE/RMSE 是测试段逐点误差（有量纲），
       MAPE 仅作参考（对 dBm 类指标意义有限）。降级模式下预测为常数，MAE 即测试段离散度。
     </p>

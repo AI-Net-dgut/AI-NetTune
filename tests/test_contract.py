@@ -1501,6 +1501,15 @@ def test_forecast_interface10():
     s = d["series"][d["ues"][0]]["rsrp"]
     for key in ("true_mean", "pred_mean", "mae", "rmse", "bins", "true", "predicted"):
         assert key in s, f"序列缺字段 {key}"
+    # 实际切分必须如实返回且自洽（核查清单第 7 条）：前端按这些值展示"144 训练 / 24 测试"，
+    # 删掉或算错必须让用例红，否则这条修复没有任何防线（复审 P3）。
+    if d["method"] != "no_data":
+        for key in ("total_points", "train_points", "test_points", "split_points"):
+            assert key in s, f"序列缺切分字段 {key}"
+        assert s["train_points"] + s["test_points"] == s["total_points"], "训练+测试必须等于总点数"
+        assert len(s["predicted"]) == s["test_points"], "predicted 长度必须等于测试点数"
+        assert s["split_points"] == s["train_points"], "split_points 应等于训练点数"
+        assert 0 < s["test_points"] < s["total_points"], "测试段不能为空也不能占满"
     if d["method"] == "no_data":
         assert s.get("method") == "none", "no_data 时序列也必须是 none"
         assert any("桶不足" in str(x) for x in (d.get("limitations") or [])), \

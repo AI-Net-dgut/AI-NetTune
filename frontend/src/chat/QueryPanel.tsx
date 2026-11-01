@@ -213,7 +213,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         {/* 按钮名必须说清导的是什么（核查清单第 11 条）：后端按"时段整窗"重新研判，
             不携带本次提问的 AP、也不带手改参数；写作"分析报告"会被当成"本次问答快照"。 */}
         <button type="button" className="ain-ai-text-button" disabled={!scope || exporting || forecastMode}
-          title={forecastMode ? "预测研判可在分析记录中查看与导出" : "按当前展示时段导出**全网**报告：后端会重新研判整窗，结论含全部 AP；本次提问的 AP 与手改参数不会被带入。如需保留本次问答与评估，请到分析记录页导出该条记录"}
+          aria-label="导出该时段全网报告：后端重新研判整窗，包含当前场景的全部 AP"
+          title={forecastMode ? "预测研判可在分析记录中查看与导出" : "按当前展示时段导出该场景全部 AP 的报告：后端会重新研判整窗；本次提问的 AP 与手改参数不会被带入。如需保留本次问答与评估，请到分析记录页导出该条记录"}
           onClick={() => runExport("html")}>{exporting ? "生成中…" : "导出该时段全网报告"}</button>
         <button type="button" className="ain-ai-text-button" disabled={!scope || exporting || forecastMode}
           title="同上，Markdown 版"

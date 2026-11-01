@@ -2827,7 +2827,9 @@ def analyze_forecast(req: ForecastRequest):
     """
     对每个 UE × 指标（rsrp/sinr/throughput）：
     1. 按 1 小时桶聚合实测序列（forecast_model.aggregate_hourly）；
-    2. 前 80% 训练 Prophet，后 20% 测试 → 测试段实测均值(True) vs 预测均值(Predicted) 与 MAPE；
+    2. 按 split = max(int(n*0.8), n-horizon) 切训练/测试（默认 720 桶 → 696/24，**不是**固定 80/20）
+       → 测试段实测均值(True) vs 预测均值(Predicted) 与 MAE/RMSE/MAPE；切分点数在
+       train_points / test_points / total_points 里如实返回；
     3. 测试段之后再延伸 24 小时未来预测，输出 yhat/lower/upper 置信区间。
     容错：序列过短或 Prophet 失败自动降级 moving_average，接口永不崩。
     答辩口径：统一表述为"区域信号/频谱态势预测"，前端预测部分标注"未来预测"。
