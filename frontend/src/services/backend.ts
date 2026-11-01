@@ -598,3 +598,31 @@ export async function rollbackSimConfig(versionId?: string, signal?: AbortSignal
   const data = obj(await request(path, signal, {}));
   return { status: parseSimStatus(data.status), notice: str(data.notice) };
 }
+
+export interface SimCompareResult {
+  apId: string; versionId: string; effectiveFrom: string;
+  before: Record<string, number>; after: Record<string, number>; delta: Record<string, number>;
+  rows: number; coveredRows: number; notice: string;
+}
+
+/** 同一时段"原始历史 vs 生效后"对比。失败抛错由调用方决定是否展示（界面上选择静默隐藏）。 */
+export async function fetchSimCompare(params: {
+  scenario: string; apId: string; windowStart: string; windowEnd: string;
+}, signal?: AbortSignal): Promise<SimCompareResult> {
+  const query = new URLSearchParams({
+    scenario: params.scenario, ap_id: params.apId,
+    window_start: params.windowStart, window_end: params.windowEnd,
+  });
+  const data = obj(await request(`/sim/compare?${query.toString()}`, signal));
+  const means = (raw: unknown) => {
+    const m = obj(obj(raw).means);
+    return Object.fromEntries(Object.entries(m).map(([k, v]) => [k, numeric(v)]));
+  };
+  return {
+    apId: str(data.apId), versionId: str(data.versionId), effectiveFrom: str(data.effectiveFrom),
+    before: means(data.before), after: means(data.after),
+    delta: Object.fromEntries(Object.entries(obj(data.delta)).map(([k, v]) => [k, numeric(v)])),
+    rows: numeric(data.rows), coveredRows: numeric(data.coveredRows),
+    notice: str(data.notice),
+  };
+}

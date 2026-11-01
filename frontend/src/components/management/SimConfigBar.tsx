@@ -7,7 +7,7 @@
  * - 任何失败只在本条内提示，不改动上层状态，因此挂上它是零风险。
  */
 import { useCallback, useEffect, useState } from "react";
-import { applySimConfig, fetchSimConfig, fetchSimVersions, rollbackSimConfig, type SimConfigStatus, type SimConfigVersion } from "../../services/backend";
+import { applySimConfig, fetchSimCompare, fetchSimConfig, fetchSimVersions, rollbackSimConfig, type SimConfigStatus, type SimConfigVersion, type SimCompareResult } from "../../services/backend";
 
 export default function SimConfigBar({ scenario, apIds, params, baseline, effectiveFrom, note, planId, disabled = false }: {
   scenario: string;
@@ -21,14 +21,18 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
 }) {
   const [status, setStatus] = useState<SimConfigStatus | null>(null);
   const [history, setHistory] = useState<SimConfigVersion[]>([]);
+  const [compare, setCompare] = useState<SimCompareResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState(false);
 
   const reload = useCallback(async () => {
+    let activeNow: SimConfigStatus["active"] = null;
     try {
-      setStatus(await fetchSimConfig());
+      const status = await fetchSimConfig();
+      setStatus(status);
+      activeNow = status.active;
     } catch {
       // 后端未起/接口暂不可用：静默降级为"未知"，不影响页面其它功能
       setStatus(null);
@@ -37,6 +41,20 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
       setHistory(await fetchSimVersions());
     } catch {
       setHistory([]);   // 版本历史只是展示，失败就为空，绝不抛给界面
+    }
+    // 同一时段"原始 vs 生效后"对比：只有生效中才有意义；窗口取生效时刻起 10 分钟，
+    // 不用父组件的窗口，避免多一层 props 耦合。失败就隐藏，不提示错误。
+    if (activeNow) {
+      try {
+        const start = activeNow.effectiveFrom;
+        const endMs = new Date(start.replace(" ", "T")).getTime() + 10 * 60 * 1000;
+        const end = new Date(endMs).toISOString().slice(0, 19).replace("T", " ");
+        setCompare(await fetchSimCompare({ scenario: activeNow.scenario, apId: activeNow.apIds[0] ?? "", windowStart: start, windowEnd: end }));
+      } catch {
+        setCompare(null);
+      }
+    } else {
+      setCompare(null);
     }
   }, []);
 
@@ -107,6 +125,24 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
     </div>
     {notice && <p className="ain-sim-ok" role="status">{notice}</p>}
     {error && <p className="ain-sim-error" role="alert">{error}</p>}
+    {/* 同一时段开/关配置的对比（闭环可观测性）：只有生效中且取到数据才显示 */}
+    {compare && <table className="ain-sim-compare">
+      <caption>同段对比（{compare.apId} · 生效后 10 分钟）</caption>
+      <thead><tr><th>指标</th><th>原始</th><th>生效后</th><th>变化</th></tr></thead>
+      <tbody>
+        {([["rsrp", "RSRP dBm"], ["sinr", "SINR dB"], ["prb_usage", "PRB %"], ["throughput", "吞吐 Mbps"]] as const).map(([key, label]) => {
+          const before = compare.before[key], after = compare.after[key], delta = compare.delta[key];
+          return <tr key={key}>
+            <th scope="row">{label}</th>
+            <td>{Number.isFinite(before) ? before.toFixed(2) : "—"}</td>
+            <td>{Number.isFinite(after) ? after.toFixed(2) : "—"}</td>
+            <td className={delta > 0 ? "is-up" : delta < 0 ? "is-down" : ""}>
+              {Number.isFinite(delta) ? `${delta > 0 ? "+" : ""}${delta.toFixed(2)}` : "—"}
+            </td>
+          </tr>;
+        })}
+      </tbody>
+    </table>}
     {/* 版本历史（只读展示，切片 4 的零风险部分）：让人看到"这次改了什么、改过几次"，
         不参与任何计算，接口失败也只是列表为空。 */}
     <details className="ain-sim-history">
