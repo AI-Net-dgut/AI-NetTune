@@ -384,7 +384,7 @@ def health():
 # 列名统一定义在 data_layout.NETWORK_COLUMNS（scripts/doctor.py 用它校验 CSV 表头）
 ALL_COLUMNS = list(NETWORK_COLUMNS)
 
-def filter_rows(scenario, start_time, end_time, ap_id=None, user_id=None):
+def filter_rows(scenario, start_time, end_time, ap_id=None, user_id=None, apply_sim=True):
     """按场景/时间/AP/用户过滤 CSV 数据，按时间升序返回。
 
     用加载时建好的时间索引做二分定位（见 _build_df_index），不再逐行扫描 12.96 万行。
@@ -413,9 +413,9 @@ def filter_rows(scenario, start_time, end_time, ap_id=None, user_id=None):
         rows.append(r)
     # 仿真内闭环（申报书创新点④）：有"已应用"的配置时，生效时刻之后的行按经验系数叠加偏移。
     # 无生效配置时 adjust_rows 原样返回同一个列表，热路径零开销。
-    # 这一步让**研判 / 预测 / 热力 / 拓扑 / 趋势**都读到同一份"生效后"的数据，
-    # 而不是各画各的；回滚后自然回到原始历史（原始 CSV 从未被改写）。
-    return sim_config.adjust_rows(rows)
+    # apply_sim=False 用于"同一时段开/关配置"的对比（否则会拿两个不同时段比，
+    # 把时间差异误当成配置效果 —— 实测会把提功率 7dB 算出 RSRP −8.55dB 的假结果）。
+    return sim_config.adjust_rows(rows) if apply_sim else rows
 
 def avg(rows, key):
     try:
@@ -4362,6 +4362,62 @@ def sim_config_rollback(versionId: str | None = Query(None, description="要回�
         "rolledBack": target,
         "status": sim_config.describe(),
         "notice": "已恢复原始历史：该时段数据回到应用前状态。",
+    })
+
+
+@app.get("/api/sim/compare", summary="接口22：应用前后对比（仿真闭环的可观测性）")
+def sim_config_compare(
+    scenario: str = Query(..., description="场景名"),
+    ap_id: str = Query(..., description="要看哪个 AP，如 AP-02"),
+    window_start: str = Query(..., description="对比区间起点"),
+    window_end: str = Query(..., description="对比区间终点"),
+):
+    """把 [window_start, 生效时刻) 与 [生效时刻, window_end) 两段同 AP 指标做对比。
+
+    为什么这样切：生效时刻之前的数据不受配置影响（原始历史），之后的才带偏移，
+    因此两段均值之差就是"这次配置带来的变化"，不需要另存快照。
+    """
+    active = sim_config.current()
+    if not active:
+        return error_response(ERROR_CODE["PARAM_INVALID"], "当前没有生效的仿真配置，无法对比")
+    try:
+        _ws, _we = _parse_ts(window_start), _parse_ts(window_end)
+        _parse_ts(active.get("effectiveFrom") or "")
+    except (ValueError, TypeError):
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              "window_start / window_end 格式应为 yyyy-MM-dd HH:mm:ss")
+    if _ws >= _we:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "window_start 必须早于 window_end")
+    if ap_id.upper() not in {a.upper() for a in (active.get("apIds") or [])}:
+        return error_response(ERROR_CODE["PARAM_INVALID"],
+                              f"{ap_id} 不在本次生效配置的对象里（{', '.join(active.get('apIds') or [])}）")
+
+    metrics = ("rsrp", "sinr", "prb_usage", "throughput")
+    # **同一时段**分别用"原始历史"和"生效后数据"各算一遍：
+    # 跨时段比较会把时间差异（例如故障爬坡）当成配置效果，是错误口径。
+    raw_rows = filter_rows(scenario, window_start, window_end, ap_id=ap_id, apply_sim=False)
+    sim_rows = filter_rows(scenario, window_start, window_end, ap_id=ap_id)
+    if not raw_rows or not sim_rows:
+        return error_response(ERROR_CODE["PARAM_OUT_OF_RANGE"], "该窗口没有采样，无法对比")
+    covered = sum(1 for r in raw_rows if (r.get("timestamp") or "") >= active["effectiveFrom"])
+
+    def _means(rows):
+        return {k: round(sum(float(r[k]) for r in rows) / len(rows), 2) for k in metrics}
+
+    before, after = _means(raw_rows), _means(sim_rows)
+    delta = {k: round(after[k] - before[k], 2) for k in metrics}
+    return success_response({
+        "scenario": scenario, "apId": ap_id.upper(),
+        "versionId": active.get("id"),
+        "effectiveFrom": active["effectiveFrom"],
+        "params": active.get("params"),
+        "window": {"start": window_start, "end": window_end},
+        "rows": len(raw_rows), "coveredRows": covered,
+        "before": {"means": before},
+        "after": {"means": after},
+        "delta": delta,
+        "notice": ("同一时段、同一 AP 的「原始历史 vs 生效后」对比；delta 即本次配置的效果。"
+                   + ("" if covered else "注意：该窗口全部早于生效时刻，因此 delta 为 0（属正常）。")),
     })
 
 

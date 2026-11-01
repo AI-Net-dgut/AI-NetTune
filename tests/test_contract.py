@@ -176,7 +176,7 @@ def test_api_routes_map_to_expected_functions():
     """
     api = {r.path: r.endpoint.__name__ for r in main.app.routes
            if hasattr(r, "endpoint") and r.path.startswith("/api")}
-    assert len(api) == 21, f"/api 路由数量应为 21（17 业务 + 4 仿真闭环），实得 {len(api)}"
+    assert len(api) == 22, f"/api 路由数量应为 22（17 业务 + 5 仿真闭环），实得 {len(api)}"
 
     expected = {
         "/api/data/query": "data_query",
@@ -1760,3 +1760,28 @@ def test_sim_config_apply_changes_data_and_rollback_restores():
 
     assert sim_config.current() is None, "回滚后不应有生效配置"
     assert abs(rsrp_avg(window) - base_all) < 0.01, "回滚后必须完全恢复原值"
+
+
+def test_sim_compare_is_same_window():
+    """对比接口必须是"同一时段开/关配置"，不能拿两个时段比（否则把时间差异当配置效果）。"""
+    import sim_config
+    window = ("2026-01-01 10:00:00", "2026-01-01 10:10:00")
+    assert main.sim_config_compare(scenario=SCENARIO, ap_id="AP-02",
+                                  window_start=window[0], window_end=window[1])["code"] == 40002, \
+        "没有生效配置时应 40002"
+    try:
+        main.sim_config_apply(main.SimApplyRequest(
+            scenario=SCENARIO, apIds=["AP-02"], params={"power": 40}, baseline={"power": 33},
+            effectiveFrom=window[0], note="compare 用例"))
+        d = _data(main.sim_config_compare(scenario=SCENARIO, ap_id="AP-02",
+                                         window_start=window[0], window_end=window[1]))
+        # power 33→40：+7dB × 0.9 = 6.3 dB，且必须与本仓 COEF 一致（改系数会被这条抓住）
+        assert abs(d["delta"]["rsrp"] - 6.3) < 0.05, f"RSRP delta 应≈+6.3，实得 {d['delta']['rsrp']}"
+        assert d["delta"]["prb_usage"] < 0, "PRB 应下降"
+        assert d["rows"] == d["coveredRows"], "生效时刻=窗口起点时，全部行都应被覆盖"
+        # 未覆盖配置的 AP 直接拒绝
+        assert main.sim_config_compare(scenario=SCENARIO, ap_id="AP-01",
+                                       window_start=window[0], window_end=window[1])["code"] == 40002
+    finally:
+        main.sim_config_rollback()
+    assert sim_config.current() is None
