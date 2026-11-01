@@ -39,7 +39,14 @@ COEF = {
     "tx_power": {"rsrp": 0.9, "prb_usage": -1.5, "throughput": 1.8},
     "power": {"rsrp": 0.9, "prb_usage": -1.5, "throughput": 1.8},
     "tilt": {"rsrp": 0.5, "prb_usage": -0.8, "throughput": 1.1},
+    # 拥塞类方案的参数（01-03 那类"网络拥塞"方案给的是 capacity / offload_pct）：
+    # 没有系数时"应用成功但数据不变"，会被当成功能坏了（答辩现场尤其明显）。
+    # 经验系数：分流比例每 +1% → PRB −0.3%、吞吐 +1.0 Mbps；扩容每 +1 单位 → PRB −8%、吞吐 +6 Mbps。
+    "offload_pct": {"prb_usage": -0.3, "throughput": 1.0},
+    "capacity": {"prb_usage": -8.0, "throughput": 6.0},
 }
+# 明确列出"支持生效"的参数，前端据此提示"该方案暂不支持仿真生效"
+SUPPORTED_PARAMS = tuple(COEF.keys())
 NUMERIC_KEYS = ("rsrp", "sinr", "throughput", "prb_usage", "packet_loss", "latency")
 
 

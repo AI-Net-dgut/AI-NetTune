@@ -127,7 +127,7 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
       params={(() => {
         const out: Record<string, number> = {};
         for (const p of selected?.parameters ?? []) {
-          if (!["tilt", "tx_power", "power"].includes(p.id)) continue;
+          if (!["tilt", "tx_power", "power", "capacity", "offload_pct"].includes(p.id)) continue;
           const value = Number(values[p.id]);
           if (Number.isFinite(value)) out[p.id] = value;
         }
@@ -136,7 +136,7 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
       baseline={(() => {
         const out: Record<string, number> = {};
         for (const p of selected?.parameters ?? []) {
-          if (!["tilt", "tx_power", "power"].includes(p.id)) continue;
+          if (!["tilt", "tx_power", "power", "capacity", "offload_pct"].includes(p.id)) continue;
           const value = Number(p.currentValue ?? p.suggestedValue);
           if (Number.isFinite(value)) out[p.id] = value;
         }
