@@ -21,6 +21,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 import llm_agent
+import answer_llm      # 由模型写整段回答 + harness 校验（answer_llm.py）
 from llm_agent import get_intent, rule_intent, extract_time_range, call_llm_chat
 import forecast_model as _fm
 from forecast_model import build_series, DEFAULT_METRICS
@@ -1215,6 +1216,67 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     _plan_narrative_text = explain_plans(plans, anomaly_type)
     _plan_narrative_from_llm = bool(_plan_narrative_text and _plan_narrative_text != _plan_fallback)
 
+    # ===== 由模型写整段回答，并用校验器闭环把关（answer_llm）=====
+    # 只喂**已经算好的证据**；模型写的每个数字/对象都会被逐条核对，不合格重写一次，
+    # 仍不合格就返回 None，界面继续用规则文案。见 answer_llm.py 的校验项说明。
+    # 注意：此处只能用**已计算好的变量**（m / req / plans / is_anomaly / anomaly_type）。
+    _answer_llm_text = None
+    _answer_llm_check = {"ok": False, "violations": ["未启用"], "source": "rule", "attempts": 0}
+    if ENABLE_LLM:
+        try:
+            # 方案对象既可能是 dict 也可能是模型对象（plan_model 的 dataclass），
+            # 统一用 _g/_lst 取值，否则 `p.get(...)` 会抛 AttributeError 把整段回答废掉。
+            def _g(node, key, default=None):
+                if isinstance(node, dict):
+                    return node.get(key, default)
+                return getattr(node, key, default)
+
+            def _lst(node):
+                return list(node) if isinstance(node, (list, tuple)) else []
+
+            def _sim_metrics(node):
+                inner = _g(node, "metrics", None)
+                if isinstance(inner, dict):
+                    return {k: v for k, v in inner.items() if isinstance(v, (int, float))}
+                if isinstance(node, dict):
+                    return {k: v for k, v in node.items() if isinstance(v, (int, float))}
+                return {}
+
+            _main_ap = m.get("ap_id") if isinstance(m, dict) else None
+            _evidence_bundle = {
+                "scenario": req.scenario,
+                "window": {"start": req.window_start, "end": req.window_end},
+                "ap": _main_ap,
+                "anomaly_type": anomaly_type,
+                "is_anomaly": bool(is_anomaly),
+                "level": m.get("level") if isinstance(m, dict) else None,
+                "cause": m.get("cause") if isinstance(m, dict) else None,
+                "root_cause_confirmed": False,      # 候选原因，未经现场核实
+                "candidates": [{"cause": _g(c, "cause"), "score": _g(c, "score")}
+                               for c in (m.get("candidates") or [])][:3] if isinstance(m, dict) else [],
+                "metrics": {k: v for k, v in zip(
+                                ("rsrp", "sinr", "throughput", "prb_usage"),
+                                (m.get("rsrp_avg"), m.get("sinr_avg"), m.get("thr_avg"), m.get("prb_avg")))
+                            if isinstance(v, (int, float))} if isinstance(m, dict) else {},
+                "plans": [{"name": _g(p, "name"),
+                           "parameters": [{"id": _g(q, "id"), "current": _g(q, "currentValue"),
+                                           "suggested": _g(q, "suggestedValue")}
+                                          for q in _lst(_g(p, "parameters"))],
+                           "simulation": _sim_metrics(_g(p, "simulation"))}
+                          for p in (plans or [])][:2],
+            }
+            # AnomalyRequest 没有 message 字段（只有 REST 诊断入口才会走到这里），安全取用
+            _ans_question = (getattr(req, "message", "") or
+                             f"请解读 {req.scenario} 在 {req.window_start} 至 {req.window_end} 的研判结论")
+            _answer_result = answer_llm.generate(_ans_question, _evidence_bundle, llm_agent.call_llm_chat)
+            _answer_llm_text = _answer_result.get("text")
+            _answer_llm_check = {**_answer_result.get("check", {}),
+                                 "source": _answer_result.get("source") or "rule",
+                                 "attempts": _answer_result.get("attempts", 0)}
+        except Exception as exc:   # noqa: BLE001 - 生成失败一律退回规则文案
+            _answer_llm_check = {"ok": False, "violations": [f"生成失败：{type(exc).__name__}"],
+                                 "source": "rule", "attempts": 0}
+
     # ===== 状态语义计算（队友反馈第4点）=====
     # 窗口是"过去 N 分钟"，出现过的异常不等于**此刻**仍在故障，必须分开表达：
     #   fault_active          窗口末尾 10 分钟内仍有异常（_RECOVER_GRACE_SEC=600）→ 当前仍在故障
@@ -1417,6 +1479,10 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
             # 来源必须按**实际结果**标注：开关打开但模型失败时仍是模板，不能标 llm。
             "plan_narrative": _plan_narrative_text,
             "plan_narrative_source": "llm" if _plan_narrative_from_llm else "template",
+            # 由模型**写整段回答**，并经 answer_llm.verify 逐条核对后才放行（harness 闭环）。
+            # 校验不通过就是 None，前端继续用规则文案，绝不把可能编造的内容展示给用户。
+            "answer_llm": _answer_llm_text,
+            "answer_check": _answer_llm_check,
         },
     }
 

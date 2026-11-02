@@ -81,6 +81,14 @@ export interface Diagnosis {
   /** 分钟级异常区间（申报书要求"定位异常的起止时间"），平稳窗口为空数组 */
   anomalySpans: AnomalySpan[];
   anomalyType: string; level: string; score: number; cause: string; suggestion: string;
+  /** 大模型基于已验证指标写的方案解读；source 如实标明 llm / template。
+   *  之前前端完全没消费这两个字段，导致"大模型在做事但界面看不见"。 */
+  planNarrative?: string;
+  planNarrativeSource?: "llm" | "template";
+  /** 由大模型写的**整段回答**（经 answer_llm 校验器逐条核对后才放行）；
+   *  为空表示未通过校验或未启用 → 界面继续用规则文案。 */
+  answerLlm?: string;
+  answerCheck?: { ok: boolean; violations: string[]; source: string; attempts?: number };
   affectedAps: string[];
   evidence: { metric: string; value: number; threshold: number; status: string }[];
   candidates: Candidate[]; apCandidates: { id: string; candidates: Candidate[] }[];

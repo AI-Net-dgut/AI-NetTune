@@ -364,6 +364,19 @@ export function parseDiagnosis(value: unknown, scope: QueryScope): Diagnosis {
     }),
     anomalyType: str(d.anomaly_type), level: str(d.level), score: numeric(d.rule_score ?? d.confidence),
     cause: str(d.cause) || str(d.reason), suggestion: str(d.suggestion), affectedAps: strings(d.affected_aps),
+    // 大模型方案解读（含来源）：界面要能显示"这段是模型写的还是模板写的"
+    planNarrative: str(d.plan_narrative) || undefined,
+    planNarrativeSource: (str(d.plan_narrative_source) || undefined) as Diagnosis["planNarrativeSource"],
+    answerLlm: str(d.answer_llm) || undefined,
+    answerCheck: d.answer_check ? (() => {
+      const c = obj(d.answer_check);
+      return {
+        ok: c.ok === true,
+        violations: strings(c.violations),
+        source: str(c.source) || "rule",
+        attempts: c.attempts == null ? undefined : numeric(c.attempts),
+      };
+    })() : undefined,
     evidence: arr(d.kpi_evidence).map(v => { const e = obj(v); return { metric: str(e.metric), value: numeric(e.avg_value), threshold: numeric(e.threshold), status: str(e.status) }; }),
     candidates: arr(d.candidates).map(candidate),
     apCandidates: arr(d.ap_candidates).map(v => { const a = obj(v); return { id: str(a.ap_id), candidates: arr(a.candidates).map(candidate) }; }),
