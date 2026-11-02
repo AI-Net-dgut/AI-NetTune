@@ -7,7 +7,19 @@
  * - 任何失败只在本条内提示，不改动上层状态，因此挂上它是零风险。
  */
 import { useCallback, useEffect, useState } from "react";
-import { applySimConfig, fetchSimCompare, fetchSimConfig, fetchSimVersions, rollbackSimConfig, type SimConfigStatus, type SimConfigVersion, type SimCompareResult } from "../../services/backend";
+import { applySimConfig, fetchSimCompare, fetchSimConfig, fetchSimVersions, rollbackSimConfig, toEpoch, type SimConfigStatus, type SimConfigVersion, type SimCompareResult } from "../../services/backend";
+import { formatReplayTime } from "../../replay/replayState";
+
+/** 配置变更事件名：工作台据此重新取数（复查 P0-3）。
+ *  用事件而不是逐层传 props，是为了不改动 QueryPanel 已有的参数签名（三层透传风险更高）。 */
+export const SIM_CONFIG_CHANGED = "nettune:sim-config-changed";
+export interface SimConfigChangeDetail { revision: number; active: boolean }
+
+function notifyConfigChanged(status: SimConfigStatus | null, active: boolean) {
+  if (typeof window === "undefined") return;
+  const detail: SimConfigChangeDetail = { revision: status?.revision ?? 0, active };
+  window.dispatchEvent(new CustomEvent<SimConfigChangeDetail>(SIM_CONFIG_CHANGED, { detail }));
+}
 
 export default function SimConfigBar({ scenario, apIds, params, baseline, effectiveFrom, note, planId, disabled = false }: {
   scenario: string;
@@ -43,18 +55,22 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
       setHistory([]);   // 版本历史只是展示，失败就为空，绝不抛给界面
     }
     // 同一时段"原始 vs 生效后"对比：只有生效中才有意义；窗口取生效时刻起 10 分钟，
-    // 不用父组件的窗口，避免多一层 props 耦合。失败就隐藏，不提示错误。
+    // 不用父组件的窗口，避免多一层 props 耦合。
+    // 时间必须走项目统一的北京时间换算 —— 原实现用 `new Date(无时区字符串)` + `toISOString()`，
+    // 相当于把北京时间当本地时间再转成 UTC，11:30 的"10 分钟后"会变成 03:40（复查 P1-6）。
     if (activeNow) {
       try {
         const start = activeNow.effectiveFrom;
-        const endMs = new Date(start.replace(" ", "T")).getTime() + 10 * 60 * 1000;
-        const end = new Date(endMs).toISOString().slice(0, 19).replace("T", " ");
+        const end = formatReplayTime(toEpoch(start) + 10 * 60_000);
         setCompare(await fetchSimCompare({ scenario: activeNow.scenario, apId: activeNow.apIds[0] ?? "", windowStart: start, windowEnd: end }));
-      } catch {
+      } catch (reason) {
         setCompare(null);
+        // 不再静默：对比失败要把原因说出来，否则用户以为"没生效"
+        setError(reason instanceof Error ? `效果对比暂不可用：${reason.message}` : "效果对比暂不可用");
       }
     } else {
       setCompare(null);
+      setError("");
     }
   }, []);
 
@@ -75,6 +91,8 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
       const result = await applySimConfig({ scenario, apIds, params, baseline, effectiveFrom, note, planId });
       setStatus(result.status);
       setNotice(result.notice || "已应用到仿真网络。");
+      notifyConfigChanged(result.status, true);
+      void reload();          // 刷新状态/版本历史/效果对比（不能只 setStatus）
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "应用失败");
     } finally {
@@ -88,6 +106,8 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
       const result = await rollbackSimConfig(active?.id);
       setStatus(result.status);
       setNotice(result.notice || "已恢复原始历史。");
+      notifyConfigChanged(result.status, false);
+      void reload();          // 回滚后清掉旧对比并重读状态
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "回滚失败");
     } finally {

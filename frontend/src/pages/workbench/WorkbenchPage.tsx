@@ -10,6 +10,7 @@ import { REPLAY_CONFIG } from "../../replay/config";
 import { formatReplayTime, viewScope, replayContextKey, viewTime } from "../../replay/replayState";
 import type { ReplayAction } from "../../replay/replayState";
 import { buildReplayDashboard, loadReplayRecords } from "../../replay/replayData";
+import { SIM_CONFIG_CHANGED, type SimConfigChangeDetail } from "../../components/management/SimConfigBar";
 import { captureAnalysis } from "../../replay/analysisSnapshot";
 import type { AnalysisSnapshot } from "../../replay/analysisSnapshot";
 import useReplay from "../../replay/useReplay";
@@ -41,6 +42,8 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
   const [source, setSource] = useReducer((_previous: ReplaySource, next: ReplaySource) => next,
     { status: "loading", records: [], aps: [], error: "", notice: "" });
   const [reloadCount, reload] = useState(0);
+  // 仿真配置变更后重新取数用的计数（与 reloadCount 分开：不能重置时钟，也不能回到演示起点）
+  const [simRevision, setSimRevision] = useState(0);
   const [analysisNotice, setAnalysisNotice] = useState<{ key: string; text: string }>({ key: "", text: "" });
   const [focus, setFocus] = useState<{ contextKey: string; id: string | null }>({ contextKey, id: null });
   const focusedApId = focus.contextKey === contextKey ? focus.id : null;
@@ -65,6 +68,8 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
 
   useEffect(() => {
     const controller = new AbortController(); let active = true;
+    // simRevision 参与依赖：应用/回滚仿真配置后重新取数（保持观看时刻，不回到演示起点）
+    void simRevision;
     loadReplayRecords(config, controller.signal).then(records => {
       if (!active) return;
       if (!records.length) {
@@ -84,7 +89,26 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
         error: reason instanceof Error ? reason.message : "历史数据读取失败", notice: "" });
     });
     return () => { active = false; controller.abort(); };
-  }, [reloadCount, act, config]);
+  }, [reloadCount, simRevision, act, config]);
+
+  // 仿真配置应用/回滚后：丢弃旧配置下的分析（结论、方案、证据都不再成立），
+  // 保持当前观看时刻，然后重新取数。用事件解耦，避免三层 props 透传（复查 P0-3）。
+  useEffect(() => {
+    const onChanged = (event: Event) => {
+      const detail = (event as CustomEvent<SimConfigChangeDetail>).detail;
+      const key = replayContextKey(readClock());
+      clearContext(key);                       // 取消在途请求 + 清旧分析与快照
+      setAnalysisNotice({
+        key,
+        text: detail?.active
+          ? `已应用仿真配置（修订 ${detail.revision}）：正在按新配置刷新数据与图表；旧结论已清空，请重新研判。`
+          : `已回滚仿真配置（修订 ${detail?.revision ?? 0}）：正在恢复原始数据；旧结论已清空，请重新研判。`,
+      });
+      setSimRevision(value => value + 1);      // 触发重新取数（不重置时钟）
+    };
+    window.addEventListener(SIM_CONFIG_CHANGED, onChanged);
+    return () => window.removeEventListener(SIM_CONFIG_CHANGED, onChanged);
+  }, [clearContext, readClock]);
 
   // timer直接跨轮的情况也要清上下文；手动操作已同步清理，避免取消随后发起的新请求。
   useEffect(() => {

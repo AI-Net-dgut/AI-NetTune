@@ -547,23 +547,31 @@ export interface SimConfigVersion {
 export interface SimConfigStatus {
   active: SimConfigVersion | null;
   versions: number;
+  /** 配置修订号：每次应用/回滚 +1，用于缓存失效与"丢弃过期响应" */
+  revision: number;
 }
 
 function parseSimStatus(raw: unknown): SimConfigStatus {
   const data = obj(raw);
   const active = data.active ? obj(data.active) : null;
   const params = obj(active?.params);
+  const metric = (value: unknown): number | string => {
+    // 枚举参数（capacity）必须保留字符串，不能被 numeric() 变成数字
+    if (typeof value === "string" && !/^-?\d+(\.\d+)?$/.test(value)) return value;
+    return numeric(value);
+  };
   return {
     active: active
       ? {
         id: str(active.id), scenario: str(active.scenario),
         apIds: strings(active.apIds),
-        params: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, numeric(v)])),
+        params: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, metric(v)])),
         effectiveFrom: str(active.effectiveFrom), appliedAt: str(active.appliedAt),
         note: str(active.note) || undefined, planId: str(active.planId) || undefined,
       }
       : null,
     versions: numeric(data.versions) || 0,
+    revision: numeric(data.revision) || 0,
   };
 }
 
