@@ -540,7 +540,8 @@ export async function fetchForecast(scope: QueryScope, signal?: AbortSignal): Pr
 // ---------------------------------------------------------------- 仿真内闭环（申报书创新点④）
 export interface SimConfigVersion {
   id: string; scenario: string; apIds: string[];
-  params: Record<string, number>; effectiveFrom: string; appliedAt: string;
+  // capacity 是枚举（none/one_carrier），其余为数值 —— 用 number | string 承载，禁止统一 Number()
+  params: Record<string, number | string>; effectiveFrom: string; appliedAt: string;
   note?: string; planId?: string | null;
 }
 export interface SimConfigStatus {
@@ -587,7 +588,8 @@ export async function fetchSimVersions(signal?: AbortSignal): Promise<SimConfigV
 }
 
 export async function applySimConfig(payload: {
-  scenario: string; apIds: string[]; params: Record<string, number>; baseline: Record<string, number>;
+  scenario: string; apIds: string[];
+  params: Record<string, number | string>; baseline: Record<string, number | string>;
   effectiveFrom: string; note?: string; planId?: string;
 }, signal?: AbortSignal): Promise<{ version: SimConfigVersion | null; status: SimConfigStatus; notice: string }> {
   const data = obj(await request("/sim/apply", signal, payload));

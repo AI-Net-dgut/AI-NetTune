@@ -1854,3 +1854,36 @@ def test_transform_is_idempotent():
     finally:
         main.sim_config_rollback()
     assert main.sim_config.current() is None, "回滚后不应有生效配置"
+
+
+def test_enum_capacity_applies_and_stays_in_bounds():
+    """枚举参数（capacity: none/one_carrier）必须能生效，且 PRB 不越界（复查 P1-7 / P0-2）。
+
+    早期前端用 Number("one_carrier") → NaN → 参数被丢弃，载波方案永远不可用；
+    这里从**接口层**验证 string 枚举能走通，并检查 PRB 被钳制在 [0,100]。
+    """
+    window = ("2026-01-01 10:30:00", "2026-01-01 11:30:00")
+
+    def prb_mean():
+        rows = main.filter_rows(SCENARIO, window[0], window[1], ap_id="AP-02")
+        assert rows
+        return sum(float(r["prb_usage"]) for r in rows) / len(rows)
+
+    baseline = prb_mean()
+    try:
+        result = main.sim_config_apply(main.SimApplyRequest(
+            scenario=SCENARIO, apIds=["AP-02"], params={"capacity": "one_carrier"},
+            baseline={"capacity": "none"}, effectiveFrom=window[0], note="枚举用例"))
+        assert result["code"] == 0, f"枚举参数应能应用：{result}"
+        rows = main.filter_rows(SCENARIO, window[0], window[1], ap_id="AP-02")
+        values = [float(r["prb_usage"]) for r in rows]
+        assert all(0 <= v <= 100 for v in values), "PRB 必须落在 [0,100]"
+        # 每新增一个载波 PRB −18 个百分点（与 plan_model 的既有假设同源）
+        assert abs((prb_mean() - baseline) + 18.0) < 0.01, f"PRB 应 −18，实得 {prb_mean() - baseline:.2f}"
+        # 非法枚举必须被明确拒绝，而不是静默当成有效
+        bad = main.sim_config_apply(main.SimApplyRequest(
+            scenario=SCENARIO, apIds=["AP-02"], params={"capacity": "two_carriers_x"},
+            baseline={"capacity": "none"}, effectiveFrom=window[0]))
+        assert bad["code"] == 40002, f"非法枚举应 40002，实得 {bad}"
+    finally:
+        main.sim_config_rollback()

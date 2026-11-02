@@ -125,18 +125,31 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
         return [...new Set(fromParams)];
       })()}
       params={(() => {
-        const out: Record<string, number> = {};
+        // 支持生效的参数：数值（tilt / tx_power / beam_gain / offload_pct）+ 枚举（capacity）。
+        // 枚举必须原样传字符串（"none"/"one_carrier"），统一 Number() 会变成 NaN 被丢弃，
+        // 结果就是"载波方案按钮永远不可用"（复查 P1-7）。
+        const out: Record<string, number | string> = {};
         for (const p of selected?.parameters ?? []) {
-          if (!["tilt", "tx_power", "power", "capacity", "offload_pct"].includes(p.id)) continue;
+          if (p.id === "capacity") {
+            const text = String(values[p.id] ?? p.currentValue ?? "");
+            if (text === "none" || text === "one_carrier") out[p.id] = text;
+            continue;
+          }
+          if (!["tilt", "tx_power", "power", "beam_gain", "offload_pct"].includes(p.id)) continue;
           const value = Number(values[p.id]);
           if (Number.isFinite(value)) out[p.id] = value;
         }
         return out;
       })()}
       baseline={(() => {
-        const out: Record<string, number> = {};
+        const out: Record<string, number | string> = {};
         for (const p of selected?.parameters ?? []) {
-          if (!["tilt", "tx_power", "power", "capacity", "offload_pct"].includes(p.id)) continue;
+          if (p.id === "capacity") {
+            const text = String(p.currentValue ?? "none");
+            if (text === "none" || text === "one_carrier") out[p.id] = text;
+            continue;
+          }
+          if (!["tilt", "tx_power", "power", "beam_gain", "offload_pct"].includes(p.id)) continue;
           const value = Number(p.currentValue ?? p.suggestedValue);
           if (Number.isFinite(value)) out[p.id] = value;
         }

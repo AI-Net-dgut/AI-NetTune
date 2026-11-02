@@ -12,8 +12,8 @@ import { applySimConfig, fetchSimCompare, fetchSimConfig, fetchSimVersions, roll
 export default function SimConfigBar({ scenario, apIds, params, baseline, effectiveFrom, note, planId, disabled = false }: {
   scenario: string;
   apIds: string[];
-  params: Record<string, number>;
-  baseline: Record<string, number>;
+  params: Record<string, number | string>;
+  baseline: Record<string, number | string>;
   effectiveFrom: string;
   note?: string;
   planId?: string;

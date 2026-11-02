@@ -4298,8 +4298,10 @@ def get_enhanced_topology(
 class SimApplyRequest(BaseModel):
     scenario: str
     apIds: list[str]
-    params: dict[str, float]          # {"tilt": 5, "power": 33}
-    baseline: dict[str, float]        # 当前工参，用于算"改了多少"
+    # 参数可以是数值（tilt/tx_power/beam_gain/offload_pct），也可以是枚举（capacity: none/one_carrier）。
+    # 早期只声明成 dict[str, float]，导致 "one_carrier" 在接口层就被 pydantic 拒掉（复查 P1-7）。
+    params: dict[str, float | str]
+    baseline: dict[str, float | str] = {}   # 当前工参，用于计算"改了多少"
     effectiveFrom: str                # yyyy-MM-dd HH:mm:ss，之后的数据才生效
     note: str = ""
     planId: str | None = None
