@@ -933,13 +933,42 @@ _HEATMAP_CACHE_MAX = 64
 
 
 def _data_version() -> tuple:
-    """数据文件版本（mtime），用于让缓存随数据替换自动失效。"""
+    """数据版本 = 文件 mtime + **仿真配置修订号**。
+
+    复查 P0-4：原来只看 CSV mtime，而应用仿真配置并不改 CSV —— 于是应用后同一窗口
+    仍会命中 60 秒的旧诊断、120 秒的旧热力图，用户看到"配置生效了但数据没变"。
+    把 `sim_config.revision()` 并进版本号，任何一次应用/回滚都会自然产生新键。
+    """
     def _mtime(p):
         try:
             return p.stat().st_mtime if p else 0.0
         except OSError:
             return 0.0
-    return (_mtime(DATA_PATH), _mtime(SPECTRUM_PATH))
+    try:
+        rev = sim_config.revision()
+    except Exception:      # noqa: BLE001 - 配置模块异常不应拖垮取数
+        rev = 0
+    return (_mtime(DATA_PATH), _mtime(SPECTRUM_PATH), rev)
+
+
+def _invalidate_sim_caches() -> None:
+    """应用/回滚配置后立刻清空与数据相关的缓存。
+
+    只靠 revision 换键还不够：旧键不会被访问就永远不会被清，内存会一直涨；
+    而且预测缓存是以 `fid` 为键的，必须显式清。调用方在 apply / rollback 成功后执行。
+    """
+    try:
+        _ANOMALY_CACHE.clear()
+    except Exception:      # noqa: BLE001
+        pass
+    try:
+        _HEATMAP_CACHE.clear()
+    except Exception:      # noqa: BLE001
+        pass
+    try:
+        _FORECAST_CACHE.clear()
+    except Exception:      # noqa: BLE001
+        pass
 
 
 @app.post("/api/analyze/anomaly")
@@ -4343,10 +4372,14 @@ def sim_config_apply(req: SimApplyRequest):
                                    baseline=req.baseline, note=req.note, plan_id=req.planId)
     except ValueError as exc:
         return error_response(ERROR_CODE["PARAM_INVALID"], str(exc))
+    _invalidate_sim_caches()       # 复查 P0-4：应用后必须立即失效，不能等 60/120 秒
     return success_response({
         "version": version,
         "status": sim_config.describe(),
-        "notice": ("已应用到仿真网络：该时刻之后的数据会按新配置偏移，所有图表与告警随之变化；"
+        "configRevision": sim_config.revision(),
+        "dataSource": "simulation",
+        "notice": ("已应用到仿真网络：该时刻之后的**网络 KPI**会按新配置变化（研判/热力/趋势随之更新）；"
+                   "频谱预警仍基于原始频谱，本轮未模拟配置对频谱的影响；"
                    "原始历史未被改写，可随时回滚。"),
     })
 
@@ -4360,9 +4393,12 @@ def sim_config_rollback(versionId: str | None = Query(None, description="要回�
         target = sim_config.rollback(_vid)
     except ValueError as exc:
         return error_response(ERROR_CODE["PARAM_INVALID"], str(exc))
+    _invalidate_sim_caches()       # 回滚同样必须立即失效
     return success_response({
         "rolledBack": target,
         "status": sim_config.describe(),
+        "configRevision": sim_config.revision(),
+        "dataSource": "raw",
         "notice": "已恢复原始历史：该时段数据回到应用前状态。",
     })
 

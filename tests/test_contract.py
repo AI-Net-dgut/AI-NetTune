@@ -1856,6 +1856,34 @@ def test_transform_is_idempotent():
     assert main.sim_config.current() is None, "回滚后不应有生效配置"
 
 
+def test_caches_are_revision_aware():
+    """应用/回滚必须**立即**让诊断缓存失效，且缓存键带配置修订号（复查 P0-4）。
+
+    原实现只看 CSV mtime，而应用配置不改 CSV → 应用后 60 秒内仍返回旧诊断。
+    """
+    window = ("2026-01-01 10:30:00", "2026-01-01 11:30:00")
+    req = main.AnomalyRequest(scenario=SCENARIO, window_start=window[0], window_end=window[1])
+    main._ANOMALY_CACHE.clear()
+    try:
+        main.analyze_anomaly(req)
+        assert len(main._ANOMALY_CACHE) == 1, "首次查询应写入缓存"
+        rev0 = [key[-1][-1] for key in main._ANOMALY_CACHE]
+        assert rev0 == [main.sim_config.revision()], f"缓存键必须含修订号，实得 {rev0}"
+
+        main.sim_config_apply(main.SimApplyRequest(
+            scenario=SCENARIO, apIds=["AP-02"], params={"tilt": 5}, baseline={"tilt": 8},
+            effectiveFrom=window[0], note="缓存用例"))
+        assert len(main._ANOMALY_CACHE) == 0, "应用后缓存必须立即清空（不能等 TTL）"
+
+        main.analyze_anomaly(req)
+        rev1 = [key[-1][-1] for key in main._ANOMALY_CACHE]
+        assert rev1 == [main.sim_config.revision()] and rev1 != rev0, f"新缓存键应带新修订号，实得 {rev1}"
+    finally:
+        main.sim_config_rollback()
+    assert len(main._ANOMALY_CACHE) == 0, "回滚后同样必须清空缓存"
+    main._ANOMALY_CACHE.clear()
+
+
 def test_enum_capacity_applies_and_stays_in_bounds():
     """枚举参数（capacity: none/one_carrier）必须能生效，且 PRB 不越界（复查 P1-7 / P0-2）。
 
