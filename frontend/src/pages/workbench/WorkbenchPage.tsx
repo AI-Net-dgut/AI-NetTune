@@ -44,6 +44,8 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
   const [reloadCount, reload] = useState(0);
   // 仿真配置变更后重新取数用的计数（与 reloadCount 分开：不能重置时钟，也不能回到演示起点）
   const [simRevision, setSimRevision] = useState(0);
+  // 点案例后要预填进输入框的问题（只填不发送）
+  const [caseQuestion, setCaseQuestion] = useState("");
   const [analysisNotice, setAnalysisNotice] = useState<{ key: string; text: string }>({ key: "", text: "" });
   const [focus, setFocus] = useState<{ contextKey: string; id: string | null }>({ contextKey, id: null });
   const focusedApId = focus.contextKey === contextKey ? focus.id : null;
@@ -220,7 +222,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
 
     <ReplayControls state={clock} act={act} loading={loading} onReload={reloadSource} config={config} />
 
-    <QueryPanel analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
+    <QueryPanel prefillQuestion={caseQuestion} analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
       onOpenForecast={() => forecast.open()} forecastDisabled={source.status !== "ready" || clock.locked}
       forecastLabel={forecast.lastResult?.status === "ready" ? `${forecast.lastResult.source === "demo" ? "示例·" : "最近查看·"}${forecast.lastResult.alerts.length}项` : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测"}
       forecastReview={forecastTransfer?.key === contextKey ? <ForecastReview key={`${forecastTransfer.key}-${forecastTransfer.handoff.result.id}`} handoff={forecastTransfer.handoff} /> : undefined}
@@ -243,7 +245,8 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
         state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />}
       {/* 预置案例：事件来自后端 /api/data/events（data/fault_events.csv），非手写时间戳 */}
       <CaseEventButtons key={`cases-${clock.viewMode}`} state={clock} act={act} scope={scope}
-        disabled={loading || Boolean(source.error)} />
+        disabled={loading || Boolean(source.error)}
+        onPrefill={setCaseQuestion} />
       <section className="ain-filter-panel ain-replay-data-info" aria-label="回放数据来源与统计口径">
         <div className="ain-data-bar">
           <div className="ain-data-meta-summary">

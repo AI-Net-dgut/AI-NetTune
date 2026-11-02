@@ -21,11 +21,14 @@ const TYPE_LABEL: Record<string, string> = {
   congestion: "拥塞",
 };
 
-export default function CaseEventButtons({ state, act, scope, disabled = false }: {
+export default function CaseEventButtons({ state, act, scope, disabled = false, onPrefill }: {
   state: ReplayState;
   act: (action: ReplayAction) => void;
   scope: QueryScope;
   disabled?: boolean;
+  /** 点案例时把"要问的问题"交给上层填进输入框（**只填不发送**）。
+   *  为什么需要：案例原本只改时间范围，用户以为点了就会出结论，实际右侧仍是空的（实测踩到）。 */
+  onPrefill?: (question: string) => void;
 }) {
   const [events, setEvents] = useState<FaultEvent[]>([]);
   const [error, setError] = useState("");
@@ -80,7 +83,11 @@ export default function CaseEventButtons({ state, act, scope, disabled = false }
           // 要回到跟随主时钟需点 QueryPanel 里的「退出分析，返回当前」。
           + (fixedView ? "\n当前是固定查看：切换后仍停留在固定查看，需要时可点「退出分析，返回当前」。" : "")
           + (phase !== "pending" && viewCutoff < endMs ? "\n切换后会按上表范围重新取数。" : "")}
-        onClick={() => act({ type: "select-range", startMs, endMs: rangeEnd })}>
+        onClick={() => {
+          act({ type: "select-range", startMs, endMs: rangeEnd });
+          // 只预填问题，不发送：用户仍可改写后再点「发送」
+          onPrefill?.(`分析 ${event.apId} 在 ${event.start} 到 ${formatReplayTime(rangeEnd)} 为什么${typeLabel}`);
+        }}>
         {label}
       </button>;
     })}

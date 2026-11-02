@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type useNetworkQuery from "../hooks/useNetworkQuery";
 import type { DashboardData, QueryScope, SpatialMapData } from "../types/backend";
 import { scopeLabel, exportReport } from "../services/backend";
@@ -28,12 +28,15 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   spatial = null, spatialPending = false, spatialError = "", onSpatialRetry = () => {}, focusedApId = null,
   dataLoading = false, dataError = "", replay, onSubmitAnalysis, referenceControls, analysisNotice = "",
   onOpenForecast, forecastDisabled = false, forecastLabel = "查看未来风险", forecastReview,
+  prefillQuestion = "",
 }: {
   query: ReturnType<typeof useNetworkQuery>; scenario: string; window?: QueryScope; disabled: boolean;
   data: DashboardData | null; spatial?: SpatialMapData | null; spatialPending?: boolean; spatialError?: string;
   onSpatialRetry?: () => void; focusedApId?: string | null;
   dataLoading?: boolean; dataError?: string; referenceControls?: ReactNode; analysisNotice?: string;
   onOpenForecast?: () => void; forecastDisabled?: boolean; forecastLabel?: string; forecastReview?: ReactNode;
+  /** 点案例时预填的问题：**只填进输入框，不自动发送**（用户仍可改写） */
+  prefillQuestion?: string;
   replay?: { playing: boolean; currentTime: string; analysisTime: string | null; hasCurrentData?: boolean; viewTime?: string; mode?: "live" | "analysis" | "history"; canAnalyzeQuestionTime?: boolean; onFreeze?: () => void; onExit?: () => void };
   onSubmitAnalysis?: (message: string, preserveDiagnosis: boolean, retry: boolean) => Promise<void>;
 }) {
@@ -43,6 +46,14 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   const [exportNotice, setExportNotice] = useState("");
   const [evidenceSelection, setEvidenceSelection] = useState<(EvidenceSelection & { diagnosisId: number; requestId: number }) | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // 点案例后把问题填进输入框（只填不发送）；预填是"响应用户点击"的一次性同步动作，
+  // 不会引起级联渲染，故对这条规则做定向豁免。
+  useEffect(() => {
+    if (!prefillQuestion) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraft(prefillQuestion);
+    setSendNotice("");
+  }, [prefillQuestion]);
   const managementRef = useRef<ManagementHandle>(null);
   const followingLive = replay?.mode ? replay.mode === "live" : Boolean(replay?.playing);
   const historical = replay?.mode === "history";
