@@ -134,27 +134,33 @@ def verify(answer: str, evidence: dict) -> dict:
         if hit:
             violations.append(f"使用了确定性断言：{hit}")
 
-    # 4) 参数对必须与证据一致（防"AI 说 5°、面板写 6°"）
+    # 4) 参数调整必须与证据一致 —— 只拦**硬矛盾**：
+    #    仅当"左侧数值 == 某个参数当前值"、但右侧 != 该参数建议值时才报错。
+    #    早期版本把所有 "A→B" 都当参数对，于是仿真效果（-111.06→-107.46）被误判成违规，
+    #    整段回答被拒、退回规则文案（实测踩到）。
     pairs = _evidence_param_pairs(evidence)
     if pairs:
-        stated = re.findall(r"(-?\d+(?:\.\d+)?)\s*(?:°|dBm|dB|%|个)?\s*(?:→|->|到|至|调整为|调整至)\s*(-?\d+(?:\.\d+)?)", text)
+        allowed = set(pairs) | {(round(b, 2), round(a, 2)) for a, b in pairs} | _evidence_effect_pairs(evidence)
+        stated = re.findall(r"(-?\d+(?:\.\d+)?)\s*(?:°|dBm|dB|%|个)?\s*(?:→|->|调整为|调整至)\s*(-?\d+(?:\.\d+)?)", text)
         for left, right in stated:
             a, b = round(float(left), 2), round(float(right), 2)
-            if not any(abs(a - cur) <= 0.5 and abs(b - tgt) <= 0.5 for cur, tgt in pairs):
-                violations.append(f"参数调整与证据不一致：{left}→{right}")
+            if (a, b) in allowed:
+                continue
+            # 左侧不是任何参数的当前值 → 不是"参数调整"，交给数字检查去管
+            if not any(abs(a - cur) <= 0.5 for cur, _ in pairs):
+                continue
+            violations.append(f"参数调整与证据不一致：{left}→{right}（证据为 "
+                              + "、".join(f"{cur}→{tgt}" for cur, tgt in pairs) + "）")
 
-    # 5) 方向必须与证据一致（防"改善 −3.6 dB"）
-    deltas = _evidence_deltas(evidence)
+    # 5) 方向矛盾（防"改善 −3.6 dB"）：只在**正负号明显矛盾**时报错。
+    #    难点：RSRP 的绝对值本身就是负数（"提升至 -107.46 dBm"是正常表述），不能一律当增量。
+    #    因此只在"词后 10 字内不含 至/到、且单位是 dB/%/Mbps（非 dBm）"时判断增量符号。
     for word in UP_WORDS:
-        for match in re.finditer(word + r"[^。；\n]{0,12}?(-?\d+(?:\.\d+)?)", text):
-            value = float(match.group(1))
-            if value < 0 or (deltas and not any(abs(abs(value) - abs(d)) <= 0.5 for d in deltas)):
-                violations.append(f"'{word}'后的数值与证据不符：{match.group(0)}")
+        for match in re.finditer(word + r"[^。；\n至到]{0,10}?(-\d+(?:\.\d+)?)\s*(?:dB(?!m)|%|Mbps)", text):
+            violations.append(f"'{word}'后面出现负增量：{match.group(0)}")
     for word in DOWN_WORDS:
-        for match in re.finditer(word + r"[^。；\n]{0,12}?(-?\d+(?:\.\d+)?)", text):
-            value = float(match.group(1))
-            if deltas and not any(abs(abs(value) - abs(d)) <= 0.5 for d in deltas):
-                violations.append(f"'{word}'后的数值与证据不符：{match.group(0)}")
+        for match in re.finditer(word + r"[^。；\n至到]{0,10}?(\+\d+(?:\.\d+)?)\s*(?:dB(?!m)|%|Mbps)", text):
+            violations.append(f"'{word}'后面出现正增量：{match.group(0)}")
 
     # 6) 不得提出证据之外的方案名（用《》或「」标注的方案名必须在证据里）
     known_names = {str(n) for n in _evidence_plan_names(evidence)}
@@ -192,6 +198,18 @@ def _evidence_deltas(evidence: dict) -> list[float]:
             for value in simulation.values():
                 if isinstance(value, (int, float)):
                     out.append(round(abs(float(value)), 2))
+    return out
+
+
+def _evidence_effect_pairs(evidence: dict) -> set[tuple[float, float]]:
+    """证据里仿真效果的 (before, after) 对：这些 "A→B" 不是参数调整，必须放行。"""
+    out: set[tuple[float, float]] = set()
+    for plan in evidence.get("plans") or []:
+        for row in (plan.get("effects") or []):
+            if isinstance(row, dict):
+                before, after = row.get("before"), row.get("after")
+                if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+                    out.add((round(float(before), 2), round(float(after), 2)))
     return out
 
 

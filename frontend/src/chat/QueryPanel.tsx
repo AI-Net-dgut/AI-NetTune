@@ -253,11 +253,16 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               : diagnosis?.state === "normal" ? "未发现明显异常"
               : "助手回答"}
           </span>
-          {/* 来源必须如实展示（核查清单第 4 条 / 复审 P2）：模型未启用或调用失败时
-              这里是规则识别，不能让界面看起来像"大模型回答"。
-              加"意图"前缀，避免和正文里的「AI 回答」被误认成两个 AI 标记。 */}
+          {/* 来源必须如实展示（核查清单第 4 条 / 复审 P2）。
+              注意：这个徽标只说**意图**，不能说"未走大模型"——规则命中时根本没降级，
+              回答仍可能由模型生成（正文里的 [AI] 标记才是回答来源）。
+              有降级原因（模型不可用/调用失败）时才显示那串原因。 */}
           {!query.pending && query.result?.intentSource && query.result.intentSource !== "llm" && (
-            <span className="ain-ai-source-badge" title={query.result.intentDegradeReason || "未走大模型"}>
+            <span className="ain-ai-source-badge" title={
+              query.result.intentDegradeReason
+                ? `意图未使用大模型：${query.result.intentDegradeReason}`
+                : "本次意图由关键词规则命中（规则优先，不调用大模型）；回答是否由模型生成，见正文的 AI 标记"
+            }>
               {query.result.intentSource === "rule" ? "意图·规则" : "意图·兜底"}
             </span>
           )}
