@@ -1235,12 +1235,26 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                 return list(node) if isinstance(node, (list, tuple)) else []
 
             def _sim_metrics(node):
-                inner = _g(node, "metrics", None)
-                if isinstance(inner, dict):
-                    return {k: v for k, v in inner.items() if isinstance(v, (int, float))}
-                if isinstance(node, dict):
-                    return {k: v for k, v in node.items() if isinstance(v, (int, float))}
-                return {}
+                """把方案仿真折算成 before/after/delta 列表（复查：metrics 实际是 list，
+                早期只处理 dict → 证据里没有效果数值，模型写不出【预计效果】）。"""
+                out = []
+                metrics = _g(node, "metrics", None)
+                rows = metrics if isinstance(metrics, (list, tuple)) else []
+                for row in rows:
+                    key = _g(row, "key")
+                    before, after = _g(row, "before"), _g(row, "after")
+                    if key and isinstance(before, (int, float)) and isinstance(after, (int, float)):
+                        out.append({"metric": key, "before": before, "after": after,
+                                    "delta": round(float(after) - float(before), 2)})
+                if not out and isinstance(node, dict):
+                    out = [{"metric": k, "delta": v} for k, v in node.items() if isinstance(v, (int, float))]
+                return out[:6]
+
+            def _eff(plan):
+                return _sim_metrics(_g(plan, "simulation"))
+
+            def _plan_names(plan):
+                return {"id": _g(plan, "id"), "name": _g(plan, "name"), "objects": _g(plan, "objectIds")}
 
             _main_ap = m.get("ap_id") if isinstance(m, dict) else None
             _evidence_bundle = {
@@ -1262,7 +1276,7 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                            "parameters": [{"id": _g(q, "id"), "current": _g(q, "currentValue"),
                                            "suggested": _g(q, "suggestedValue")}
                                           for q in _lst(_g(p, "parameters"))],
-                           "simulation": _sim_metrics(_g(p, "simulation"))}
+                           "effects": _eff(p)}
                           for p in (plans or [])][:2],
             }
             # AnomalyRequest 没有 message 字段（只有 REST 诊断入口才会走到这里），安全取用

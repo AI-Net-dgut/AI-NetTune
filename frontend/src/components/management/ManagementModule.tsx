@@ -21,6 +21,10 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
 }) {
   const panelRef = useRef<HTMLElement>(null);
   const active = chatDiagnosis || diagnosis;
+  // 有 AI 回答（且已通过证据校验）时，方案描述与效果总结这类**模板文字**要收起：
+  // AI 回答里已经写了【方案】【预计效果】，再显示一遍就是重复（用户反馈"太重复"）。
+  // 模板原文仍保留在折叠区，AI 未通过校验时不做任何隐藏。
+  const aiAnswerActive = Boolean((chatDiagnosis ?? diagnosis)?.answerCheck?.ok);
   const mismatch = Boolean(active && !sameQueryScope(active.scope, data.scope));
   const plans = useMemo(() => {
     const valid = providedPlans.filter(p => sameQueryScope(p.scope, data.scope));
@@ -165,7 +169,8 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
       {plans.length ? <div className="ain-plan-list">{plans.map(plan => <button type="button" key={plan.id} className={`ain-suggestion-card${selected?.id === plan.id ? ' is-selected' : ''}`}
         disabled={disabled || mismatch} aria-pressed={selected?.id === plan.id} onClick={() => choose(plan)}>
         <span className="ain-suggestion-card-heading"><strong>{plan.name}</strong><span>{selected?.id === plan.id ? '已选' : '选择方案'}</span></span>
-        <span className="ain-suggestion-text">{plan.description || '后端未提供方案说明'}</span>
+        {/* 有 AI 回答时不再重复模板描述（AI 已写【方案】），保留对象与按钮 */}
+        {!aiAnswerActive && <span className="ain-suggestion-text">{plan.description || '后端未提供方案说明'}</span>}
         <span className="ain-plan-object">对象：{plan.objectIds.join('、') || '待明确'}</span></button>)}</div>
         : <p className="ain-management-empty">{active?.state === 'normal' ? '未发现明显异常，暂不建议调整配置。' : active?.state === 'empty' ? '此范围没有可用研判。' : '提问后，这里展示对应的处理方案。'}</p>}
       {mismatch && <p className="ain-management-warning">研判范围与当前数据不同，请重新分析；此建议暂不可选择。</p>}
@@ -214,7 +219,7 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
             : selected?.simulation?.status === 'completed' ? '待重新评估'
               : selected ? '尚未评估' : '尚未选择方案'
       }</span></div>
-      {currentEffect ? <PlanEffects key={currentEffect.id} result={currentEffect} /> : <div className="ain-effect-pending" role="status">
+      {currentEffect ? <PlanEffects key={currentEffect.id} result={currentEffect} hideSummary={aiAnswerActive} /> : <div className="ain-effect-pending" role="status">
         <strong>{
           // 正文与徽标、与上方"已选 N 个方案"必须自洽：已选中时不能再说"尚未选择方案"
           selected?.simulation?.status === 'failed' ? (selected.simulation.summary || '仿真失败，请调整参数后重试。')

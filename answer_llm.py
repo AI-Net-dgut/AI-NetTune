@@ -26,19 +26,27 @@ REQUIRED_SECTIONS = ("结论", "依据", "方案")
 MAX_CHARS = 1200
 ATTEMPTS = 2
 
+# 「提升」类词后跟的数字必须为非负，「下降」类必须为非正（防方向写反）
+UP_WORDS = ("提升", "上升", "增加", "改善", "提高")
+DOWN_WORDS = ("下降", "降低", "减少", "恶化", "变差")
+
 FORBIDDEN_WHEN_NO_ROOT_CAUSE = ("已确认根因", "根因已确认", "必然是", "一定是", "一定会")
 ALLOWED_TOOLS_NOTE = "只能使用给定证据中的数字与对象"
 
 SYSTEM_PROMPT = """你是无线网络运维助手。你会收到一份**已由规则计算好的证据**（JSON），请据此写一段中文回答。
 
 硬性要求：
-1. 只允许使用证据中出现的数字、AP 编号、时间；**不得编造任何数字或对象**；
+1. 只允许使用证据中出现的数字、AP 编号、时间、参数值；**不得编造任何数字或对象**；
 2. 不得使用"已确认根因/必然/一定会"之类确定性断言；候选原因只能表述为"候选/可能"；
-3. 必须包含三个小节，标题用【】括起：【结论】【依据】【方案】；
-4. 【依据】务必**简短**：用一句话说明"哪几项指标越阈、方向如何"，最多引用 1~2 个关键数字，
-   其余数字不要再罗列——界面下方有"详细证据与候选原因"面板逐项列出，重复罗列会让回答冗长；
-5. 总长度不超过 400 字；
-6. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
+3. 必须包含小节，标题用【】括起，至少三个：【结论】【依据】【方案】；
+   若证据里有方案仿真数据，再加【预计效果】【前提与风险】两节；
+4. 提到参数调整时必须写成"当前值→建议值"（例如"8°→5°"、"33→36 dBm"），
+   数值必须与证据里 parameters 的 current / suggested 完全一致，不得改写；
+5. 【依据】务必**简短**：一句话说明"哪几项指标越阈、方向如何"，最多引用 1~2 个关键数字，
+   其余数字不要再罗列——界面下方有"证据与仿真明细"面板逐项列出；
+6. 只能引用证据里出现的方案（按名字），不得提出证据之外的新方案；
+7. 总长度不超过 500 字；
+8. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
 """
 
 
@@ -126,7 +134,69 @@ def verify(answer: str, evidence: dict) -> dict:
         if hit:
             violations.append(f"使用了确定性断言：{hit}")
 
+    # 4) 参数对必须与证据一致（防"AI 说 5°、面板写 6°"）
+    pairs = _evidence_param_pairs(evidence)
+    if pairs:
+        stated = re.findall(r"(-?\d+(?:\.\d+)?)\s*(?:°|dBm|dB|%|个)?\s*(?:→|->|到|至|调整为|调整至)\s*(-?\d+(?:\.\d+)?)", text)
+        for left, right in stated:
+            a, b = round(float(left), 2), round(float(right), 2)
+            if not any(abs(a - cur) <= 0.5 and abs(b - tgt) <= 0.5 for cur, tgt in pairs):
+                violations.append(f"参数调整与证据不一致：{left}→{right}")
+
+    # 5) 方向必须与证据一致（防"改善 −3.6 dB"）
+    deltas = _evidence_deltas(evidence)
+    for word in UP_WORDS:
+        for match in re.finditer(word + r"[^。；\n]{0,12}?(-?\d+(?:\.\d+)?)", text):
+            value = float(match.group(1))
+            if value < 0 or (deltas and not any(abs(abs(value) - abs(d)) <= 0.5 for d in deltas)):
+                violations.append(f"'{word}'后的数值与证据不符：{match.group(0)}")
+    for word in DOWN_WORDS:
+        for match in re.finditer(word + r"[^。；\n]{0,12}?(-?\d+(?:\.\d+)?)", text):
+            value = float(match.group(1))
+            if deltas and not any(abs(abs(value) - abs(d)) <= 0.5 for d in deltas):
+                violations.append(f"'{word}'后的数值与证据不符：{match.group(0)}")
+
+    # 6) 不得提出证据之外的方案名（用《》或「」标注的方案名必须在证据里）
+    known_names = {str(n) for n in _evidence_plan_names(evidence)}
+    if known_names:
+        for name in re.findall(r"[《「]([^》」]{2,20})[》」]", text):
+            if name not in known_names and not any(name in k or k in name for k in known_names):
+                violations.append(f"出现证据之外的方案名：{name}")
+
     return {"ok": not violations, "violations": violations, "numbers": len(_numbers(text)), "ids": sorted(mentioned)}
+
+
+def _evidence_param_pairs(evidence: dict) -> list[tuple[float, float]]:
+    """证据里所有 (当前值 → 建议值) 参数对，供"参数必须一致"核对。"""
+    pairs: list[tuple[float, float]] = []
+    for plan in evidence.get("plans") or []:
+        for param in (plan.get("parameters") or []):
+            current, suggested = param.get("current"), param.get("suggested")
+            if isinstance(current, (int, float)) and isinstance(suggested, (int, float)):
+                pairs.append((round(float(current), 2), round(float(suggested), 2)))
+    return pairs
+
+
+def _evidence_deltas(evidence: dict) -> list[float]:
+    """证据里方案仿真的指标变化（绝对值集合），用于核对"提升/下降 N"的方向与量级。"""
+    out: list[float] = []
+    for plan in evidence.get("plans") or []:
+        effects = plan.get("effects") or []
+        if isinstance(effects, list):
+            for row in effects:
+                value = row.get("delta") if isinstance(row, dict) else None
+                if isinstance(value, (int, float)):
+                    out.append(round(abs(float(value)), 2))
+        simulation = plan.get("simulation")
+        if isinstance(simulation, dict):
+            for value in simulation.values():
+                if isinstance(value, (int, float)):
+                    out.append(round(abs(float(value)), 2))
+    return out
+
+
+def _evidence_plan_names(evidence: dict) -> list[str]:
+    return [str(p.get("name")) for p in (evidence.get("plans") or []) if p.get("name")]
 
 
 def generate(question: str, evidence: dict, call_fn) -> dict:

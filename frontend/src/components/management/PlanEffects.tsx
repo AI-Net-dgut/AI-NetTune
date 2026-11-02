@@ -7,7 +7,7 @@ import SpatialChart, { createProjection, SceneAxes, SCENE_VIEWBOX } from '../cha
 import { displayMetric } from '../../services/metrics';
 const colors = ['#67768a', '#2e69d2', '#36b7f3', '#27d7d2', '#58edc6'];
 const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-export default function PlanEffects({ result }: { result: SimulationResult }) {
+export default function PlanEffects({ result, hideSummary = false }: { result: SimulationResult; hideSummary?: boolean }) {
   const [view, setView] = useState<'metrics' | 'trend' | 'coverage'>(result.coverage?.points.length ? 'coverage' : 'metrics');
   const [metricIndex, setMetricIndex] = useState(0);
   const m = result.metrics[metricIndex], meta = m ? METRIC_META[m.key] : null;
@@ -24,7 +24,12 @@ export default function PlanEffects({ result }: { result: SimulationResult }) {
     series: [{ type: 'bar', barMaxWidth: 38, data: [ { value: m?.before ?? null, itemStyle: { color: '#8da4be' } }, { value: m?.after ?? null, itemStyle: { color: '#238f90' } } ] }] };
   const c = result.coverage, projection = c ? createProjection(c.area) : null;
   return <>
-    {result.summary && <p className="ain-effect-conclusion">{result.summary}</p>}
+    {/* 有 AI 回答时隐藏模板总结句（AI 已写【预计效果】），但保留数值条与图；
+        模板原文仍可在折叠区查看，信息不丢。 */}
+    {result.summary && !hideSummary && <p className="ain-effect-conclusion">{result.summary}</p>}
+    {result.summary && hideSummary && <details className="ain-ai-details">
+      <summary>查看模板版效果说明</summary><p>{result.summary}</p>
+    </details>}
     <div className="ain-effect-values">{result.metrics.slice(0, 3).map((item, i) => <div key={`${item.objectId}-${item.key}-${i}`}>
       <span>{item.objectId} · {METRIC_META[item.key].label}</span><strong>{displayMetric(item.before ?? undefined)} <small>→</small> {displayMetric(item.after ?? undefined)}</strong>
       <small>{METRIC_META[item.key].unit} · 差值 {item.before !== null && item.after !== null ? displayMetric(item.after - item.before) : '—'}</small></div>)}</div>
