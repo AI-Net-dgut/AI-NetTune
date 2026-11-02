@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import type useNetworkQuery from "../hooks/useNetworkQuery";
 import type { DashboardData, QueryScope, SpatialMapData } from "../types/backend";
-import { scopeLabel, exportReport } from "../services/backend";
+import type { TreatmentPlan } from "../types/plan";
+import { scopeLabel, exportReport, fetchSimConfig } from "../services/backend";
+import { formatReplayTime } from "../replay/replayState";
 import ManagementModule from "../components/management/ManagementModule";
 import ForecastComparePanel from "../components/charts/ForecastComparePanel";
 import type { ManagementHandle } from "../components/management/preparePlan";
@@ -91,6 +93,76 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
       }
     } catch (error) {
       setExportNotice(error instanceof Error ? `报告生成失败：${error.message}` : "报告生成失败");
+    } finally {
+      setExporting(false);
+    }
+  }
+  /**
+   * 导出**本次分析**（快照）：把屏幕上这一轮的问题、结论、证据要点、方案与当前仿真配置
+   * 原样写成 Markdown 并下载。
+   *
+   * 与「导出该时段全网报告」的区别（复查 P1-24 那条边界）：
+   *   后者由后端**按时间窗口重新研判整网**，不携带本次 AP / 手改参数；
+   *   本按钮不重算，只导出"这一次问答的上下文"，两者名称与 aria 必须能区分。
+   */
+  async function exportSnapshot() {
+    if (exporting || forecastMode) return;
+    setExporting(true); setExportNotice("");
+    try {
+      const simStatus = await fetchSimConfig().catch(() => null);
+      const active = simStatus?.active ?? null;
+      const d = analysis?.diagnosis ?? result?.diagnosis ?? null;
+      const lines: string[] = [];
+      lines.push(`# AI-NetTune 本次分析快照`, "");
+      lines.push(`- 生成时间：${formatReplayTime(Date.now())}（北京时间）`);
+      lines.push(`- 场景：${scenario}`);
+      lines.push(`- 本次提问：${query.question || draft || "（未记录）"}`);
+      if (scope) lines.push(`- 分析范围：${scope.start} — ${scope.end}`);
+      lines.push(`- 数据来源：${active ? "simulation（仿真配置生效）" : "raw（原始数据）"}`);
+      lines.push(`- 配置版本：${active ? `${active.id}（revision ${simStatus?.revision ?? 0}）` : "无生效配置"}`);
+      if (active) {
+        lines.push(`- 生效对象：${active.apIds.join("、")}；生效时刻：${active.effectiveFrom}`);
+        lines.push(`- 生效参数：${Object.entries(active.params).map(([k, v]) => `${k}=${v}`).join("，")}`);
+        lines.push("", "> 注意：频谱预警仍基于原始频谱，本次配置未模拟其对频谱的影响。");
+      }
+      lines.push("", "## 研判结论");
+      if (d) {
+        lines.push(`- 状态：${d.currentState}（${d.state}）`);
+        if (d.anomalyType) lines.push(`- 异常类型：${d.anomalyType}`);
+        if (d.lastAnomalyAt) lines.push(`- 最近异常时刻：${d.lastAnomalyAt}`);
+        if (d.anomalySpans?.length) lines.push(`- 异常区间：${d.anomalySpans.map(s => `${s.start} — ${s.end}`).join("；")}`);
+        if (d.candidates?.length) {
+          lines.push("", "### 候选原因（按规则强度，非概率）");
+          d.candidates.slice(0, 5).forEach((c, i) => lines.push(`${i + 1}. ${c.cause}（规则强度 ${c.score}）`));
+        }
+      } else {
+        lines.push("（本次未产生研判结论）");
+      }
+      lines.push("", "## 处理方案");
+      const plans = (d as { plans?: TreatmentPlan[] } | null)?.plans ?? result?.plans ?? [];
+      if (plans.length) {
+        plans.forEach((p, i) => {
+          lines.push(`### ${i + 1}. ${p.name}`);
+          if (p.description) lines.push(p.description);
+        });
+      } else {
+        lines.push("（本次未生成方案：可能当前窗口判定为正常，或尚未完成研判）");
+      }
+      if (result?.chain?.length) {
+        lines.push("", "## 编排步骤");
+        result.chain.forEach((s, i) => lines.push(`${i + 1}. ${s.title ?? s.tool}：${s.summary ?? ""}`));
+      }
+      lines.push("", "---", "本快照由界面直接生成，不重新研判；数值口径以页面为准。");
+      const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `本次分析_${formatReplayTime(Date.now()).replace(/[: ]/g, "-")}.md`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      setExportNotice("已导出本次分析快照（Markdown）。");
+    } catch (error) {
+      setExportNotice(error instanceof Error ? `导出失败：${error.message}` : "导出失败");
     } finally {
       setExporting(false);
     }
@@ -263,8 +335,15 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           <ReplyText text={entry.answer} /><p className="ain-ai-note">{entry.analysisMode === "history" ? "历史回顾" : "固定时刻分析"} · 分析截至：{entry.analysisTime ?? "未记录"}（北京时间）</p><p className="ain-ai-note">{entry.scope}（北京时间）</p></article>)}</div>
     </details>
       <span className="ain-report-actions">
-        {/* 按钮名必须说清导的是什么（核查清单第 11 条）：后端按"时段整窗"重新研判，
-            不携带本次提问的 AP、也不带手改参数；写作"分析报告"会被当成"本次问答快照"。 */}
+        {/* 与"该时段全网报告"区分：本按钮**不重算**，只把屏幕上这一轮的上下文（问题、
+            研判结论、方案、当前仿真配置版本）写成 Markdown，便于归档与答辩留证。 */}
+        <button type="button" className="ain-ai-text-button" disabled={exporting || forecastMode}
+          aria-label="导出本次分析快照：仅导出当前屏幕上的问题、结论、方案与配置版本，不重新研判"
+          title={forecastMode ? "预测研判暂不支持快照导出" : "导出本次分析：绑定本次提问、结论、方案与当前仿真配置版本；不重新研判，数值以页面为准"}
+          onClick={exportSnapshot}>{exporting ? "生成中…" : "导出本次分析"}</button>
+        {/*
+          按钮名必须说清导的是什么（核查清单第 11 条）：后端按"时段整窗"重新研判，
+          不携带本次提问的 AP、也不带手改参数；写作"分析报告"会被当成"本次问答快照"。 */}
         <button type="button" className="ain-ai-text-button" disabled={!scope || exporting || forecastMode}
           aria-label="导出该时段全网报告：后端重新研判整窗，包含当前场景的全部 AP"
           title={forecastMode ? "预测研判可在分析记录中查看与导出" : "按当前展示时段导出该场景全部 AP 的报告：后端会重新研判整窗；本次提问的 AP 与手改参数不会被带入。如需保留本次问答与评估，请到分析记录页导出该条记录"}
