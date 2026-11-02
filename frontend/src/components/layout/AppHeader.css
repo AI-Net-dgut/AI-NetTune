@@ -59,7 +59,10 @@
   font-size: 12px;
   font-weight: 600;
   line-height: 1.6;
-  white-space: nowrap;
+  /* 项目全称较长（申报书原文）：允许折两行，不再 nowrap 撑破页头 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 30ch;
 }
 
 .ain-header .ain-nav {

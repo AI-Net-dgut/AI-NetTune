@@ -46,7 +46,8 @@ export default function AppHeader() {
 
           <span>
             <strong>AI-NetTune</strong>
-            <small>无线网络诊断与仿真工作台</small>
+            {/* 申报书原文项目名（用户确认：不显示赛事名，允许折两行） */}
+            <small>基于LLM意图驱动的多模态无线网络智能分析与管控平台</small>
           </span>
         </NavLink>
 
