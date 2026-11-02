@@ -201,7 +201,7 @@ export default function SpatialFrameGrid({
             重新预测），本组件只按它换算每帧时长，避免两个下拉各说各话。 */}
       </header>
       <div className="ain-spatial-caption">
-        <span>空间 KPI 估计，与频谱告警口径不同。</span>
+        <span>空间 KPI 估计（当前配置下的网络 KPI 视图）；频谱预警另属**原始频谱参考风险**，未模拟配置影响。</span>
         <details className="ain-spatial-help">
           <summary>图表说明</summary>
           <p>每个格子为该位置网络 KPI 的插值估计，用于观察区域变化；上方预警按频谱逐频段数值判定，不能仅凭此图颜色判断是否触发告警。</p>

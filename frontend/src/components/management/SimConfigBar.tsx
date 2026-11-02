@@ -125,10 +125,12 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
     {active
       ? <p className="ain-sim-note">
         {active.apIds.join("、")} · {Object.entries(active.params).map(([k, v]) => `${k} ${v}`).join(" · ")}
-        · 生效时刻 {active.effectiveFrom}；该时刻之后的数据、图表与告警都按此配置计算（原始历史未被改写）。
+        · 生效时刻 {active.effectiveFrom}；该时刻之后的<strong>网络 KPI</strong>按此配置计算，研判与趋势随之更新
+        （原始历史未被改写）。<strong>频谱预警仍基于原始频谱，本轮未模拟配置对频谱的影响。</strong>
       </p>
       : <p className="ain-sim-note">
-        应用后：{effectiveFrom ? `${effectiveFrom} 之后` : "指定时刻之后"}的数据按新参数偏移，研判、预测与告警同步变化，可随时回滚。
+        应用后：{effectiveFrom ? `${effectiveFrom} 之后` : "指定时刻之后"}的<strong>网络 KPI</strong>按新参数偏移，
+        研判、趋势与热力图随之更新；<strong>频谱预警不随配置变化</strong>。可随时回滚。
         {!apIds.length && " 当前未选中方案或无 AP，暂不可应用。"}
       </p>}
     {confirming && <p className="ain-sim-confirm">确认应用到 <strong>{apIds.join("、") || "（无 AP）"}</strong>？
