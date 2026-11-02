@@ -39,18 +39,15 @@ export default function DiagnosisAnswer({ result, onEvidence }: { result: ChatRe
       <ul>{allSpans.slice(2).map((span, i) => <li key={`${span.apId}-${span.start}-${span.end}-${i}`}>{spanText(span)}</li>)}</ul>
     </details>}
     {/* 回答主体：优先展示**模型写的整段回答**（已通过 answer_llm 校验器逐条核对数字/对象/断言）；
-        未通过校验时退回规则拼装的四段话，并把规则原文留在折叠区，绝不隐藏"到底谁写的"。 */}
+        未通过校验时退回规则拼装的四段话。
+        有 AI 回答时**不再**提供"查看规则生成的原文"折叠：它与 AI【依据】是同义重复
+        （同一批数字出现两遍），证据的"可核查"职责由下方「详细证据与候选原因」承担。 */}
     {answerText && <div className="ain-diagnosis-prose ain-ai-answer">
       <div>
         <h4><span className="ain-ai-chip" aria-hidden="true">AI</span>回答由大模型生成 · 数字已核对</h4>
         <p>{answerText}</p>
       </div>
     </div>}
-    {answerText && <details className="ain-ai-details">
-      <summary>查看规则生成的原文（证据式表述）</summary>
-      <div className="ain-diagnosis-prose">{diagnosisParagraphs(diagnosis).map(item =>
-        <div key={item.title}><h4>{item.title}</h4><p>{item.text}</p></div>)}</div>
-    </details>}
     {!answerText && <div className="ain-diagnosis-prose">{diagnosisParagraphs(diagnosis).map(item =>
       <div key={item.title}><h4>{item.title}</h4><p>{item.text}</p>
         {onEvidence && item.title === "判断依据" && <div className="ain-answer-evidence-links">
