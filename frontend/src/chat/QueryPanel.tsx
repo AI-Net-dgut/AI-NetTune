@@ -264,6 +264,13 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         <div className="ain-ai-answer" aria-live="polite" aria-busy={query.pending}>
           {forecastReview}
           {!forecastMode && query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
+          {/* UE 级提问的兜底说明：平台方案是 AP/区域级的，单用户优化未建模。
+              提前说清边界，避免"我问的是 UE1，为什么结论是整网"的误解。 */}
+          {!forecastMode && query.question && /\bUE[-－\s]?0*\d+\b/i.test(query.question) && (
+            <p className="ain-ai-note" role="note">
+              本次提问涉及具体用户：平台的处理方案按 <strong>AP / 区域</strong> 生成；
+              该用户的连接与体验请用「连接分配」或「用户横向对比」查看，单用户级参数优化不在本模块范围。
+            </p>)}
           {!forecastMode && query.pending && <p className="ain-ai-pending" role="status">正在查询固定分析时刻的数据…{analysis ? "下方保留此辅助查询关联的研判。" : "本次结果尚未返回，上一轮研判和方案已清空。"}</p>}
           {!forecastMode && query.error && <div className="ain-query-error" role="alert"><p>{query.error}</p>
             <button type="button" className="ain-button" disabled={busy} onClick={() => send(query.question, query.contextRequest, true)}>重试本次问题</button></div>}

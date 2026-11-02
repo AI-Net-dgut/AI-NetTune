@@ -168,7 +168,9 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
     {/* 版本历史（只读展示，切片 4 的零风险部分）：让人看到"这次改了什么、改过几次"，
         不参与任何计算，接口失败也只是列表为空。 */}
     <details className="ain-sim-history">
-      <summary>配置版本（{history.length || status?.versions || 0}）</summary>
+      {/* 摘要必须带状态：否则"未应用"旁边出现"配置版本（1）"会让人以为配置还在生效。
+          历史里可能存在已回滚/被替代的版本，active 为空才是"当前无生效配置"。 */}
+      <summary>配置版本（{history.length || status?.versions || 0}{active ? " · 生效中" : " · 当前无生效"}）</summary>
       {history.length
         ? <ul>
           {history.slice(0, 6).map(item => (
