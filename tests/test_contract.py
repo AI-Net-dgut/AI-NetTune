@@ -1775,13 +1775,82 @@ def test_sim_compare_is_same_window():
             effectiveFrom=window[0], note="compare 用例"))
         d = _data(main.sim_config_compare(scenario=SCENARIO, ap_id="AP-02",
                                          window_start=window[0], window_end=window[1]))
-        # power 33→40：+7dB × 0.9 = 6.3 dB，且必须与本仓 COEF 一致（改系数会被这条抓住）
-        assert abs(d["delta"]["rsrp"] - 6.3) < 0.05, f"RSRP delta 应≈+6.3，实得 {d['delta']['rsrp']}"
-        assert d["delta"]["prb_usage"] < 0, "PRB 应下降"
+        # power 33→40：+7 dB × POWER_DB_PER_DB(1.0) = +7.0 dB（数值来自 simulation_engine）。
+        # PRB 只由 capacity/offload_pct 决定，功率调整不应改变它 —— 这是引擎的显式口径。
+        assert abs(d["delta"]["rsrp"] - 7.0) < 0.05, f"RSRP delta 应≈+7.0，实得 {d['delta']['rsrp']}"
+        assert abs(d["delta"]["prb_usage"]) < 0.01, "功率调整不应改变 PRB（引擎口径）"
         assert d["rows"] == d["coveredRows"], "生效时刻=窗口起点时，全部行都应被覆盖"
         # 未覆盖配置的 AP 直接拒绝
         assert main.sim_config_compare(scenario=SCENARIO, ap_id="AP-01",
                                        window_start=window[0], window_end=window[1])["code"] == 40002
     finally:
         main.sim_config_rollback()
-    assert sim_config.current() is None
+
+
+# ---------------------------------------------------------------- 引擎一致性（第二轮复查 P0）
+def test_tilt_evaluation_equals_application():
+    """方案评估与配置生效必须给出**同一方向、同一量级**的 RSRP 变化。
+
+    复查 P0-1：评估用 (cur-new)*1.2、生效用 (new-cur)*0.5，导致"评估改善 3.6、应用恶化 1.5"。
+    本用例锁死两侧都走 simulation_engine：8°→5° = +3.6 dB。
+    """
+    import simulation_engine as engine
+
+    # 1) 引擎层：方向与量级
+    effects = engine.calculate_effects({"tilt": 8}, {"tilt": 5})
+    assert abs(effects["rsrp"] - 3.6) < 1e-6, f"8°→5° 应为 +3.6 dB，实得 {effects['rsrp']}"
+    assert abs(engine.calculate_effects({"tilt": 8}, {"tilt": 3})["rsrp"] - 6.0) < 1e-6, "8°→3° 应为 +6.0"
+    assert engine.calculate_effects({"tilt": 8}, {"tilt": 8})["rsrp"] == 0, "不变应为 0"
+
+    # 2) 评估路径（plan_model）与引擎同值
+    import plan_model
+    plan = {"parameters": [{"id": "tilt", "type": "number", "currentValue": 8, "suggestedValue": 5,
+                            "min": 0, "max": 15, "step": 0.5}]}
+    d_rsrp, _ = plan_model._deltas_from_values({"tilt": 5}, plan)
+    assert abs(d_rsrp - 3.6) < 1e-6, f"评估应为 +3.6，实得 {d_rsrp}"
+
+    # 3) 生效路径（sim_config + filter_rows）与评估一致
+    window = ("2026-01-01 10:30:00", "2026-01-01 11:30:00")
+    def mean_rsrp():
+        rows = main.filter_rows(SCENARIO, window[0], window[1], ap_id="AP-02")
+        assert rows
+        return sum(float(r["rsrp"]) for r in rows) / len(rows)
+    baseline = mean_rsrp()
+    try:
+        main.sim_config_apply(main.SimApplyRequest(
+            scenario=SCENARIO, apIds=["AP-02"], params={"tilt": 5}, baseline={"tilt": 8},
+            effectiveFrom=window[0], note="一致性用例"))
+        applied_delta = mean_rsrp() - baseline
+        assert abs(applied_delta - 3.6) < 0.05, f"生效应为 +3.6，实得 {applied_delta:.2f}（方向不能再反）"
+    finally:
+        main.sim_config_rollback()
+    assert abs(mean_rsrp() - baseline) < 0.01, "回滚后必须回到原值"
+
+
+def test_transform_is_idempotent():
+    """同一目标配置连续应用，指标偏移不得累加（复查约束①）。"""
+    import simulation_engine as engine
+    row = {"ap_id": "AP-02", "timestamp": "2026-01-01 10:05:00", "rsrp": "-115.02", "prb_usage": "30"}
+    first = engine.transform_network_row(row, {"tilt": 5}, {"tilt": 8})
+    assert abs(float(first["rsrp"]) - (-115.02 + 3.6)) < 0.01, f"首次应为 +3.6，实得 {first['rsrp']}"
+    # 对**原始行**重复转换：结果必须完全一致（纯函数）
+    for _ in range(3):
+        again = engine.transform_network_row(row, {"tilt": 5}, {"tilt": 8})
+        assert again == first, "同一输入重复转换结果必须相同"
+    # 原始行不得被修改
+    assert row["rsrp"] == "-115.02", "raw_row 不得被修改"
+    # 接口层：同目标连续 apply 两次，偏移仍是 +3.6（版本号变化、指标不累加）
+    window = ("2026-01-01 10:30:00", "2026-01-01 11:30:00")
+    def mean_rsrp():
+        rows = main.filter_rows(SCENARIO, window[0], window[1], ap_id="AP-02")
+        return sum(float(r["rsrp"]) for r in rows) / len(rows)
+    baseline = mean_rsrp()
+    try:
+        for _ in range(2):
+            main.sim_config_apply(main.SimApplyRequest(
+                scenario=SCENARIO, apIds=["AP-02"], params={"tilt": 5}, baseline={"tilt": 8},
+                effectiveFrom=window[0], note="幂等用例"))
+            assert abs((mean_rsrp() - baseline) - 3.6) < 0.05, "连续应用不得累加收益"
+    finally:
+        main.sim_config_rollback()
+    assert main.sim_config.current() is None, "回滚后不应有生效配置"

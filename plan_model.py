@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import simulation_engine
+
 # ---- 经验系数（全部可调，改动请同步 docs/api.md 的"方案仿真口径"）----
 TILT_DB_PER_DEGREE = 1.2      # 下倾角每减小 1°，边缘 RSRP 约 +1.2 dB
 POWER_DB_PER_DB = 1.0         # 发射功率每 +1 dB，RSRP 约 +1 dB
@@ -169,28 +171,29 @@ def _weak_ratio(rows, d_rsrp):
 
 
 def _deltas_from_values(param_values, plan):
-    """把每个参数的变化折算成 (ΔRSRP, ΔPRB)。未知参数忽略。
+    """把每个参数的变化折算成 (ΔRSRP, ΔPRB)。
 
-    enum 参数必须**命中选项白名单**才生效（审计 5.3）：
-    原先 `capacity != "none"` 就发收益，传 `garbage` 与 `one_carrier` 结果相同，
-    等于把非法输入当有效方案。现在按参数自带 options 校验，非法值不产生任何增益。
+    **唯一实现委托给 simulation_engine**（第二轮复查 P0）：
+    此前这里用 (cur-new)*1.2、sim_config 用 (new-cur)*0.5，导致"评估改善、应用恶化"。
+    现在两边都调 simulation_engine.calculate_effects，方向与量级不可能再分叉。
+
+    enum 参数必须**命中选项白名单**才生效（审计 5.3）：非法值不产生任何增益。
     """
-    d_rsrp = 0.0
-    d_prb = 0.0
+    baseline: dict = {}
+    target: dict = {}
     for p in plan["parameters"]:
         pid = p["id"]
         raw = param_values.get(pid, p["suggestedValue"])
-        current = p["currentValue"]
         if p["type"] == "enum":
             allowed = {str(o.get("value")) for o in (p.get("options") or [])}
-            if str(raw) not in allowed:      # 非白名单值：不产生增益（服务端已在下游报错/忽略）
+            if str(raw) not in allowed:      # 非白名单值：不产生增益
                 continue
-            if pid == "capacity" and str(raw) != "none":
-                d_prb -= CAPACITY_PRB_DROP
+            baseline[pid] = str(p["currentValue"])
+            target[pid] = str(raw)
             continue
         try:
             new = float(raw)
-            cur = float(current) if current is not None else new
+            cur = float(p["currentValue"]) if p["currentValue"] is not None else new
         except (TypeError, ValueError):
             continue
         # 服务端再夹一次参数范围，避免非法值被当成"有效方案"算进结论
@@ -198,15 +201,10 @@ def _deltas_from_values(param_values, plan):
             new = max(float(p["min"]), new)
         if p["max"] is not None:
             new = min(float(p["max"]), new)
-        if pid == "tilt":
-            d_rsrp += (cur - new) * TILT_DB_PER_DEGREE   # 倾角变小 → 覆盖变好
-        elif pid == "tx_power":
-            d_rsrp += (new - cur) * POWER_DB_PER_DB
-        elif pid == "beam_gain":
-            d_rsrp += (new - cur) * POWER_DB_PER_DB
-        elif pid == "offload_pct":
-            d_prb -= new * PRB_PER_OFFLOAD_PCT
-    return d_rsrp, d_prb
+        baseline[pid] = cur
+        target[pid] = new
+    effects = simulation_engine.calculate_effects(baseline, target)
+    return effects.get("rsrp", 0.0), effects.get("prb_usage", 0.0)
 
 
 def _trend(rows, d_rsrp, ap_id):
