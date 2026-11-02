@@ -105,6 +105,12 @@ export interface ChatResult {
   chain?: ChainStep[];
   worstAp?: string;
   horizonMinutes?: number;
+  /** 复合编排里预测步骤的摘要（目标 AP、时长、风险条数、首条风险标题）——
+   *  复查 P1-8：不能只给"已执行两步"，要能看出预测的是哪个 AP、看到了几条风险。 */
+  chainForecast?: {
+    baseTime?: string; horizonMinutes?: number; alertCount: number;
+    firstTitle?: string; apId?: string;
+  };
   /** 意图识别来源：llm=大模型识别 / rule=规则命中 / fallback=规则未命中兜底。
    *  界面必须如实展示，不能让"规则兜底"看起来像"大模型回答"（核查清单第 4 条）。 */
   intentSource?: "llm" | "rule" | "fallback";

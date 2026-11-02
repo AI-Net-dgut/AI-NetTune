@@ -210,6 +210,18 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               </ol>
             )}
             <p className="ain-ai-result-scope">返回范围：{scopeLabel(result.scope)}</p></div>}
+          {/* 复合编排的处理建议（复查 P1-8）：编排已返回 plans，不能只给步骤摘要让用户再问一遍 */}
+          {!query.pending && !query.error && result?.chain && (result.plans?.length ?? 0) > 0 && (
+            <div className="ain-ai-tool-reply" aria-label="本次编排给出的处理建议">
+              <p className="ain-ai-analysis-caption">处理建议（本步已给出 {result.plans!.length} 个方案，详见右侧「处理建议」）</p>
+              <ol className="ain-ai-chain">
+                {result.plans!.slice(0, 3).map((plan, index) => <li key={plan.id} className="ain-ai-chain-step">
+                  <span className="ain-ai-chain-no">{index + 1}</span>
+                  <div><strong>{plan.name}</strong>
+                    {plan.description && <p>{plan.description}</p>}</div>
+                </li>)}
+              </ol>
+            </div>)}
           {analysis && <><div className="ain-ai-analysis-caption">{result === analysis ? "本次研判" : "关联研判（保留）"}{result !== analysis && diagnosisQuestion && ` · ${diagnosisQuestion}`}</div>
             <DiagnosisReply result={analysis} onEvidence={selection => setEvidenceSelection(previous => ({ ...selection, id: (previous?.id ?? 0) + 1, diagnosisId: query.diagnosisId, requestId: query.requestId }))} /></>}
           {!forecastReview && !analysis && !result && !query.pending && !query.error && <p className="ain-ai-empty">{dataStatus ? `${dataStatus}，加载有效数据后开始研判。` : "先选择一个问题示例，或直接描述异常。回答、证据图和处理建议会展示在这里。"}</p>}

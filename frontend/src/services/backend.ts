@@ -493,7 +493,25 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
     worstAp: str(data.worst_ap) || undefined,
     horizonMinutes: data.horizon_minutes == null ? undefined : numeric(data.horizon_minutes),
     plans: parsePlans(data.plans, scope),
-    diagnosis: intent === "fault_diagnosis" && data.detail ? parseDiagnosis(data.detail, scope) : null,
+    // 复合编排也要解析诊断（复查 P1-8）：原来只在 intent=fault_diagnosis 时解析 detail，
+    // 于是"哪个 AP 最差，未来 3 小时会怎样"只显示了步骤摘要，证据与方案全丢。
+    diagnosis: data.detail && (intent === "fault_diagnosis" || data.kind === "chain")
+      ? parseDiagnosis(data.diagnosis ?? data.detail, scope)
+      : null,
+    chainForecast: data.forecast ? (() => {
+      const fc = obj(data.forecast);
+      // 后端的预测载荷是 camelCase（baseTime / alerts），历史字段是 snake_case，两种都读
+      const alerts = Array.isArray(fc.alerts) ? fc.alerts : [];
+      const first = alerts.length ? obj(alerts[0]) : null;
+      return {
+        baseTime: str(fc.baseTime ?? fc.base_time) || undefined,
+        horizonMinutes: (fc.horizonMinutes ?? fc.horizon_minutes) == null
+          ? undefined : numeric(fc.horizonMinutes ?? fc.horizon_minutes),
+        alertCount: alerts.length,
+        firstTitle: first ? (str(first.title) || str(first.summary) || undefined) : undefined,
+        apId: str(fc.apId ?? fc.ap_id) || undefined,
+      };
+    })() : undefined,
     chart: rawChart?.option ? { type: str(rawChart.type), option: obj(rawChart.option) } : null,
   };
 }

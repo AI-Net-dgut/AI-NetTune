@@ -1920,13 +1920,22 @@ def _plan_chain(req, scenario, params) -> dict | None:
             scenario=scenario, baseTime=window_end,
             history=_TimeRange(start=hist_start, end=window_end),
             horizonMinutes=horizon))["data"]
-        alerts = forecast_payload.get("alerts") or []
+        # 预测工具本身是**场景级**（没有 ap_id 入参），所以这里按 worst AP 过滤风险并标注口径，
+        # 不能只凭"对它预测"的文案就宣称结果已按该 AP 限定（复查 P1-8 末尾那条）。
+        all_alerts = forecast_payload.get("alerts") or []
+        worst_key = (worst or "").upper()
+        alerts = [a for a in all_alerts
+                  if str(a.get("ap_id") or a.get("apId") or "").upper() == worst_key] if worst_key else all_alerts
         alerts_count = len(alerts)
         first_alert = (alerts[0].get("title") or "") if alerts else ""
-        steps.append({"tool": "forecast_preview", "title": "看未来风险",
+        forecast_payload["apId"] = worst
+        forecast_payload["filteredAlertCount"] = alerts_count
+        forecast_payload["allAlertCount"] = len(all_alerts)
+        steps.append({"tool": "forecast_preview", "title": f"看未来风险（{worst or '场景'}）",
                       "status": "ok",
-                      "summary": (f"未来 {horizon} 分钟：{alerts_count} 条风险"
-                                  + (f"，首条「{first_alert}」" if first_alert else "（未检出越阈）")),
+                      "summary": (f"未来 {horizon} 分钟：该 AP {alerts_count} 条风险"
+                                  + (f"，首条「{first_alert}」" if first_alert else "（未检出越阈）")
+                                  + f"；场景级共 {len(all_alerts)} 条，已按该 AP 筛出"),
                       "horizonMinutes": horizon,
                       "baseTime": window_end})
 
@@ -1934,7 +1943,7 @@ def _plan_chain(req, scenario, params) -> dict | None:
     reply = (f"先研判再预测：{diag.get('anomaly_type') or '正常'}，最差对象 {worst or '未识别'}；"
              f"随后对它做了未来 {horizon} 分钟预测，"
              + (f"检出 {alerts_count} 条风险，首条「{first_alert}」。" if alerts_count else "未检出越阈风险。")
-             + "下方按步骤列出每步的依据；需要处置方案可继续追问")
+             + f"下方按步骤列出每步的依据；对应处理方案（{len((diag or {}).get('plans') or [])} 个）见右侧「处理建议」。")
     return {
         "kind": "chain",
         "intent": "worst_ap_forecast",
@@ -1943,6 +1952,8 @@ def _plan_chain(req, scenario, params) -> dict | None:
         "worst_ap": worst,
         "horizon_minutes": horizon,
         "diagnosis": diag,
+        # 方案随编排一起返回（复查 P1-8）：只给步骤摘要，用户还得自己再问一遍才有方案。
+        "plans": (diag or {}).get("plans") or [],
         "forecast": forecast_payload,
         "chart": None,
     }
@@ -2402,6 +2413,11 @@ def agent_chat(req: ChatRequest):
     })
     # 把"这一轮用了上文什么"显式回给前端，便于展示"AI 记得上文"
     if isinstance(data, dict):
+        # 每份结果都绑定"数据来源 + 配置版本"（整改总约束）：前端据此丢弃过期响应、
+        # 分析记录据此保留当时的口径，避免旧结论被新配置悄悄覆盖。
+        data.setdefault("configRevision", sim_config.revision())
+        data.setdefault("configVersionId", (sim_config.current() or {}).get("id"))
+        data.setdefault("dataSource", "simulation" if sim_config.current() else "raw")
         data.setdefault("multi_turn", {
             "session_id": req.session_id,
             "turns": len(_SESSIONS.get(req.session_id, [])),
