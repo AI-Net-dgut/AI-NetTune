@@ -254,10 +254,11 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               : "助手回答"}
           </span>
           {/* 来源必须如实展示（核查清单第 4 条 / 复审 P2）：模型未启用或调用失败时
-              这里是规则识别，不能让界面看起来像"大模型回答"。 */}
+              这里是规则识别，不能让界面看起来像"大模型回答"。
+              加"意图"前缀，避免和正文里的「AI 回答」被误认成两个 AI 标记。 */}
           {!query.pending && query.result?.intentSource && query.result.intentSource !== "llm" && (
             <span className="ain-ai-source-badge" title={query.result.intentDegradeReason || "未走大模型"}>
-              {query.result.intentSource === "rule" ? "规则识别" : "规则兜底"}
+              {query.result.intentSource === "rule" ? "意图·规则" : "意图·兜底"}
             </span>
           )}
           </div>

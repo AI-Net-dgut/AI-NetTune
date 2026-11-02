@@ -40,9 +40,9 @@ export default function DiagnosisAnswer({ result, onEvidence }: { result: ChatRe
     </details>}
     {/* 回答主体：优先展示**模型写的整段回答**（已通过 answer_llm 校验器逐条核对数字/对象/断言）；
         未通过校验时退回规则拼装的四段话，并把规则原文留在折叠区，绝不隐藏"到底谁写的"。 */}
-    {answerText && <div className="ain-diagnosis-prose">
+    {answerText && <div className="ain-diagnosis-prose ain-ai-answer">
       <div>
-        <h4>AI 回答（由大模型生成 · 已通过证据校验）</h4>
+        <h4><span className="ain-ai-chip" aria-hidden="true">AI</span>回答由大模型生成 · 数字已核对</h4>
         <p>{answerText}</p>
       </div>
     </div>}
@@ -77,11 +77,11 @@ export default function DiagnosisAnswer({ result, onEvidence }: { result: ChatRe
       <summary>详细证据与候选原因</summary>
       <EvidencePanel result={diagnosis} pending={false} error="" title="故障研判与证据" />
     </details>
-    {/* LLM 的"第二处用武之地"必须在界面上可见（否则用户会以为大模型没起作用）：
-        后端 `plan_narrative` 是模型基于**已验证指标**写的方案解读，`plan_narrative_source`
-        如实标明是 llm 还是 template。规则给结构化证据，模型给自然语言解读，两者并列。 */}
-    {diagnosis.planNarrative && <details className="ain-ai-details" open>
-      <summary>AI 方案解读（{diagnosis.planNarrativeSource === "llm" ? "由大模型生成" : "模板生成"}）</summary>
+    {/* 方案解读只在**没有 AI 回答时**才单独展示：整段 AI 回答里已经包含【方案】，
+        再放一块"AI 方案解读"就重复了（用户反馈：太多、太碎）。
+        有 AI 回答时，方案解读已并入正文，这里不再渲染。 */}
+    {!answerText && diagnosis.planNarrative && <details className="ain-ai-details" open>
+      <summary>方案解读（{diagnosis.planNarrativeSource === "llm" ? "由大模型生成" : "模板生成"}）</summary>
       <p>{diagnosis.planNarrative}</p>
     </details>}
   </>;

@@ -58,6 +58,11 @@
 .ain-ai-v3 .ain-ai-analysis-caption { margin: 8px 0 3px; font-size: 11px; color: #6f86a0; }
 .ain-ai-v3 .ain-ai-result-scope { font-size: 11px; color: #7a8da3; line-height: 1.7; margin: 4px 0 9px; overflow-wrap: anywhere; }
 .ain-ai-v3 .ain-diagnosis-prose > div { margin: 0 0 10px; }
+/* AI 回答主体：唯一一块"由模型生成"的内容，用左侧色条 + AI 徽标强调，避免再堆第二块 */
+.ain-ai-v3 .ain-diagnosis-prose.ain-ai-answer { border-left: 3px solid #3f6b9c; padding: 8px 0 2px 10px; margin-bottom: 8px; }
+.ain-ai-v3 .ain-ai-answer h4 { display: flex; align-items: center; gap: 6px; }
+.ain-ai-v3 .ain-ai-chip { display: inline-block; padding: 1px 6px; border-radius: 4px; background: #3f6b9c; color: #fff;
+  font-size: 10px; font-weight: 600; letter-spacing: .5px; }
 .ain-ai-v3 .ain-diagnosis-prose h4 { color: #285d96; margin-bottom: 3px; }
 .ain-ai-v3 .ain-diagnosis-prose p, .ain-ai-v3 .ain-reply-text p { font-size: 13px; color: #455f7c; line-height: 1.8; overflow-wrap: anywhere; white-space: pre-wrap; }
 .ain-ai-v3 .ain-reply-text p + p { margin-top: 7px; }
