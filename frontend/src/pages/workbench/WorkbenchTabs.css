@@ -1,0 +1,63 @@
+/* Left workspace and right questions share one fixed desktop row. */
+.ain-app.ain-shell .ain-tabbed-workbench > .ain-workspace-results {
+  grid-column: 1; grid-row: 2; height: var(--ain-pane-height); min-height: 0; min-width: 0;
+  display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d8e5f4;
+  border-radius: 10px; background: #fff; box-shadow: 0 5px 18px rgb(37 76 126 / 4%);
+}
+.ain-workspace-tabs { display: flex; align-items: stretch; gap: 2px; flex: 0 0 auto; border-bottom: 1px solid #dce7f4; padding: 0 10px; background: #f7faff; }
+.ain-workspace-tabs > button { position: relative; border: 0; border-radius: 0; padding: 13px 18px; background: transparent; color: #647f9c; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ain-workspace-tabs > button[aria-selected="true"] { color: #1769d2; background: #fff; }
+.ain-workspace-tabs > button[aria-selected="true"]::after { content: ''; position: absolute; bottom: 0; left: 16px; right: 16px; height: 3px; background: #237aed; border-radius: 3px 3px 0 0; }
+.ain-workspace-tabs > button:disabled { color: #a8b7c8; cursor: not-allowed; }
+.ain-workspace-tabs > button:focus-visible { outline: 2px solid #237aed; outline-offset: -4px; }
+.ain-workspace-tabs > span { margin: auto 0 auto auto; padding-left: 8px; color: #8c9db0; font-size: 10px; }
+.ain-workspace-body { flex: 1; min-height: 0; overflow: hidden; }
+.ain-workspace-body > [role="tabpanel"] { height: 100%; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; min-width: 0; }
+.ain-workspace-body > [role="tabpanel"][hidden] { display: none !important; }
+.ain-app.ain-shell .ain-tabbed-workbench .ain-workspace-body > .ain-data-module { margin: 0; padding: 10px; border: 0; border-radius: 0; box-shadow: none; }
+.ain-app.ain-shell .ain-tabbed-workbench .ain-workspace-panel.ain-ai-v3 { margin: 0; padding: 12px 14px; border: 0; border-radius: 0; box-shadow: none; background: #fff; }
+.ain-workspace-context { padding: 0 0 11px; margin-bottom: 12px; border-bottom: 1px solid #e1eaf5; }
+.ain-workspace-context > div { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.ain-workspace-context > div > span { padding: 3px 8px; color: #2365a5; background: #eaf3ff; border-radius: 5px; font-size: 11px; }
+.ain-workspace-context[data-kind="forecast"] > div > span, .ain-workspace-context[data-kind="mixed"] > div > span { color: #936218; background: #fff2d6; }
+.ain-workspace-context h2 { margin: 0; font-size: 16px; color: #294c74; }
+.ain-workspace-context small { color: #8799ad; margin-left: auto; font-size: 10px; }
+.ain-workspace-context .ain-workspace-question { margin: 8px 0 5px; color: #315576; line-height: 1.6; font-size: 12px; overflow-wrap: anywhere; }
+.ain-workspace-context dl { display: grid; gap: 3px; margin: 6px 0 0; color: #6e859e; font-size: 11px; }
+.ain-workspace-context dl > div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 6px; }
+.ain-workspace-context dt { color: #91a0b2; }
+.ain-workspace-context dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.ain-workspace-context-note { margin: 6px 0 0; color: #8d7d5e; font-size: 10px; line-height: 1.6; }
+.ain-workspace-next { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3ecf7; }
+.ain-workspace-next > span { font-size: 11px; color: #7990aa; }
+.ain-workspace-next .ain-button { font-size: 12px; padding: 7px 12px; }
+.ain-workspace-next button:disabled { opacity: .5; cursor: not-allowed; }
+.ain-app.ain-shell .ain-tabbed-workbench .ain-workspace-panel.ain-ai-v3 .ain-ai-diagnosis-column { border: 0 !important; border-radius: 0 !important; padding: 0 !important; box-shadow: none; background: transparent !important; }
+.ain-app.ain-shell .ain-workspace-panel.ain-ai-v3 .ain-ai-column-heading { margin-bottom: 6px; padding-bottom: 0; border-bottom: 0; }
+.ain-workspace-panel .ain-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.ain-workspace-panel .ain-management-module { margin: 0; }
+.ain-workspace-panel .ain-forecast-review { background: #fff; margin: 0; padding: 0; border: 0; }
+.ain-workspace-panel .ain-forecast-plans { border: 0; padding-top: 0; margin-top: 0; }
+.ain-workspace-panel .ain-forecast-plans-list { grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
+.ain-workspace-panel .ain-forecast-param-grid { grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
+.ain-workspace-panel .ain-forecast-details .ain-reply-text p { font-size: 11px; }
+.ain-workspace-panel .ain-ai-details { margin-top: 10px; }
+.ain-question-time-settings, .ain-question-tools { margin: 8px 0; font-size: 11px; color: #7088a2; }
+.ain-question-time-settings > summary, .ain-question-tools > summary { cursor: pointer; color: #3f75ad; padding: 3px 0; }
+.ain-question-tools .ain-query-footer { display: flex; flex-wrap: wrap; gap: 7px; }
+.ain-question-tools .ain-report-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.ain-app.ain-shell .ain-tabbed-workbench .ain-query-example span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ain-app.ain-shell .ain-tabbed-workbench .ain-question-time-settings .ain-time-guide { display: block; }
+.ain-app.ain-shell .ain-tabbed-workbench .ain-question-time-settings .ain-reference-hint { display: block; }
+@media (max-width: 1024px) {
+  .ain-app.ain-shell .ain-tabbed-workbench > .ain-workspace-results { grid-column: 1; grid-row: 2; height: 620px; max-height: 80dvh; }
+  .ain-app.ain-shell .ain-tabbed-workbench > .ain-ai-panel.ain-ai-v3 { grid-column: 1; grid-row: 3; max-height: 600px; overflow: auto; }
+}
+@media (max-width: 680px) {
+  .ain-workspace-tabs { padding: 0 4px; gap: 0; }
+  .ain-workspace-tabs > button { flex: 1; padding: 12px 5px; font-size: 12px; }
+  .ain-workspace-tabs > span { display: none; }
+  .ain-workspace-panel { padding: 10px; }
+  .ain-workspace-context small { margin-left: 0; }
+  .ain-workspace-context dl > div { grid-template-columns: 56px minmax(0, 1fr); }
+}

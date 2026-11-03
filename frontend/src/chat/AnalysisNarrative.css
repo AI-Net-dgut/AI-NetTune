@@ -1,0 +1,23 @@
+.ain-ai-v3 .ain-analysis-narrative { min-width: 0; margin: 4px 0 12px; }
+.ain-ai-v3 .ain-analysis-source { display: inline-block; margin-bottom: 8px; padding: 2px 7px; border-radius: 4px; background: #f0f5fb; color: #4f6782; font-size: 11px; line-height: 1.6; }
+.ain-app.ain-shell .ain-ai-v3 .ain-analysis-paragraph { margin: 0 0 12px; padding: 0; border: 0; background: transparent; }
+.ain-app.ain-shell .ain-ai-v3 .ain-analysis-paragraph h4 { font-size: 13px; font-weight: 600; line-height: 1.6; color: #315e8c; margin: 0 0 4px; }
+.ain-app.ain-shell .ain-ai-v3 .ain-analysis-paragraph .ain-reply-text p { margin: 0; color: #455f79; font-size: 12px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ain-app.ain-shell .ain-ai-v3 .ain-analysis-paragraph .ain-reply-text p + p { margin-top: 8px; }
+.ain-ai-v3 .ain-compact-evidence { display: grid; gap: 8px; min-width: 0; padding-top: 5px; }
+.ain-app.ain-shell .ain-ai-v3 .ain-compact-evidence details { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.ain-ai-v3 .ain-compact-evidence summary { cursor: pointer; color: #456c92; line-height: 1.6; overflow-wrap: anywhere; }
+.ain-ai-v3 .ain-compact-proof { display: grid; gap: 5px; margin: 7px 0 10px 12px; font-size: 11px; line-height: 1.7; }
+.ain-ai-v3 .ain-compact-proof > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px; }
+.ain-ai-v3 .ain-compact-proof dt { color: #7b8ea1; }
+.ain-ai-v3 .ain-compact-proof dd { margin: 0; min-width: 0; color: #516b85; overflow-wrap: anywhere; }
+.ain-app.ain-shell .ain-ai-v3 .ain-compact-proof ul { padding-left: 15px; margin: 0; }
+.ain-ai-v3 .ain-compact-evidence .ain-compact-table { overflow-x: auto; max-width: 100%; }
+.ain-app.ain-shell .ain-ai-v3 .ain-compact-evidence table { font-size: 11px; }
+.ain-app.ain-shell .ain-ai-v3 .ain-compact-evidence th, .ain-app.ain-shell .ain-ai-v3 .ain-compact-evidence td { padding: 5px 6px; font-size: 11px; }
+.ain-ai-v3 .ain-compact-evidence [data-affected="true"] { background: #fff7eb; }
+.ain-workspace-context .ain-workspace-events { font-size: 11px; color: #6e859e; margin-top: 6px; line-height: 1.7; }
+.ain-workspace-events > summary { cursor: pointer; color: #54799e; }
+.ain-workspace-events > ul { margin: 4px 0 0; padding-left: 18px; }
+.ain-workspace-events li { overflow-wrap: anywhere; }
+@media (max-width: 680px) { .ain-ai-v3 .ain-compact-proof > div { grid-template-columns: 1fr; gap: 0; } }

@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { createPortal } from 'react-dom';
+import { WorkspacePresentationContext } from '../pages/workbench/WorkspacePresentationContext';
 import type useNetworkQuery from "../hooks/useNetworkQuery";
 import type { DashboardData, QueryScope, SpatialMapData } from "../types/backend";
 import type { TreatmentPlan } from "../types/plan";
+import type { ForecastHandoff } from "../forecast/types";
 import { scopeLabel, exportReport, fetchSimConfig } from "../services/backend";
 import { formatReplayTime } from "../replay/replayState";
 import ManagementModule from "../components/management/ManagementModule";
@@ -25,11 +28,20 @@ const EXAMPLES = [
   { label: "连接分配", question: "分析用户连接分配异常及原因，提出调整方案并比较预计用户体验" },
   { label: "未来风险", question: "预测未来120分钟可能出现的网络风险，说明依据并给出预防方案" },
 ];
+const FORECAST_EXAMPLES = [
+  { label: "风险原因", question: "针对所选预测风险，解释可能原因与判断限制" },
+  { label: "支持证据", question: "所选预测风险有哪些支持证据和反面疑点" },
+  { label: "影响范围", question: "所选预测风险可能影响哪些AP或用户，预计何时发生" },
+  { label: "预防方案", question: "针对所选预测风险，给出可采取的预防方案和适用条件" },
+  { label: "方案对比", question: "对比所选预测风险的预防方案，说明预期效果与代价" },
+  { label: "不确定性", question: "所选预测风险有哪些不确定性，还需要补充哪些证据" },
+];
 
 export default function QueryPanel({ query, scenario, window: scopeWindow, disabled, data,
   spatial = null, spatialPending = false, spatialError = "", onSpatialRetry = () => {}, focusedApId = null,
   dataLoading = false, dataError = "", replay, onSubmitAnalysis, referenceControls, analysisNotice = "",
   onOpenForecast, forecastDisabled = false, forecastLabel = "查看未来风险", forecastReview,
+  forecastContext, forecastPending = false, onForecastQuestion, onLeaveForecast,
   prefillQuestion = "",
 }: {
   query: ReturnType<typeof useNetworkQuery>; scenario: string; window?: QueryScope; disabled: boolean;
@@ -37,13 +49,23 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   onSpatialRetry?: () => void; focusedApId?: string | null;
   dataLoading?: boolean; dataError?: string; referenceControls?: ReactNode; analysisNotice?: string;
   onOpenForecast?: () => void; forecastDisabled?: boolean; forecastLabel?: string; forecastReview?: ReactNode;
+  forecastContext?: ForecastHandoff; forecastPending?: boolean;
+  onForecastQuestion?: (message: string) => string; onLeaveForecast?: () => void;
   /** 点案例时预填的问题：**只填进输入框，不自动发送**（用户仍可改写） */
   prefillQuestion?: string;
   replay?: { playing: boolean; currentTime: string; analysisTime: string | null; hasCurrentData?: boolean; viewTime?: string; mode?: "live" | "analysis" | "history"; canAnalyzeQuestionTime?: boolean; onFreeze?: () => void; onExit?: () => void };
   onSubmitAnalysis?: (message: string, preserveDiagnosis: boolean, retry: boolean) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState("");
-  const [sendNotice, setSendNotice] = useState("");
+  const workspace = useContext(WorkspacePresentationContext);
+  const forecastMode = Boolean(forecastReview);
+  // 切换任务/所选预警时不沿用另一任务的草稿，避免“当前网络”被带进预测提问框。
+  const draftKey = forecastMode ? `forecast:${forecastContext?.result.id}:${forecastContext?.alertId}:${forecastContext?.targetWindow?.start}:${forecastContext?.targetWindow?.end}` : 'network';
+  const [draftState, setDraftState] = useState({ key: draftKey, text: '' });
+  const draft = draftState.key === draftKey ? draftState.text : '';
+  const setDraft = (text: string) => setDraftState({ key: draftKey, text });
+  const [sendNoticeState, setSendNoticeState] = useState({ key: draftKey, text: '' });
+  const sendNotice = sendNoticeState.key === draftKey ? sendNoticeState.text : '';
+  const setSendNotice = (text: string) => setSendNoticeState({ key: draftKey, text });
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState("");
   const [evidenceSelection, setEvidenceSelection] = useState<(EvidenceSelection & { diagnosisId: number; requestId: number }) | null>(null);
@@ -51,17 +73,16 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   // 点案例后把问题填进输入框（只填不发送）；预填是"响应用户点击"的一次性同步动作，
   // 不会引起级联渲染，故对这条规则做定向豁免。
   useEffect(() => {
-    if (!prefillQuestion) return;
+    if (!prefillQuestion || forecastMode) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDraft(prefillQuestion);
-    setSendNotice("");
-  }, [prefillQuestion]);
+    setDraftState({ key: draftKey, text: prefillQuestion });
+    setSendNoticeState({ key: draftKey, text: '' });
+  }, [prefillQuestion, forecastMode, draftKey]);
   const managementRef = useRef<ManagementHandle>(null);
   const followingLive = replay?.mode ? replay.mode === "live" : Boolean(replay?.playing);
   const historical = replay?.mode === "history";
   const busy = disabled || query.pending || followingLive;
   const currentEmpty = replay?.hasCurrentData === false;
-  const forecastMode = Boolean(forecastReview);
   const result = forecastMode ? null : query.result;
   const analysis = forecastMode ? null : query.diagnosisResult;
   const diagnosis = analysis?.diagnosis || null;
@@ -70,11 +91,11 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   const analysisMismatch = Boolean(diagnosis && scope && !sameQueryScope(diagnosis.scope, scope));
   const currentEvidenceSelection = evidenceSelection?.diagnosisId === query.diagnosisId && evidenceSelection?.requestId === query.requestId ? evidenceSelection : null;
   const dataStatus = dataLoading ? "数据加载中" : dataError ? "数据加载失败" : !data ? "当前范围暂无数据" : replay && !data.metrics.length ? "当前时刻暂无采样" : "";
-  const status = dataStatus || (forecastMode ? "预测研判" : query.pending ? "正在分析" : currentEmpty ? "当前窗口暂无采样" : followingLive ? "实时跟随" : query.error ? "请求失败" : result ? "已返回" : historical ? "历史回顾，可提问" : replay ? "已固定，可提问" : "等待提问");
+  const status = forecastMode ? forecastPending ? "预测研判中…" : "预测风险研判" : dataStatus || (query.pending ? "正在分析" : currentEmpty ? "当前窗口暂无采样" : followingLive ? "实时跟随" : query.error ? "请求失败" : result ? "已返回" : historical ? "历史回顾，可提问" : replay ? "已固定，可提问" : "等待提问");
   const diagnosisQuestion = query.diagnosisQuestion || (result === analysis ? query.question : "");
 
   const questionTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(draft) || needsFutureForecast(draft)));
-  const sendBlocked = (disabled && !questionTime) || dataLoading || Boolean(dataError) || query.pending || (followingLive && !questionTime);
+  const sendBlocked = forecastMode ? forecastPending || !onForecastQuestion : (disabled && !questionTime) || dataLoading || Boolean(dataError) || query.pending || (followingLive && !questionTime);
 
   /** 生成并打开/下载分析报告（接口4）。报告口径与当前展示范围一致。 */
   async function runExport(format: "md" | "html") {
@@ -168,6 +189,11 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
     }
   }
   function send(message = draft, preserveDiagnosis = false, retry = false) {
+    if (forecastMode) {
+      if (!message.trim() || forecastPending) return;
+      setSendNotice(onForecastQuestion ? onForecastQuestion(message.trim()) : '当前预测仅支持查看，请先切换到现存分析后再提问。');
+      return;
+    }
     const explicitTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(message) || needsFutureForecast(message)) && !preserveDiagnosis && !retry);
     if ((disabled && !explicitTime) || dataLoading || dataError || query.pending || (followingLive && !explicitTime) || !message.trim()) return;
     if (currentEmpty && !explicitTime && !preserveDiagnosis && !retry) {
@@ -186,61 +212,9 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
     send(`${scenario}的${type === "heatmap" ? "信号热力图" : "拓扑连接关系"}`, true);
   }
 
-  return <section className="ain-ai-panel ain-ai-v3 ain-feature-module" id="ain-ai-module" aria-labelledby="ain-ai-title">
-    <header className="ain-ai-heading">
-      <div className="ain-ai-heading-title"><span className="ain-ai-symbol" aria-hidden="true">AI</span>
-        <div><h2 id="ain-ai-title">AI 网络助手</h2><p>提问 → 原因与证据 → 处理方案 → 仿真效果对比</p></div></div>
-      <div className="ain-ai-heading-actions">
-        <button type="button" className={onOpenForecast ? "ain-forecast-trigger" : "ain-forecast-placeholder"} disabled={historical || forecastDisabled || query.pending || dataLoading || !onOpenForecast}
-          onClick={onOpenForecast} title={historical ? "历史查看期间不提供未来预测" : "查看频谱态势、未来风险及相关指标；结果固定到打开时刻"}>预测预警 <span>{historical ? "历史不可用" : forecastLabel}</span></button>
-        <span className="ain-ai-status" data-tone={query.error || dataError ? "error" : query.pending || dataLoading ? "info" : "neutral"}>{status}</span>
-      </div>
-    </header>
-    {replay ? <div className="ain-ai-scope ain-ai-replay-scope">
-      <span>主时钟：{replay.currentTime}（北京时间）</span>
-      <span>查看截止时刻：{replay.viewTime ?? replay.analysisTime ?? replay.currentTime}（北京时间）</span>
-      <span className="ain-ai-view-mode">查看状态：{historical ? "历史回顾" : followingLive ? "跟随当前" : "固定当前"}</span>
-      {replay.mode ? <button type="button" className="ain-button" disabled={followingLive && disabled}
-        onClick={followingLive ? replay.onFreeze : replay.onExit}>{followingLive ? "固定当前时刻" : "退出分析，返回当前"}</button>
-        : <span>{replay.analysisTime ? `分析截至：${replay.analysisTime}（北京时间）` : "固定查看时刻后发送问题"}</span>}
-    </div> : <p className="ain-ai-scope">分析范围：{scope ? scopeLabel(scope) : `${scenario} · 后端默认范围`}</p>}
-    {referenceControls}
-    <TimeSelectionGuide historical={historical} />
-    {analysisNotice && <p className="ain-ai-warning" role="status">{analysisNotice}</p>}
-
-    <div className="ain-query-examples" aria-label="问题示例">
-      {EXAMPLES.map(item => <button className="ain-query-example" key={item.label} type="button" disabled={query.pending || (historical && needsFutureForecast(item.question))}
-        onClick={() => { setSendNotice(""); setDraft(`${scenario}：${item.question}`); inputRef.current?.focus(); }}>
-        <strong>{item.label}</strong><span>{item.question}{historical && needsFutureForecast(item.question) && <small className="ain-example-pending">历史不可用</small>}</span></button>)}
-    </div>
-    <form className="ain-query-form" onSubmit={event => { event.preventDefault(); send(); }}>
-      <label className="ain-input-label" htmlFor="ain-question">输入你的网络问题</label>
-      <div className="ain-query-composer"><textarea id="ain-question" ref={inputRef} rows={2} maxLength={500} value={draft} disabled={query.pending}
-        placeholder="分析异常及原因，给出处理方案并比较仿真预计效果。"
-        onChange={event => { setSendNotice(""); setDraft(event.target.value); event.target.style.height = "auto"; event.target.style.height = `${Math.min(event.target.scrollHeight, 100)}px`; }} onKeyDown={event => {
-          if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) {
-            event.preventDefault(); send();
-          }
-        }} /><button type="submit" className="ain-button ain-primary" disabled={sendBlocked || (currentEmpty && !questionTime) || !draft.trim()}>
-          {query.pending ? "分析中…" : followingLive && !questionTime ? "先固定时刻" : "发送"}</button></div>
-      <div className="ain-query-input-meta"><span>{followingLive ? (replay?.canAnalyzeQuestionTime ? "历史时间或未来预测可直接发送；未来问题会固定查看时刻并打开预测。" : "可先编辑问题；固定当前时刻后发送，主时钟播放状态不变。") : "未来问题进入预测预警；点击示例填入后可编辑 · Ctrl / Cmd + Enter"}</span><span>{draft.length}/500</span></div>
-      {/* 常驻操作提示（核查清单第 10 条）：主时钟在走时必须让人看见
-          "时钟仍在走 / 分析时刻已固定"的区别，不能只靠一次性的警告条。 */}
-      {followingLive && (
-        <p className="ain-query-livehint" role="status">
-          主时钟正在播放：普通问题需先固定分析时刻（结果会标注分析截至时间）；含历史时间或未来预测的问题可直接发送。
-          点「固定当前时刻」可立即固定。
-        </p>
-      )}
-    </form>
-    {forecastMode && <p className="ain-ai-note">当前展示预测风险研判。发送当前网络或历史分析问题时，将切换分析对象。</p>}
-    {sendNotice && <p className="ain-ai-warning" role="status">{sendNotice}</p>}
-    {currentEmpty && !disabled && !query.pending && <p className="ain-ai-note" role="status">当前窗口暂无采样，暂不能发起新分析；仍可查看及重试原截止时刻的分析。</p>}
-    {disabled && !query.pending && <p className="ain-ai-note" role={dataError ? "alert" : "status"}>{dataLoading ? "正在读取历史数据，完成后固定时刻即可提问。" : dataError ? `${dataError}；请在顶部重载数据。` : "当前查看时刻暂无有效采样，请返回当前或查看已到达的历史数据。"}</p>}
-
-    <div className="ain-ai-workspace">
+  const diagnosisContent = (
       <section className="ain-ai-diagnosis-column" aria-labelledby="ain-ai-diagnosis-title">
-        <div className="ain-ai-column-heading"><h3 id="ain-ai-diagnosis-title">问题研判与证据</h3>
+        <div className={`ain-ai-column-heading${workspace && forecastMode ? " ain-visually-hidden" : ""}`}><h3 id="ain-ai-diagnosis-title" className={workspace ? "ain-visually-hidden" : undefined}>问题研判与证据</h3>
           {/* 状态徽标按后端 current_state 分档：窗口内出现过异常 ≠ 此刻仍在故障，
               必须区分「当前故障 / 窗口内已恢复 / 性能提示 / 正常」，
               否则用户会把"过去 60 分钟里发生过"误读成"现在还在故障"。 */}
@@ -257,7 +231,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               注意：这个徽标只说**意图**，不能说"未走大模型"——规则命中时根本没降级，
               回答仍可能由模型生成（正文里的 [AI] 标记才是回答来源）。
               有降级原因（模型不可用/调用失败）时才显示那串原因。 */}
-          {!query.pending && query.result?.intentSource && query.result.intentSource !== "llm" && (
+          {!workspace && !query.pending && query.result?.intentSource && query.result.intentSource !== "llm" && (
             <span className="ain-ai-source-badge" title={
               query.result.intentDegradeReason
                 ? `意图未使用大模型：${query.result.intentDegradeReason}`
@@ -269,7 +243,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           </div>
         <div className="ain-ai-answer" aria-live="polite" aria-busy={query.pending}>
           {forecastReview}
-          {!forecastMode && query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
+          {!workspace && !forecastMode && query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
           {/* UE 级提问的兜底说明：平台方案是 AP/区域级的，单用户优化未建模。
               提前说清边界，避免"我问的是 UE1，为什么结论是整网"的误解。 */}
           {!forecastMode && query.question && /\bUE[-－\s]?0*\d+\b/i.test(query.question) && (
@@ -281,7 +255,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           {!forecastMode && query.error && <div className="ain-query-error" role="alert"><p>{query.error}</p>
             <button type="button" className="ain-button" disabled={busy} onClick={() => send(query.question, query.contextRequest, true)}>重试本次问题</button></div>}
           {mismatch && <p className="ain-ai-warning">本次返回范围与已加载数据不同，请核对范围后使用结果。</p>}
-          {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，右侧建议暂不可采用，辅助图使用已加载数据。</p>}
+          {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，方案暂不可采用，辅助图使用已加载数据。</p>}
           {!query.pending && !query.error && result && !result.diagnosis && <div className="ain-ai-tool-reply"><ReplyText text={result.reply} />
             {/* 多步编排：把每一步的实际结果列出来（核查清单第 5 条：
                 不要只返回"已执行两步"的文案，要能看出每步做了什么、结论是什么） */}
@@ -305,40 +279,102 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
                 ))}
               </ol>
             )}
-            <p className="ain-ai-result-scope">返回范围：{scopeLabel(result.scope)}</p></div>}
-          {/* 复合编排的处理建议（复查 P1-8）：编排已返回 plans，不能只给步骤摘要让用户再问一遍 */}
-          {!query.pending && !query.error && result?.chain && (result.plans?.length ?? 0) > 0 && (
-            <div className="ain-ai-tool-reply" aria-label="本次编排给出的处理建议">
-              <p className="ain-ai-analysis-caption">处理建议（本步已给出 {result.plans!.length} 个方案，详见右侧「处理建议」）</p>
-              <ol className="ain-ai-chain">
-                {result.plans!.slice(0, 3).map((plan, index) => <li key={plan.id} className="ain-ai-chain-step">
-                  <span className="ain-ai-chain-no">{index + 1}</span>
-                  <div><strong>{plan.name}</strong>
-                    {plan.description && <p>{plan.description}</p>}</div>
-                </li>)}
-              </ol>
-            </div>)}
-          {analysis && <><div className="ain-ai-analysis-caption">{result === analysis ? "本次研判" : "关联研判（保留）"}{result !== analysis && diagnosisQuestion && ` · ${diagnosisQuestion}`}</div>
-            <DiagnosisReply result={analysis} onEvidence={selection => setEvidenceSelection(previous => ({ ...selection, id: (previous?.id ?? 0) + 1, diagnosisId: query.diagnosisId, requestId: query.requestId }))} /></>}
-          {!forecastReview && !analysis && !result && !query.pending && !query.error && <p className="ain-ai-empty">{dataStatus ? `${dataStatus}，加载有效数据后开始研判。` : "先选择一个问题示例，或直接描述异常。回答、证据图和处理建议会展示在这里。"}</p>}
+            {!workspace && <p className="ain-ai-result-scope">返回范围：{scopeLabel(result.scope)}</p>}</div>}
+          {analysis && <>{(!workspace || result !== analysis) && <div className="ain-ai-analysis-caption">{result === analysis ? "本次研判" : "关联研判（保留）"}{result !== analysis && diagnosisQuestion && ` · ${diagnosisQuestion}`}</div>}
+            <DiagnosisReply result={analysis} showScope={!workspace} onEvidence={selection => setEvidenceSelection(previous => ({ ...selection, id: (previous?.id ?? 0) + 1, diagnosisId: query.diagnosisId, requestId: query.requestId }))} /></>}
+          {!forecastReview && !analysis && !result && !query.pending && !query.error && <p className="ain-ai-empty">{dataStatus ? `${dataStatus}，加载有效数据后开始研判。` : "先选择一个问题示例，或直接描述异常。回答与证据会展示在问题研判页。"}</p>}
         </div>
         {data && (diagnosis || result?.chart) && <DiagnosisCharts key={`${query.diagnosisId}-${result?.chart ? query.requestId : "evidence"}-${currentEvidenceSelection?.id ?? 0}`}
           data={data} diagnosis={analysisMismatch ? null : diagnosis} toolResult={mismatch ? null : result}
           spatial={spatial} spatialPending={spatialPending} spatialError={spatialError} onSpatialRetry={onSpatialRetry}
           busy={busy} onTool={tool} selection={currentEvidenceSelection} />}
-        {diagnosis?.state === "anomaly" && diagnosis.suggestion.trim() && <button type="button" className="ain-ai-adopt-link"
-          disabled={busy || analysisMismatch || !data} onClick={() => managementRef.current?.prepare({ source: "chat", result: diagnosis, candidate: diagnosis.candidates[0] || null })}>
+        {!workspace && diagnosis?.state === "anomaly" && diagnosis.suggestion.trim() && <button type="button" className="ain-ai-adopt-link"
+          disabled={busy || analysisMismatch || !data} onClick={() => { managementRef.current?.prepare({ source: "chat", result: diagnosis, candidate: diagnosis.candidates[0] || null }); }}>
           根据此研判准备方案 →</button>}
         {/* key 让范围变化时重建面板，从而丢弃旧的回测结果 */}
-        {!forecastMode && <ForecastComparePanel key={scope ? `${scope.scenario}|${scope.start}|${scope.end}` : "none"}
+        {!workspace && !forecastMode && <ForecastComparePanel key={scope ? `${scope.scenario}|${scope.start}|${scope.end}` : "none"}
           scope={scope ?? null} disabled={disabled} archiveParentId={query.archiveId} />}
-      </section>
-      {!forecastMode && (data ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
-        diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans}
-        sourceQuestion={diagnosisQuestion} pending={query.pending} archiveParentId={query.archiveId} />
-        : <section className="ain-ai-management-empty" aria-label="处理建议与效果"><h3>处理建议与效果</h3><p>{dataStatus}。加载数据并完成研判后，查看处理方案、配置参数和仿真预计效果。</p></section>)}
-    </div>
 
+        {workspace && <nav className="ain-workspace-next" aria-label="研判后续操作">
+          <span>{forecastPending || query.pending ? '研判完成后，可继续查看方案与效果。' : query.error ? query.contextRequest && analysis ? '辅助查询失败，原研判与方案仍可查看。' : '请重试本次研判后继续。' : '核对研判与证据后，继续选择方案并比较预计效果。'}</span>
+          <button type="button" className="ain-button ain-primary" disabled={!workspace.canViewPlans} onClick={workspace.showPlans}>查看方案效果 →</button>
+        </nav>}
+      </section>
+  );
+  const planContent = (<>
+{!forecastMode && (data && (analysis || (!query.pending && !query.error && result)) ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
+        diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans ?? result?.plans}
+        sourceQuestion={diagnosisQuestion || query.question} pending={query.pending} archiveParentId={query.archiveId} />
+        : <section className="ain-ai-management-empty" aria-label="处理建议与效果"><h3>处理建议与效果</h3><p>{query.pending ? "正在研判本次问题，方案将在结果返回后展示。" : query.error ? "本次研判未完成，请返回问题研判页重试。" : "本次回答未提供处理方案，可继续提问需要处理的异常及目标。"}</p></section>)}
+  </>);
+  return <section className="ain-ai-panel ain-ai-v3 ain-feature-module" id="ain-ai-module" aria-labelledby="ain-ai-title">
+    <header className="ain-ai-heading">
+      <div className="ain-ai-heading-title"><span className="ain-ai-symbol" aria-hidden="true">AI</span>
+        <div><h2 id="ain-ai-title">AI 网络助手</h2><p>{workspace ? "在此提问，在左侧查看研判与方案" : "提问 → 原因与证据 → 处理方案 → 仿真效果对比"}</p></div></div>
+      <div className="ain-ai-heading-actions">
+        <button type="button" className={onOpenForecast ? "ain-forecast-trigger" : "ain-forecast-placeholder"} disabled={historical || forecastDisabled || query.pending || dataLoading || !onOpenForecast}
+          onClick={onOpenForecast} title={historical ? "历史查看期间不提供未来预测" : "查看频谱态势、未来风险及相关指标；结果固定到打开时刻"}>{forecastMode ? "调整预测范围" : "预测预警"} {!forecastMode && <span>{historical ? "历史不可用" : forecastLabel}</span>}</button>
+        <span className="ain-ai-status" data-tone={query.error || dataError ? "error" : query.pending || dataLoading ? "info" : "neutral"}>{status}</span>
+      </div>
+    </header>
+    {forecastMode && <div className="ain-forecast-task-mode"><strong>当前任务：预测风险研判</strong>
+      <button type="button" className="ain-button" onClick={() => { setDraft(''); setSendNotice(''); onLeaveForecast?.(); }} disabled={!onLeaveForecast}>切换到现存分析</button>
+    </div>}
+    {replay ? <div className="ain-ai-scope ain-ai-replay-scope">
+      <span>主时钟：{replay.currentTime}（北京时间）</span>
+      {forecastMode ? <>
+        <span>预测基准：{forecastContext?.result.baseTime ?? replay.viewTime}（北京时间）</span>
+        {forecastContext && <span>关注时段：{(forecastContext.targetWindow ?? forecastContext.result.forecast).start} — {(forecastContext.targetWindow ?? forecastContext.result.forecast).end}</span>}
+      </> : <>
+        <span>查看截止时刻：{replay.viewTime ?? replay.analysisTime ?? replay.currentTime}（北京时间）</span>
+        <span className="ain-ai-view-mode">查看状态：{historical ? "历史回顾" : followingLive ? "跟随当前" : "固定时刻分析"}</span>
+      </>}
+      {replay.mode ? <button type="button" className="ain-button" disabled={followingLive && disabled}
+        onClick={() => { if (forecastMode) { setDraft(''); setSendNotice(''); } (followingLive ? replay.onFreeze : replay.onExit)?.(); }}>{forecastMode ? "退出预测，跟随主时钟" : followingLive ? "固定当前时刻" : "退出分析，返回当前"}</button>
+        : <span>{replay.analysisTime ? `分析截至：${replay.analysisTime}（北京时间）` : "固定查看时刻后发送问题"}</span>}
+    </div> : <p className="ain-ai-scope">分析范围：{scope ? scopeLabel(scope) : `${scenario} · 后端默认范围`}</p>}
+    {forecastMode ? <details className="ain-question-time-settings"><summary>预测依据与提问说明</summary>
+      {forecastContext && <p>参考历史：{forecastContext.result.history.start} — {forecastContext.result.history.end}（北京时间）</p>}
+      <p>本区继续提问只分析所选预测风险，保持同一基准和关注时段；修改未来范围会打开预测预警，确认风险后再交给 AI。查询当前或历史问题，请先切换到现存分析。</p>
+    </details> : workspace ? <details className="ain-question-time-settings"><summary>参考时间与提问说明</summary>{referenceControls}<TimeSelectionGuide historical={historical} /></details> : <>{referenceControls}<TimeSelectionGuide historical={historical} /></>}
+    {!forecastMode && analysisNotice && <p className="ain-ai-warning" role="status">{analysisNotice}</p>}
+
+    <div className="ain-query-examples" aria-label={forecastMode ? "预测问题示例" : "问题示例"}>
+      {(forecastMode ? FORECAST_EXAMPLES : EXAMPLES).map(item => <button className="ain-query-example" key={item.label} type="button" disabled={forecastPending || query.pending || (historical && needsFutureForecast(item.question))}
+        onClick={() => { setSendNotice(""); setDraft(`${scenario}：${item.question}`); inputRef.current?.focus(); }}>
+        <strong>{item.label}</strong><span>{item.question}{historical && needsFutureForecast(item.question) && <small className="ain-example-pending">历史不可用</small>}</span></button>)}
+    </div>
+    <form className="ain-query-form" onSubmit={event => { event.preventDefault(); send(); }}>
+      <label className="ain-input-label" htmlFor="ain-question">{forecastMode ? "继续提问所选预测风险" : "输入你的网络问题"}</label>
+      <div className="ain-query-composer"><textarea id="ain-question" ref={inputRef} rows={2} maxLength={500} value={draft} disabled={query.pending || forecastPending}
+        placeholder={forecastMode ? "例如：这条预测风险为什么会发生？有哪些预防方案？" : "分析异常及原因，给出处理方案并比较仿真预计效果。"}
+        onChange={event => { setSendNotice(""); setDraft(event.target.value); event.target.style.height = "auto"; event.target.style.height = `${Math.min(event.target.scrollHeight, 100)}px`; }} onKeyDown={event => {
+          if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault(); send();
+          }
+        }} /><button type="submit" className="ain-button ain-primary" disabled={sendBlocked || (!forecastMode && currentEmpty && !questionTime) || !draft.trim()}>
+          {query.pending || forecastPending ? "分析中…" : !forecastMode && followingLive && !questionTime ? "先固定时刻" : "发送"}</button></div>
+      <div className="ain-query-input-meta"><span>{forecastMode ? "继续分析所选预测风险 · Ctrl / Cmd + Enter" : followingLive ? (replay?.canAnalyzeQuestionTime ? "历史时间或未来预测可直接发送；未来问题会固定查看时刻并打开预测。" : "可先编辑问题；固定当前时刻后发送，主时钟播放状态不变。") : "未来问题进入预测预警；点击示例填入后可编辑 · Ctrl / Cmd + Enter"}</span><span>{draft.length}/500</span></div>
+      {/* 常驻操作提示（核查清单第 10 条）：主时钟在走时必须让人看见
+          "时钟仍在走 / 分析时刻已固定"的区别，不能只靠一次性的警告条。 */}
+      {followingLive && (
+        <p className="ain-query-livehint" role="status">
+          主时钟正在播放：普通问题需先固定分析时刻（结果会标注分析截至时间）；含历史时间或未来预测的问题可直接发送。
+          点「固定当前时刻」可立即固定。
+        </p>
+      )}
+    </form>
+    {forecastMode && <p className="ain-forecast-task-note">本次提问针对所选预测风险；查看当前或历史问题，请先切换分析模式。</p>}
+    {sendNotice && <p className="ain-ai-warning" role="status">{sendNotice}</p>}
+    {!forecastMode && currentEmpty && !disabled && !query.pending && <p className="ain-ai-note" role="status">当前窗口暂无采样，暂不能发起新分析；仍可查看及重试原截止时刻的分析。</p>}
+    {!forecastMode && disabled && !query.pending && <p className="ain-ai-note" role={dataError ? "alert" : "status"}>{dataLoading ? "正在读取历史数据，完成后固定时刻即可提问。" : dataError ? `${dataError}；请在顶部重载数据。` : "当前查看时刻暂无有效采样，请返回当前或查看已到达的历史数据。"}</p>}
+
+    {workspace ? <>
+      {workspace.diagnosisHost && createPortal(diagnosisContent, workspace.diagnosisHost)}
+      {workspace.plansHost && createPortal(planContent, workspace.plansHost)}
+    </> : <div className="ain-ai-workspace">{diagnosisContent}{planContent}</div>}
+
+    {!forecastMode && <details className="ain-question-tools"><summary>本次记录与导出</summary>
     <div className="ain-query-footer"><details className="ain-query-history-details">
       <summary>本次查询记录 <span>{query.history.length}/6</span></summary>
       <p className="ain-ai-note">最近 6 次 · 仅记录问题和回答摘要</p>
@@ -367,6 +403,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
       </span>
       <button type="button" className="ain-ai-text-button" disabled={query.pending || !query.history.length} onClick={query.clearHistory}>清空记录</button>
     </div>
-    {exportNotice && <p className="ain-ai-note" role="status">{exportNotice}</p>}
+    </details>}
+    {!forecastMode && exportNotice && <p className="ain-ai-note" role="status">{exportNotice}</p>}
   </section>;
 }

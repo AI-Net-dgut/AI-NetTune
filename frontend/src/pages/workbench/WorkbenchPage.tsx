@@ -27,8 +27,14 @@ import { FORECAST_CONFIG, FORECAST_LIMITS } from "../../forecast/config";
 import type { ForecastHandoff } from "../../forecast/types";
 import { resolveForecastQuestion } from '../../forecast/questionTime';
 import { minuteForecastRequest } from '../../forecast/main4Adapter';
+import { forecastQuestionKind } from '../../forecast/interaction';
 import "./WorkbenchPage.css";
 import "./BackendIntegration.css";
+import { AnalysisContextBanner } from './WorkspacePresentation';
+import { WorkspacePresentationContext } from './WorkspacePresentationContext';
+import type { AnalysisContext } from './WorkspacePresentation';
+import type { WorkspaceTab } from './WorkspacePresentationContext';
+import './WorkbenchTabs.css';
 
 interface ReplaySource {
   status: "loading" | "ready" | "error" | "empty";
@@ -53,7 +59,13 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
   const snapshotRef = useRef<AnalysisSnapshot | null>(null);
   const query = useNetworkQuery();
   const forecast = useForecastPreview({ clock, config, readClock });
-  const [forecastTransfer, setForecastTransfer] = useState<{ key: string; handoff: ForecastHandoff } | null>(null);
+  const [forecastTransfer, setForecastTransfer] = useState<{ key: string; handoff: ForecastHandoff; revision: number } | null>(null);
+  const forecastReviewSequence = useRef(0);
+  const [forecastActivity, setForecastActivity] = useState({ key: '', pending: true });
+  const reportForecastStatus = useCallback((key: string, pending: boolean) => setForecastActivity({ key, pending }), []);
+  const [diagnosisHost, setDiagnosisHost] = useState<HTMLDivElement | null>(null);
+  const [plansHost, setPlansHost] = useState<HTMLDivElement | null>(null);
+  const [tabChoice, setTabChoice] = useState<{ context: string; analysis: string; tab: WorkspaceTab } | null>(null);
   const resetQuery = query.reset;
   const clearedContext = useRef(contextKey);
   const requestSerial = useRef(0);
@@ -135,6 +147,11 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
   async function submitAnalysis(message: string, preserveDiagnosis = false, retry = false) {
     let current = latest.current;
     if (current.locked || !message.trim() || source.status !== "ready") return;
+    // 预测任务只通过明确的操作退出，普通提问不能悄悄改成现存分析。
+    if (forecastTransfer?.key === replayContextKey(current)) {
+      setAnalysisNotice({ key: replayContextKey(current), text: '当前为预测风险研判；请先点击“切换到现存分析”，再查询当前或历史问题。' });
+      return;
+    }
     const sentMasterTime = formatReplayTime(current.currentMs);
     if (!preserveDiagnosis && !retry) {
       const future = resolveForecastQuestion(message, {
@@ -183,6 +200,8 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     snapshotRef.current = captured; setSnapshot(captured);
     act({ type: "lock", value: true });
     const serial = ++requestSerial.current;
+    if (!preserveDiagnosis && !retry && typeof document !== 'undefined') requestAnimationFrame(() =>
+      document.getElementById('ain-tab-diagnosis')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' }));
     try {
       await query.submit(message, config.scenario, captured.data.scope, {
         preserveDiagnosis, analysisMode: current.viewMode, currentTime: sentMasterTime, workspaceSnapshot: captured.data,
@@ -211,30 +230,110 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     act({ type: "forecast-analysis", startMs: toEpoch(handoff.result.history.start), endMs: toEpoch(handoff.result.baseTime) });
     const next = readClock();
     if (next.viewMode !== "analysis" || formatReplayTime(viewTime(next)) !== handoff.result.baseTime) return;
-    setForecastTransfer({ key: replayContextKey(next), handoff }); forecast.close();
-    if (typeof document !== "undefined") document.getElementById("ain-ai-module")?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+    setCaseQuestion('');
+    setForecastTransfer({ key: replayContextKey(next), handoff, revision: ++forecastReviewSequence.current }); forecast.close();
+    if (typeof document !== "undefined") requestAnimationFrame(() => document.getElementById("ain-tab-diagnosis")?.scrollIntoView?.({ behavior: "smooth", block: "nearest" }));
   }
 
-  return <main className="ain-workbench">
+  const transferred = forecastTransfer?.key === contextKey ? forecastTransfer.handoff : null;
+  const forecastReviewKey = transferred ? `${contextKey}|${forecastTransfer!.revision}` : '';
+  const forecastPending = Boolean(transferred && (forecastActivity.key !== forecastReviewKey || forecastActivity.pending));
+
+  function askForecast(message: string): string {
+    if (!transferred || forecastPending || source.status !== 'ready') return '预测研判尚未就绪，请稍后重试。';
+    // 按这轮固定基准解释时间，不采用继续前进的主时钟。
+    const horizon = Math.round((toEpoch(transferred.result.forecast.end) - toEpoch(transferred.result.baseTime)) / 60_000);
+    const kind = forecastQuestionKind(message, config.scenario);
+    if (kind === 'existing') {
+      return '当前为预测风险研判，请先点击“切换到现存分析”，再查询当前或历史问题。本次未发送，预测结果已保留。';
+    }
+    if (kind === 'range') {
+      const future = resolveForecastQuestion(message, { baseTime: transferred.result.baseTime,
+        defaultHorizonMinutes: horizon, maxHorizonMinutes: FORECAST_LIMITS.maxHorizonMinutes });
+      if (future.kind === 'error') return future.message;
+      if (future.kind !== 'forecast') return '请使用“预测未来60分钟”等明确范围，或点击“调整预测范围”。';
+      forecast.open({ horizonMinutes: future.horizonMinutes, targetWindow: future.targetWindow, question: message, follow: false });
+      return '';
+    }
+    // 普通追问原样保留预测轮次、所选预警、基准与关注时段。
+    setForecastTransfer({ key: contextKey, handoff: { ...transferred, question: message }, revision: ++forecastReviewSequence.current });
+    return '';
+  }
+  function leaveForecast() {
+    setCaseQuestion('');
+    clearContext(contextKey);
+    setAnalysisNotice({ key: contextKey, text: '已切换到现存分析，查看时刻仍固定；请选择当前或历史问题后发送。' });
+  }
+  const hasAnalysis = Boolean(transferred || (activeSnapshot && (visibleQuery.question || visibleQuery.pending || visibleQuery.error || visibleQuery.result)));
+  const canViewPlans = Boolean(transferred ? !forecastPending : (hasAnalysis && !visibleQuery.pending && (visibleQuery.diagnosisResult || (!visibleQuery.error && visibleQuery.result))));
+  const analysisKey = transferred
+    ? `forecast:${forecastReviewKey}:${transferred.result.id}:${transferred.alertId}:${transferred.targetWindow?.start ?? ''}:${transferred.targetWindow?.end ?? ''}`
+    : hasAnalysis ? `query:${visibleQuery.requestId}` : '';
+  useEffect(() => {
+    // New analysis starts at its type/time header, rather than the previous answer's scroll position.
+    for (const id of ['ain-panel-diagnosis', 'ain-panel-plans']) {
+      const panel = document.getElementById(id);
+      if (panel) panel.scrollTop = 0;
+    }
+  }, [analysisKey, contextKey]);
+  const requestedTab = tabChoice?.context === contextKey && tabChoice.analysis === analysisKey ? tabChoice.tab : hasAnalysis ? 'diagnosis' : 'data';
+  const activeTab: WorkspaceTab = requestedTab === 'plans' && !canViewPlans ? 'diagnosis'
+    : requestedTab !== 'data' && !hasAnalysis ? 'data' : requestedTab;
+  const selectTab = (tab: WorkspaceTab) => {
+    if ((tab === 'diagnosis' && !hasAnalysis) || (tab === 'plans' && !canViewPlans)) return;
+    setTabChoice({ context: contextKey, analysis: analysisKey, tab });
+  };
+  // Evidence queries keep the original diagnosis and its plans. Their headers
+  // must keep that same question/forecast context, even if the helper fails.
+  const contextResult = visibleQuery.contextRequest && visibleQuery.diagnosisResult ? visibleQuery.diagnosisResult : visibleQuery.result;
+  const contextQuestion = visibleQuery.contextRequest && visibleQuery.diagnosisResult ? visibleQuery.diagnosisQuestion : visibleQuery.question;
+  const chainForecast = contextResult?.chainForecast;
+  const chainBase = chainForecast?.baseTime;
+  const chainHorizon = chainForecast?.horizonMinutes ?? contextResult?.horizonMinutes;
+  let chainFuture: { start: string; end: string } | undefined;
+  if (chainBase && chainHorizon && Number.isFinite(chainHorizon) && chainHorizon > 0) {
+    try { chainFuture = { start: chainBase, end: formatReplayTime(toEpoch(chainBase) + chainHorizon * 60_000) }; }
+    catch { /* An optional malformed chain timestamp must not crash the workbench. */ }
+  }
+  const selectedForecastAlert = transferred?.result.alerts.find(a => a.id === transferred.alertId);
+  const analysisContext: AnalysisContext = transferred ? {
+    kind: 'forecast', question: transferred.question || '',
+    history: { scenario: transferred.result.scenario, ...transferred.result.history },
+    baseTime: transferred.result.baseTime, future: transferred.targetWindow ?? transferred.result.forecast,
+    selectedRisk: selectedForecastAlert ? (selectedForecastAlert.title.includes(selectedForecastAlert.target) ? selectedForecastAlert.title : `${selectedForecastAlert.target} · ${selectedForecastAlert.title}`) : undefined,
+  } : {
+    kind: chainForecast ? 'mixed' : clock.viewMode === 'history' ? 'history' : 'current',
+    history: activeSnapshot?.data.scope ?? scope, question: contextQuestion,
+    baseTime: chainBase, future: chainFuture,
+    anomalySpans: contextResult?.diagnosis?.anomalySpans,
+    anomalyScope: contextResult?.diagnosis?.anomalyScope,
+  };
+
+  return <WorkspacePresentationContext.Provider value={{ diagnosisHost, plansHost, canViewPlans, showPlans: () => selectTab('plans') }}>
+  <main className="ain-workbench ain-tabbed-workbench">
     <div className="ain-workbench-title"><div><h1>网络分析与管理</h1>
       <p>主时钟支持暂停与继续，固定查看时刻研判原因与处理方案。</p></div>
       <span className="ain-source-badge">历史数据回放</span></div>
 
     <ReplayControls state={clock} act={act} loading={loading} onReload={reloadSource} config={config} />
 
-    <QueryPanel prefillQuestion={caseQuestion} analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
-      onOpenForecast={() => forecast.open()} forecastDisabled={source.status !== "ready" || clock.locked}
-      forecastLabel={forecast.lastResult?.status === "ready" ? `${forecast.lastResult.source === "demo" ? "示例·" : "最近查看·"}${forecast.lastResult.alerts.length}项` : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测"}
-      forecastReview={forecastTransfer?.key === contextKey ? <ForecastReview key={`${forecastTransfer.key}-${forecastTransfer.handoff.result.id}`} handoff={forecastTransfer.handoff} /> : undefined}
-      disabled={!data?.metrics.length || loading || Boolean(source.error)} data={data}
-      spatial={visibleSpatial.data} spatialPending={visibleSpatial.loading} spatialError={visibleSpatial.error}
-      onSpatialRetry={visibleSpatial.retry} focusedApId={activeSnapshot ? activeSnapshot.focusedApId : focusedApId}
-      dataLoading={loading} dataError={source.error} onSubmitAnalysis={submitAnalysis}
-      replay={{ playing: clock.playing, currentTime, analysisTime: activeSnapshot?.data.scope.end ?? null,
-        viewTime: displayedTime, mode: clock.viewMode, canAnalyzeQuestionTime: source.status === "ready", hasCurrentData: Boolean(data?.metrics.length),
-        onFreeze: () => act({ type: "freeze" }), onExit: () => act({ type: "live" }) }} />
-
-    <section className="ain-data-module ain-feature-module" id="ain-data-module" aria-labelledby="ain-data-title">
+    <section className="ain-workspace-results" aria-label="数据与分析工作区">
+      <div className="ain-workspace-tabs" role="tablist" aria-label="工作区内容" onKeyDown={event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+        const at = tabs.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (at + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        event.preventDefault(); tabs[next]?.focus(); tabs[next]?.click();
+      }}>
+        {([{ id: 'data', label: '数据展示', enabled: true }, { id: 'diagnosis', label: '问题研判', enabled: hasAnalysis }, { id: 'plans', label: '方案效果', enabled: canViewPlans }] as const).map(tab =>
+          <button key={tab.id} id={`ain-tab-${tab.id}`} type="button" role="tab" aria-selected={activeTab === tab.id}
+            aria-controls={`ain-panel-${tab.id}`} disabled={!tab.enabled} tabIndex={activeTab === tab.id ? 0 : -1}
+            title={!tab.enabled ? tab.id === 'diagnosis' ? '发送问题后查看研判' : '研判完成后查看方案与效果' : undefined}
+            onClick={() => selectTab(tab.id)}>{tab.label}</button>)}
+        <span>{hasAnalysis ? analysisContext.kind === 'forecast' ? '预测分析' : analysisContext.kind === 'mixed' ? '现存 + 预测' : '现存分析' : '提问后解锁研判与方案'}</span>
+      </div>
+      <div className="ain-workspace-body">
+    <section hidden={activeTab !== 'data'} role="tabpanel" aria-labelledby="ain-tab-data" id="ain-panel-data" className="ain-data-module ain-feature-module">
       <header className="ain-feature-heading ain-data-heading"><div className="ain-module-title">
         <h2 className="ain-feature-title" id="ain-data-title">数据展示</h2>
         <p>{clock.viewMode === "live" ? "跟随主时钟更新" : "与AI查看时刻同步固定"} · 选择对象观察指标、地图与连接</p></div>
@@ -276,10 +375,35 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
           spatialNotice={clock.viewMode === "live" ? "实时跟随展示最新采样；固定查看时刻后加载对应窗口的空间估计。" : ""} />
       </>}
     </section>
+        <section id="ain-panel-diagnosis" className="ain-workspace-panel ain-ai-v3" role="tabpanel" aria-labelledby="ain-tab-diagnosis" hidden={activeTab !== 'diagnosis'}>
+          {hasAnalysis && <AnalysisContextBanner context={analysisContext} section="问题研判" />}
+          <div ref={setDiagnosisHost} />
+        </section>
+        <section id="ain-panel-plans" className="ain-workspace-panel ain-ai-v3" role="tabpanel" aria-labelledby="ain-tab-plans" hidden={activeTab !== 'plans'}>
+          {hasAnalysis && <AnalysisContextBanner context={analysisContext} section="方案效果" />}
+          <div ref={setPlansHost} />
+          <nav className="ain-workspace-next"><button type="button" className="ain-button" onClick={() => selectTab('diagnosis')}>← 返回问题研判</button><button type="button" className="ain-button" onClick={() => selectTab('data')}>查看数据展示</button></nav>
+        </section>
+      </div>
+    </section>
+    <QueryPanel prefillQuestion={caseQuestion} analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
+      onOpenForecast={() => forecast.open()} forecastDisabled={source.status !== "ready" || clock.locked}
+      forecastLabel={forecast.lastResult?.status === "ready" ? `${forecast.lastResult.source === "demo" ? "示例·" : "最近查看·"}${forecast.lastResult.alerts.length}项` : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测"}
+      forecastReview={transferred ? <ForecastReview key={forecastReviewKey} reviewKey={forecastReviewKey} onStatusChange={reportForecastStatus} handoff={transferred} /> : undefined}
+      forecastContext={transferred ?? undefined} forecastPending={forecastPending} onForecastQuestion={askForecast} onLeaveForecast={leaveForecast}
+      disabled={!data?.metrics.length || loading || Boolean(source.error)} data={data}
+      spatial={visibleSpatial.data} spatialPending={visibleSpatial.loading} spatialError={visibleSpatial.error}
+      onSpatialRetry={visibleSpatial.retry} focusedApId={activeSnapshot ? activeSnapshot.focusedApId : focusedApId}
+      dataLoading={loading} dataError={source.error} onSubmitAnalysis={submitAnalysis}
+      replay={{ playing: clock.playing, currentTime, analysisTime: activeSnapshot?.data.scope.end ?? null,
+        viewTime: displayedTime, mode: clock.viewMode, canAnalyzeQuestionTime: source.status === "ready", hasCurrentData: Boolean(data?.metrics.length),
+        onFreeze: () => act({ type: "freeze" }), onExit: () => act({ type: "live" }) }} />
+
     {forecast.session && <ForecastDialog request={forecast.session.request} result={forecast.result} pending={forecast.pending}
       error={forecast.error} onClose={forecast.close} onRefresh={forecast.refresh} onAnalyze={reviewForecast}
       canAnalyze={!clock.locked && clock.viewMode !== "history" && source.status === "ready"} fixedView={clock.viewMode === "analysis"}
       follow={forecast.follow} onToggleFollow={forecast.toggleFollow} followStepMinutes={forecast.followStepMinutes}
       onHorizonChange={forecast.setHorizonMinutes} currentTime={currentTime} />}
-  </main>;
+  </main>
+  </WorkspacePresentationContext.Provider>;
 }

@@ -38,36 +38,39 @@ export default function ChartPanel({
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const chart = useRef<ReturnType<typeof echarts.init> | null>(null);
+  const latestOption = useRef(option);
+  const latestSelect = useRef(onSelect);
   useEffect(() => {
-    if (!container.current) return;
-    const instance = echarts.init(container.current, null, { renderer: "svg" });
-    chart.current = instance;
-    const observer = new ResizeObserver(() => {
-      const element = container.current;
-      if (!instance.isDisposed() && element?.isConnected && element.clientWidth > 0 && element.clientHeight > 0)
-        instance.resize();
-    });
-    observer.observe(container.current);
+    latestOption.current = option;
+    chart.current?.setOption(option, { notMerge: true });
+  }, [option]);
+  useEffect(() => { latestSelect.current = onSelect; }, [onSelect]);
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    let instance: ReturnType<typeof echarts.init> | null = null;
+    // Inactive workspace tabs stay mounted. Initialize only after layout supplies a
+    // real size; ResizeObserver also handles returning to a previously hidden tab.
+    const resize = () => {
+      if (!element.isConnected || element.clientWidth <= 0 || element.clientHeight <= 0) return;
+      if (!instance) {
+        instance = echarts.init(element, null, { renderer: "svg" });
+        chart.current = instance;
+        instance.setOption(latestOption.current, { notMerge: true });
+        instance.on("click", "series.bar", (event: { name?: string }) => {
+          if (event.name) latestSelect.current?.(event.name);
+        });
+      } else if (!instance.isDisposed()) instance.resize();
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(element);
+    resize();
     return () => {
       observer.disconnect();
-      instance.dispose();
+      instance?.dispose();
       chart.current = null;
     };
   }, []);
-  useEffect(() => {
-    chart.current?.setOption(option, { notMerge: true });
-  }, [option]);
-  useEffect(() => {
-    const instance = chart.current;
-    if (!instance || !onSelect) return;
-    const handleClick = (event: { name?: string }) => {
-      if (event.name) onSelect(event.name);
-    };
-    instance.on("click", "series.bar", handleClick);
-    return () => {
-      if (!instance.isDisposed()) instance.off("click", handleClick);
-    };
-  }, [onSelect]);
   return (
     <figure className={`ain-chart-slot ain-real-chart ${className}`}>
       <figcaption className="ain-slot-heading">

@@ -1,4 +1,7 @@
 /* AI 工作区：上方提问，下方左研判 / 右方案。只影响 v3，不改数据四象限。 */
+.ain-ai-v3 .ain-forecast-task-mode { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin: 8px 0 6px; padding: 7px 8px; border: 1px solid #f0dbad; border-radius: 6px; background: #fff8ec; color: #8a5b1e; font-size: 12px; }
+.ain-ai-v3 .ain-forecast-task-mode .ain-button { padding: 4px 7px; font-size: 11px; }
+.ain-ai-v3 .ain-forecast-task-note { font-size: 11px; color: #8a5b1e; line-height: 1.7; margin: 6px 0; }
 .ain-app.ain-shell .ain-workbench .ain-ai-v3 {
   margin: 12px 0 16px;
   padding: 16px;
