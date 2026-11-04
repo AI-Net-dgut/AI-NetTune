@@ -312,6 +312,11 @@ def simulate(plan, rows, param_values, scope, ap_id):
             parts.append(f"时延 {before['latencyMs']} → {after['latencyMs']} ms（{ratio * 100:+.0f}%）")
     summary = f"{plan['name']}： " + ("；".join(parts) if parts else "各指标基本不变") + "。"
 
+    # RSRP 无变化时（如拥塞类方案：分流/载波扩容只影响 PRB），
+    # trend/coverage 的 before 与 after 完全相同，属于冗余数据，直接不返回。
+    # 前端 planContract 已处理 null：不显示对应按钮，默认展示"指标对比"。
+    has_rsrp_change = abs(d_rsrp) > 0.01
+
     return {
         "id": f"SIM-{plan['id']}",
         "status": "completed",
@@ -323,8 +328,8 @@ def simulate(plan, rows, param_values, scope, ap_id):
         "parameterValues": {p["id"]: param_values.get(p["id"], p["suggestedValue"])
                             for p in plan["parameters"]},
         "metrics": metrics,
-        "trend": _trend(rows, d_rsrp, ap_id),
-        "coverage": _coverage(rows, d_rsrp, ap_id),
+        "trend": _trend(rows, d_rsrp, ap_id) if has_rsrp_change else None,
+        "coverage": _coverage(rows, d_rsrp, ap_id) if has_rsrp_change else None,
     }
 
 
