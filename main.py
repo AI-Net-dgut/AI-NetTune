@@ -3334,6 +3334,12 @@ ALERT_CONGESTION_OCC_PCT = 80.0
 # 只按 5/50 判定时正常时段也会因边缘频段误报；只按单分钟触发时也出现过误报。
 ALERT_MIN_CROSSING_RATIO = 0.8
 ALERT_MIN_CROSSING_MINUTES = 3
+# 预测时刻前移标定（分钟）。实测（scripts/measure_forecast_bias.py，8 个事件）：
+#   bias=0 → 有符号平均误差 +8.8 分钟（系统性偏晚）、绝对误差 10.5、±5 分钟内 0/8；
+#   bias=8 → +0.8 分钟、绝对误差 5.0、±5 分钟内 5/8。
+# 误报未增加：12 个平稳窗口 0→0；accept_forecast 的命中 8/8、平均提前 +4.9 分钟不变。
+# 需要回退时设 NETTUNE_FORECAST_BIAS_MINUTES=0。
+FORECAST_BIAS_MINUTES = int(os.getenv("NETTUNE_FORECAST_BIAS_MINUTES", "8") or 0)
 
 
 def _min_crossing_bands(band_count: int) -> int:
@@ -3742,7 +3748,12 @@ def forecast_preview(req: ForecastPreviewRequest):
                     summary = (summary.rstrip("。")
                                + f"（本轮预测共 {len(runs)} 个独立时段，这是第 {run_index} 段）")
 
-                span_start = base_dt + timedelta(minutes=first_minute)
+                # 预测时刻标定（图第 5 步"逐次调整并检查误报"）：实测 8 个事件平均**偏晚 8.8 分钟**
+                # （范围 −7 ~ +23），趋势外推对骤降不够敏感。这里留一个可调的前移量，
+                # 默认 0（不改行为）；用 scripts/measure_forecast_bias.py 对比改前/改后的
+                # 全部指标（含误报/漏报）后再决定是否设成非 0。
+                bias_minutes = FORECAST_BIAS_MINUTES
+                span_start = base_dt + timedelta(minutes=max(0, first_minute - bias_minutes))
                 span_end = min(fore_end, base_dt + timedelta(minutes=last_minute + 1))
                 if span_end <= span_start:      # 单分钟命中：至少给 1 分钟窗口
                     span_end = min(fore_end, span_start + timedelta(minutes=1))

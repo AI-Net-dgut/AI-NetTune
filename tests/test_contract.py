@@ -425,6 +425,11 @@ def test_forecast_context_boundaries_are_enforced():
     覆盖：数据不足的缓存 / 目标部分越界 / 起止反向 / alertId 与时段冲突 /
     预测来源方案的仿真绑定（窗口与 AP）。
     """
+    # 本用例要构造"与风险无交集"的关注时段，前提是风险起点晚于预测起点。
+    # 生产默认 FORECAST_BIAS_MINUTES=8 会把风险起点前移到预测起点，前提不成立；
+    # 这里显式在 bias=0 下取前提，结束后恢复，避免测试依赖全局标定。
+    _bias_backup = main.FORECAST_BIAS_MINUTES
+    main.FORECAST_BIAS_MINUTES = 0
     base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
     prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
         scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
@@ -491,6 +496,7 @@ def test_forecast_context_boundaries_are_enforced():
     assert main.plan_simulate(main.PlanSimulateRequest(
         plan_id=plan["id"], scenario=SCENARIO,
         window_start=hs, window_end=he, parameter_values={})).get("code") == 0
+    main.FORECAST_BIAS_MINUTES = _bias_backup      # 恢复生产标定
 
 
 def test_kpi_only_fault_has_consistent_state_and_span():
@@ -674,6 +680,9 @@ def test_forecast_plans_alert_must_intersect_target_window():
     修复前：forecast/plans 先按 alertId 取风险、跳过时段筛选 →
     问 14:15~14:20 却返回 14:33~16:12 的方案，而 forecast/analyze 同样组合是 40002。
     """
+    # 同 test_forecast_context_boundaries_are_enforced：构造"无交集"前提需 bias=0
+    _bias_backup = main.FORECAST_BIAS_MINUTES
+    main.FORECAST_BIAS_MINUTES = 0
     base, hs, he = "2026-01-02 14:12:00", "2026-01-02 13:12:00", "2026-01-02 14:12:00"
     prev = _data(main.forecast_preview(main.ForecastPreviewRequest(
         scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=120)))
@@ -709,6 +718,7 @@ def test_forecast_plans_alert_must_intersect_target_window():
         forecastId=prev["id"], scenario=SCENARIO, baseTime=base, alertId="ALT-AP-99-nope",
         history=main._TimeRange(start=hs, end=he),
         forecast=main._TimeRange(start=fc[0], end=fc[1]))).get("code") == 40002
+    main.FORECAST_BIAS_MINUTES = _bias_backup      # 恢复生产标定
 
 
 def test_alert_spans_are_capped_on_long_horizon():
