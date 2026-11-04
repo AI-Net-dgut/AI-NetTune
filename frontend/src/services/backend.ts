@@ -18,7 +18,7 @@ import { API_BASE } from "./apiBase";
 
 type Obj = Record<string, unknown>;
 type Fetcher = typeof fetch;
-const MAX_ROWS = 1000;
+const MAX_ROWS = 5000;
 
 // DATASET_BOUNDS / CASE_WINDOWS 已删除（审查报告 B-4）：
 //   - DATASET_BOUNDS 是写死的时间范围，与实际加载的数据无关，且 0 引用；
