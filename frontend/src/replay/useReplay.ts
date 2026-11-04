@@ -3,7 +3,7 @@ import type { ReplayConfig } from "./config";
 import { initialReplayState, replayReducer } from "./replayState";
 import type { ReplayAction } from "./replayState";
 
-export default function useReplay(config: ReplayConfig) {
+export default function useReplay(config: ReplayConfig, coveredThrough?: (at: number) => number) {
   const [state, dispatch] = useReducer(replayReducer, config, initialReplayState);
   const latest = useRef(state);
   const act = useCallback((action: ReplayAction) => {
@@ -17,10 +17,10 @@ export default function useReplay(config: ReplayConfig) {
     const timer = setInterval(() => {
       const now = Date.now();
       // 切出标签页后不追赶大量时间，以免演示跳过异常片段。
-      act({ type: "tick", elapsedMs: Math.min(2000, Math.max(0, now - previous)) }); previous = now;
+      act({ type: "tick", elapsedMs: Math.min(2000, Math.max(0, now - previous)), loadedThroughMs: coveredThrough?.(latest.current.currentMs) }); previous = now;
     }, 1000);
     return () => clearInterval(timer);
-  }, [state.playing, act]);
+  }, [state.playing, act, coveredThrough]);
   const readClock = useCallback(() => latest.current, []);
   return { state, act, latest, readClock };
 }
