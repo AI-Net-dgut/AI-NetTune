@@ -397,11 +397,20 @@ def test_forecast_plans_generates_plans_with_basis():
     assert ask("FC-not-exist", fc).get("code") == 40003
 
     # 无风险的一轮 → 明确说"不生成方案"，不编造
+    # 前提必须选**真正无风险**的时段（复查验收脚本第 5 项）：原来固定用 base(14:12)+5 分钟，
+    # 早期移动平均下恰好无风险；Prophet 启用后同样窗口会检出 1 条风险 → 断言失效。
+    # 这里改用凌晨平稳段（实测 alerts=0），断言强度不变。
+    quiet_base = "2026-01-02 03:00:00"
+    quiet_hist_start = "2026-01-02 02:00:00"
     p5 = _data(main.forecast_preview(main.ForecastPreviewRequest(
-        scenario=SCENARIO, baseTime=base, history=main._TimeRange(start=hs, end=he), horizonMinutes=5)))
-    r5 = ask(p5["id"], (p5["forecast"]["start"], p5["forecast"]["end"]))
-    assert r5.get("code") == 0
-    assert r5["data"]["plans"] == [] and "不生成处置方案" in r5["data"]["message"]
+        scenario=SCENARIO, baseTime=quiet_base,
+        history=main._TimeRange(start=quiet_hist_start, end=quiet_base), horizonMinutes=5)))
+    assert p5["alerts"] == [], f"前提失效：该时段应无风险，实得 {len(p5['alerts'])} 条"
+    r5 = _data(main.forecast_plans(main.ForecastPlanRequest(
+        forecastId=p5["id"], scenario=SCENARIO, baseTime=quiet_base,
+        history=main._TimeRange(start=quiet_hist_start, end=quiet_base),
+        forecast=main._TimeRange(start=p5["forecast"]["start"], end=p5["forecast"]["end"]))))
+    assert r5["plans"] == [] and "不生成处置方案" in r5["message"], r5
 
     # 方案可直接用于 /api/plan/simulate（窗口 = 基准前实测窗口）
     sim = main.plan_simulate(main.PlanSimulateRequest(
@@ -441,7 +450,16 @@ def test_forecast_context_boundaries_are_enforced():
     assert plans(tw=("2026-01-02 16:00:00", "2026-01-02 18:00:00")).get("code") == 40003
     assert analyze(tw=("2026-01-02 15:50:00", "2026-01-02 14:40:00")).get("code") == 40002
     assert plans(tw=("2026-01-02 15:50:00", "2026-01-02 14:40:00")).get("code") == 40002
-    assert analyze(tw=("2026-01-02 14:15:00", "2026-01-02 14:20:00"), alert=alert_id).get("code") == 40002
+    # 与风险窗口无交集的关注时段 → 40002。
+    # 不能写死 14:15~14:20（复查验收脚本第 5 项）：风险起始时刻会随数据/算法变化，
+    # 早期是 14:33、现在是 14:13 —— 写死会让断言时对时错。这里从**预测起点到风险起点前一秒**
+    # 推导一个必然无交集的窗口。
+    from datetime import datetime as _dt, timedelta as _td
+    _alert_start = (prev.get("alerts") or [{}])[0].get("start") or prev["forecast"]["start"]
+    _no_overlap_end = (_dt.strptime(_alert_start, "%Y-%m-%d %H:%M:%S") - _td(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _no_overlap = (prev["forecast"]["start"], _no_overlap_end)
+    assert _no_overlap[0] < _no_overlap[1], f"无法构造无交集窗口：{_no_overlap}"
+    assert analyze(tw=_no_overlap, alert=alert_id).get("code") == 40002
 
     # 数据不足的缓存：不能解释成"没有风险"
     p8 = _data(main.forecast_preview(main.ForecastPreviewRequest(
@@ -670,12 +688,18 @@ def test_forecast_plans_alert_must_intersect_target_window():
             targetWindow=(main._TimeRange(start=tw[0], end=tw[1]) if tw else None)))
 
     # 窗口无交集 → 拒绝；两个接口口径一致
-    assert plans(("2026-01-02 14:15:00", "2026-01-02 14:20:00")).get("code") == 40002
+    # 无交集的关注时段 → 拒绝（窗口从预测起点推导到风险起点前一秒，不写死时刻）
+    from datetime import datetime as _dt, timedelta as _td
+    _alert_start = (prev.get("alerts") or [{}])[0].get("start") or fc[0]
+    _no_overlap_end = (_dt.strptime(_alert_start, "%Y-%m-%d %H:%M:%S") - _td(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _no_overlap = (fc[0], _no_overlap_end)
+    assert _no_overlap[0] < _no_overlap[1], f"无法构造无交集窗口：{_no_overlap}"
+    assert plans(_no_overlap).get("code") == 40002
     assert main.forecast_analyze(main.ForecastAnalyzeRequest(
         forecastId=prev["id"], scenario=SCENARIO, baseTime=base, alertId=aid,
         history=main._TimeRange(start=hs, end=he),
         forecast=main._TimeRange(start=fc[0], end=fc[1]),
-        targetWindow=main._TimeRange(start="2026-01-02 14:15:00", end="2026-01-02 14:20:00")
+        targetWindow=main._TimeRange(start=_no_overlap[0], end=_no_overlap[1])
     )).get("code") == 40002
     # 不传时段 → 正常
     assert plans().get("code") == 0
@@ -1915,3 +1939,40 @@ def test_enum_capacity_applies_and_stays_in_bounds():
         assert bad["code"] == 40002, f"非法枚举应 40002，实得 {bad}"
     finally:
         main.sim_config_rollback()
+
+
+def test_compare_verdicts_requires_adjacent_minutes():
+    """验收脚本的"连续越阈"必须要求**相邻分钟**（复查 P2-6 反例）。
+
+    原实现按帧累加：10:00 / 10:02 / 10:04 三帧会被算成"连续 3 分钟"，
+    与生产判据不一致，验收提前量会被高估。这里把该行为固化成用例。
+    """
+    import importlib.util
+    from pathlib import Path
+
+    import pandas as pd
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "compare_verdicts.py"
+    spec = importlib.util.spec_from_file_location("_cv_test", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def frame(stamps: list[str]) -> "pd.DataFrame":
+        rows = []
+        for stamp in stamps:
+            for _ in range(50):        # 50 个频段同时越阈 → 达到 40/50 门槛
+                rows.append({"timestamp": stamp, "observation_id": "AP-02",
+                             "power_dbm": main.ALERT_WEAK_POWER_DBM - 5.0,
+                             "occupancy_pct": main.ALERT_CONGESTION_OCC_PCT + 5.0})
+        return pd.DataFrame(rows)
+
+    gapped = frame(["2026-01-01 10:00:00", "2026-01-01 10:02:00", "2026-01-01 10:04:00"])
+    adjacent = frame(["2026-01-01 10:00:00", "2026-01-01 10:01:00", "2026-01-01 10:02:00"])
+
+    assert module.spectrum_hit(gapped, "AP-02", "2026-01-01 10:00:00", "2026-01-01 10:05:00") is False, \
+        "缺分钟（10:00/10:02/10:04）不能算连续 3 分钟"
+    assert module.spectrum_hit(adjacent, "AP-02", "2026-01-01 10:00:00", "2026-01-01 10:02:00") is True, \
+        "相邻三分钟应判命中"
+    # 只有两帧 → 不足 3 分钟，不能命中
+    two = frame(["2026-01-01 10:00:00", "2026-01-01 10:01:00"])
+    assert module.spectrum_hit(two, "AP-02", "2026-01-01 10:00:00", "2026-01-01 10:01:00") is False

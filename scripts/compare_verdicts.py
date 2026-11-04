@@ -31,7 +31,13 @@ MIN_MINUTES = main.ALERT_MIN_CROSSING_MINUTES
 
 
 def _load_spectrum():
-    path = ROOT / "data" / "spectrum_7d.csv"
+    """读取与**网站同一份**频谱数据（复查 P3-8）。
+
+    早期硬编码 `ROOT/"data"/"spectrum_7d.csv"`：网站用 NETTUNE_DATA_DIR 指向外部目录时，
+    脚本仍读项目内旧文件 → 两边结论对不上，验收数字失去意义。
+    现在统一走主程序解析出的 `main.SPECTRUM_PATH`。
+    """
+    path = Path(getattr(main, "SPECTRUM_PATH", "") or (ROOT / "data" / "spectrum_7d.csv"))
     if not path.exists():
         return None
     return pd.read_csv(path, encoding="utf-8-sig",
@@ -54,15 +60,28 @@ def spectrum_hit(spec, ap: str, start: str, end: str) -> bool | None:
         o=("occupancy_pct", lambda x: int((x > main.ALERT_CONGESTION_OCC_PCT).sum())),
     )
 
-    def longest_run(flags) -> int:
+    def longest_run(flags, stamps) -> int:
+        """连续分钟数，**缺分钟即中断**（复查 P2-6）。
+
+        原实现只按行累加：10:00 / 10:02 / 10:04 三帧会被算成"连续 3 分钟"，
+        与生产判据（逐分钟连续）不一致，验收会虚高。
+        这里要求相邻两帧的时间差必须正好 1 分钟，否则重新计数。
+        """
         run = best = 0
-        for hit in flags:
+        previous = None
+        for hit, stamp in zip(flags, stamps):
+            moment = pd.to_datetime(stamp)
+            contiguous = previous is not None and (moment - previous) == pd.Timedelta(minutes=1)
             run = run + 1 if hit else 0
+            if hit and previous is not None and not contiguous:
+                run = 1                     # 时间跳变：当前这一帧重新起算
             best = max(best, run)
+            previous = moment
         return best
 
-    weak_type = longest_run((per.p >= MIN_BANDS).astype(int))
-    cong_type = longest_run((per.o >= MIN_BANDS).astype(int))
+    stamps = list(per.index)
+    weak_type = longest_run(list((per.p >= MIN_BANDS).astype(int)), stamps)
+    cong_type = longest_run(list((per.o >= MIN_BANDS).astype(int)), stamps)
     return max(weak_type, cong_type) >= MIN_MINUTES
 
 

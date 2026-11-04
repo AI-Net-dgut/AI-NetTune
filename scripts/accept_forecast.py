@@ -43,7 +43,8 @@ DATA = ROOT / "data"
 
 
 def _load_events():
-    path = DATA / "fault_events.csv"
+    # 事件表也走统一数据目录（与网站一致）：NETTUNE_DATA_DIR 生效时不再读项目内旧文件
+    path = Path(getattr(main, "DATA_DIR", DATA)) / "fault_events.csv"
     if not path.exists():
         print(f"缺少 {path}，无法验收")
         return []
@@ -95,8 +96,8 @@ def accept_events(events) -> list[dict]:
 
 
 def _load_spectrum():
-    """加载频谱表（仅 4 列），用于计算"首次频谱越阈"时刻。"""
-    path = DATA / "spectrum_7d.csv"
+    """读取与**网站同一份**频谱数据（复查 P3-8）：统一走主程序的 SPECTRUM_PATH。"""
+    path = Path(getattr(main, "SPECTRUM_PATH", "") or (DATA / "spectrum_7d.csv"))
     if not path.exists():
         return None
     import pandas as _pd

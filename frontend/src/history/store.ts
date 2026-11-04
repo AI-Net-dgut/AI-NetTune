@@ -284,6 +284,22 @@ function saveRecord(input: RecordInput): string {
     // 现在允许入库：它们都是"问题级"记录，与 analysis 同列于记录页。
     if (input.role === 'evidence' && !input.parentId) return '';
     if ((input.id && rejectedIds.has(input.id)) || (input.parentId && rejectedIds.has(input.parentId) && !isQuestionRecord(input))) return '';
+    // 入库去重（复查 P2-4）：同一类记录 + 同一问题 + 同一分析时刻 → **复用旧记录**。
+    // 预测预览/空间态势/预测详细研判原本每次打开都写一条，导致"预测未来120分钟网络风险"
+    // 和分析记录里出现多个同名条目、很快吃满 100 条名额。
+    if (!input.id && !input.parentId && (input.kind === 'forecast' || input.kind === 'spatial'
+      || input.kind === 'forecast-analysis' || input.kind === 'backtest')) {
+      const duplicate = [...memory.values()].find(r => r.kind === input.kind && r.parentId === input.parentId
+        && r.question === input.question && (r.analysisTime ?? '') === ((input as { analysisTime?: string }).analysisTime ?? ''));
+      if (duplicate) {
+        const merged = structuredClone({ ...duplicate, ...input, id: duplicate.id, createdAt: duplicate.createdAt,
+          payload: compactPayload(input.kind, input.payload) });
+        memory.set(merged.id, merged);
+        unsaved.add(merged.id);
+        changed();
+        return merged.id;
+      }
+    }
     const item = structuredClone({ ...memory.get(input.id ?? ''), ...input, payload: compactPayload(input.kind, input.payload), id: input.id || createId(), createdAt: input.createdAt ?? memory.get(input.id ?? '')?.createdAt ?? new Date().toISOString() });
     // 内存可能没有旧父问题，不能把它的每次仿真误当成独立问题。
     // 子记录与旧版结构交给下方完整数据库事务核对。

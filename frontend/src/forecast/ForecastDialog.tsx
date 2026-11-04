@@ -52,6 +52,10 @@ export default function ForecastDialog({ request, result, pending, error, onClos
   const horizons = [...new Set<number>([...FORECAST_HORIZONS, request.horizonMinutes])].sort((a, b) => a - b);
   const shownBaseTime = result?.baseTime ?? request.baseTime;
   const shownHistory = result?.history ?? request.history;
+  // 关注时段是否仍落在当前预测范围内（复查 P1-2）：改成长度后范围若装不下原时段，
+  // 必须明确告知用户"原关注时段已超出本次预测范围"，而不是静默换掉分析对象。
+  const windowUncovered = Boolean(request.targetWindow && result
+    && (result.forecast.end < request.targetWindow.end || result.forecast.start > request.targetWindow.start));
   const ageMinutes = currentTime && result ? Math.max(0, Math.floor((toEpoch(currentTime) - toEpoch(result.baseTime)) / 60_000)) : 0;
   /* 提前量：alert.start 是后端算出的"预计越阈起始时刻"（= 基准 + first_minute）。
      它相对基准时刻的差值只是预计越阈时间间隔，不能替代真实提前预警效果验证。
@@ -101,6 +105,10 @@ export default function ForecastDialog({ request, result, pending, error, onClos
           </dl>
           {request.question && <p>本次提问：{request.question}</p>}
           {request.targetWindow && <p>关注时段：{request.targetWindow.start} — {request.targetWindow.end}</p>}
+          {windowUncovered && <p className="ain-ai-warning" role="status">
+            关注时段 {request.targetWindow!.start} — {request.targetWindow!.end} 已超出本次预测范围，
+            请加长预测时长或重新选择关注时段；下方风险按当前预测范围展示，不代表原关注时段。
+          </p>}
           <div className="ain-forecast-range-row">
             {onHorizonChange && <label className="ain-forecast-horizon">查看未来
               <select aria-label="查看未来范围" value={request.horizonMinutes} disabled={pending} onChange={event => onHorizonChange(Number(event.target.value))}>

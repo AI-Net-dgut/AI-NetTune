@@ -123,7 +123,12 @@ export default function SpatialFrameGrid({
         if (controller.signal.aborted) return;
         if (data.metric !== metric) throw new Error("返回指标与本次选择不一致，请重试。");
         setLoaded({ key: requestKey, series: data });
-        record({kind:'spatial',parentId:archiveParentId,question:`${metric.toUpperCase()} 空间态势序列`,scope:{scenario,start:data.past[0]?.start??baseTime,end:baseTime},analysisTime:baseTime,status:'completed',payload:{series:data}});
+        // 复查 P2-4：空间态势是**自动检查**，不该每次加载都写一条问题记录
+        // （实测每推进一个基准时刻就新增一条 "RSRP 空间态势序列"，很快吃满 100 条名额）。
+        // 只有挂靠在某个提问下（archiveParentId 存在）时才作为**证据**入库。
+        if (archiveParentId) {
+          record({kind:'spatial',parentId:archiveParentId,question:`${metric.toUpperCase()} 空间态势序列`,scope:{scenario,start:data.past[0]?.start??baseTime,end:baseTime},analysisTime:baseTime,status:'completed',payload:{series:data}});
+        }
       })
       .catch((reason) => {
         if (!controller.signal.aborted) setLoaded({ key: requestKey, error: reason instanceof Error ? reason.message : "区域态势获取失败" });

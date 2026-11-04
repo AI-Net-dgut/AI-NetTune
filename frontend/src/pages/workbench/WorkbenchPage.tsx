@@ -238,6 +238,20 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
 
   const transferred = forecastTransfer?.key === contextKey ? forecastTransfer.handoff : null;
   const forecastNoticeResult = forecast.result ?? forecast.lastResult ?? transferred?.result;
+  // 入口必须展示**独立检查**的结果（复查 P1-1）：打开弹窗前也要能更新；
+  // 检查失败时显示"检查失败"，绝不能显示成"0 项/无风险"。
+  const forecastSummary = forecast.summary;
+  const forecastEntryLabel = forecastSummary.status === "error" ? "风险检查失败"
+    : forecastSummary.status === "loading" ? "检查中…"
+      : forecastSummary.status === "ready"
+        ? `${forecastSummary.alertCount} 项${forecastSummary.alertCount > 0 ? "需关注" : "（未检出风险）"}`
+        : forecastNoticeResult?.status === "ready"
+          ? `${forecastNoticeResult.source === "demo" ? "示例·" : "最近查看·"}${forecastNoticeResult.alerts.length}项`
+          : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测";
+  const forecastEntryCount = forecastSummary.status === "ready" ? forecastSummary.alertCount
+    : forecastSummary.status === "error" ? 0
+      : (forecastNoticeResult?.status === "ready" ? forecastNoticeResult.alerts.length : 0);
+  const forecastEntryTime = forecastSummary.baseTime || forecastNoticeResult?.baseTime;
   const forecastReviewKey = transferred ? `${contextKey}|${forecastTransfer!.revision}` : '';
   const forecastPending = Boolean(transferred && (forecastActivity.key !== forecastReviewKey || forecastActivity.pending));
 
@@ -390,8 +404,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     </section>
     <QueryPanel prefillQuestion={caseQuestion} analysisNotice={analysisNotice.key === contextKey ? analysisNotice.text : ""} referenceControls={<ReferenceWindowControls key={contextKey} state={clock} act={act} scope={scope} disabled={loading || Boolean(source.error)} />} query={visibleQuery} scenario={config.scenario} window={scope}
       onOpenForecast={() => forecast.open()} forecastDisabled={source.status !== "ready" || clock.locked}
-      forecastLabel={forecastNoticeResult?.status === "ready" ? `${forecastNoticeResult.source === "demo" ? "示例·" : "最近查看·"}${forecastNoticeResult.alerts.length}项` : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测"}
-      forecastAlertCount={forecastNoticeResult?.status === "ready" ? forecastNoticeResult.alerts.length : 0} forecastResultTime={forecastNoticeResult?.baseTime}
+      forecastLabel={forecastEntryLabel} forecastAlertCount={forecastEntryCount} forecastResultTime={forecastEntryTime}
       forecastReview={transferred ? <ForecastReview key={forecastReviewKey} reviewKey={forecastReviewKey} onStatusChange={reportForecastStatus} handoff={transferred} /> : undefined}
       forecastContext={transferred ?? undefined} forecastPending={forecastPending} onForecastQuestion={askForecast} onLeaveForecast={leaveForecast}
       disabled={!data?.metrics.length || loading || Boolean(source.error)} data={data}
