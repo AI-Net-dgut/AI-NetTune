@@ -25,20 +25,26 @@ import diagnosis_focus
 
 REQUIRED_SECTIONS = ("结论", "依据", "方案")
 MAX_CHARS = 1200
-ATTEMPTS = 2
+ATTEMPTS = 3
 
 # 「提升」类词后跟的数字必须为非负，「下降」类必须为非正（防方向写反）
 UP_WORDS = ("提升", "上升", "增加", "改善", "提高")
 DOWN_WORDS = ("下降", "降低", "减少", "恶化", "变差")
 
-FORBIDDEN_WHEN_NO_ROOT_CAUSE = ("已确认根因", "根因已确认", "必然是", "一定是", "一定会")
+FORBIDDEN_WHEN_NO_ROOT_CAUSE = ("已确认根因", "根因已确认", "必然是", "一定是", "一定会", "确定就是", "证实是")
+# 否定词：出现在禁用词之前 10 字内，说明模型是在**否定**这个说法（正确表述），不能判违规
+NEGATION_WORDS = ("不能", "不能直接", "不得", "并非", "不是", "并非", "尚未", "未", "无法", "不可",
+                  "不代表", "不等于", "不应", "不可以", "勿", "别")
 ALLOWED_TOOLS_NOTE = "只能使用给定证据中的数字与对象"
 
 SYSTEM_PROMPT = """你是无线网络运维助手。你会收到一份**已由规则计算好的证据**（JSON），请据此写一段中文回答。
 
 硬性要求：
 1. 只允许使用证据中出现的数字、AP 编号、时间、参数值；**不得编造任何数字或对象**；
-2. 不得使用"已确认根因/必然/一定会"之类确定性断言；候选原因只能表述为"候选/可能"；
+2. **绝对禁止**出现下列字串（出现即判不合格，整段作废）：
+   "已确认根因"、"根因已确认"、"必然是"、"一定是"、"一定会"、"确定就是"、"证实是"。
+   凡涉及原因，只能写"候选原因""可能""尚待核实"，例如：
+   "候选原因包括 AP 天线倾角/发射功率不足，尚需现场核实"。
 3. 必须包含小节，标题用【】括起，至少三个：【结论】【依据】【方案】；
    若证据里有方案仿真数据，再加【预计效果】【前提与风险】两节；
 4. 提到参数调整时必须写成"当前值→建议值"（例如"8°→5°"、"33→36 dBm"），
@@ -160,8 +166,17 @@ def verify(answer: str, evidence: dict) -> dict:
         violations.append(f"出现证据中没有的对象：{unknown_ids}")
 
     # 3) 无根因证据时禁止确定性断言
+    #    注意必须**跳过否定句**：模型常写"不能直接视为已确认根因"这类正确表述，
+    #    早期用 `word in text` 直接判违规 → 连续 3 次重写都被误杀（实测踩到）。
     if not evidence.get("root_cause_confirmed"):
-        hit = [word for word in FORBIDDEN_WHEN_NO_ROOT_CAUSE if word in text]
+        hit = []
+        for word in FORBIDDEN_WHEN_NO_ROOT_CAUSE:
+            for match in re.finditer(re.escape(word), text):
+                prefix = text[max(0, match.start() - 10):match.start()]
+                if any(neg in prefix for neg in NEGATION_WORDS):
+                    continue
+                hit.append(word)
+                break
         if hit:
             violations.append(f"使用了确定性断言：{hit}")
 

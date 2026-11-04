@@ -2313,24 +2313,45 @@ def tool_forecast(scenario: str, win_start: str | None = None, win_end: str | No
                           "horizon_minutes": horizon}}
 
 # ---- Function Calling 工具注册表：意图名 → 工具函数（新增工具在这里登记即可） ----
-def tool_chat(scenario: str, win_start: str | None = None, win_end: str | None = None) -> dict:
+def tool_chat(scenario: str, win_start: str | None = None, win_end: str | None = None,
+              question: str | None = None) -> dict:
     """闲聊 / 能力询问。
 
     原实现把任何未命中关键词、LLM 也认不出的问题静默回退成 query_kpi，
     于是用户说"你好"会得到一段 RSRP/SINR 均值汇报（审查报告 B-9）。
     现在明确走这条分支：不编造任何数据，只说明能做什么。
+
+    复查补充：本分支原先返回**写死的模板文案**，看起来像模型回答其实不是。
+    现在优先让模型回答（只描述能力，不允许编造任何数据），失败再回退模板。
     """
+    template = (
+        "你好，我是 AI-NetTune 网络运维助手。\n\n"
+        "我可以帮你做这些事：\n"
+        "1. 故障研判：例如「分析一下 AP-02 在 2026-01-01 10:00 到 12:00 的情况」\n"
+        "2. 指标查询：例如「看看当前各 AP 的 RSRP 和吞吐量」\n"
+        "3. 空间视图：例如「画一下这个时间窗的热力图」「显示网络拓扑」\n"
+        "4. 趋势预测：例如「预测下一个小时的功率变化」\n"
+        "5. 报告导出：研判完成后可导出 Markdown / HTML 报告\n\n"
+        "你想先看哪一部分？"
+    )
+    reply, source = template, "template"
+    if ENABLE_LLM and question:
+        sys_prompt = (
+            "你是 AI-NetTune 无线网络运维助手。用户在闲聊或询问你能做什么。\n"
+            f"当前场景：{scenario}。\n"
+            "请用中文简洁回答（不超过 200 字）：说明你能做故障研判/指标查询/空间视图/趋势预测/报告导出，"
+            "并给一个可直接复制的示例问法。\n"
+            "硬性要求：不要编造任何具体数值、AP 编号或预测结论；不确定就说需要用户指定时间与对象。"
+        )
+        try:
+            out = llm_agent.call_llm_chat(sys_prompt, question, temperature=0.3)
+            if out and len(out.strip()) > 20:
+                reply, source = out.strip(), "llm"
+        except Exception as exc:  # noqa: BLE001 - 失败即回退模板
+            print(f"[Main] 闲聊回答模型不可用，回退模板：{exc}")
     return {
-        "reply": (
-            "你好，我是 AI-NetTune 网络运维助手。\n\n"
-            "我可以帮你做这些事：\n"
-            "1. 故障研判：例如「分析一下 AP-02 在 2026-01-01 10:00 到 12:00 的情况」\n"
-            "2. 指标查询：例如「看看当前各 AP 的 RSRP 和吞吐量」\n"
-            "3. 空间视图：例如「画一下这个时间窗的热力图」「显示网络拓扑」\n"
-            "4. 趋势预测：例如「预测下一个小时的功率变化」\n"
-            "5. 报告导出：研判完成后可导出 Markdown / HTML 报告\n\n"
-            "你想先看哪一部分？"
-        ),
+        "reply": reply,
+        "reply_source": source,
         "intent": "chat",
         "chart": None,
         "diagnosis": None,
@@ -2552,6 +2573,9 @@ def agent_chat(req: ChatRequest):
         elif intent == "query_kpi":
             # KPI 工具保持原签名；只有故障研判需要原问题来生成解释。
             data = handler(scenario, req.window_start, req.window_end, params.get("ap_id"))
+        elif intent == "chat":
+            # 闲聊/能力询问：把原问题传进去，让模型回答（失败回退模板）
+            data = handler(scenario, req.window_start, req.window_end, question=req.message)
         else:
             data = handler(scenario, req.window_start, req.window_end)
     # 记录本轮，供下一轮做指代消解（缺口6）

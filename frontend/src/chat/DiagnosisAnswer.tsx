@@ -39,5 +39,18 @@ export default function DiagnosisAnswer({ result, onEvidence, showScope = true }
       </li>)}</ul>
     </details>}
     <DiagnosisEvidence diagnosis={diagnosis} summarizedEvidenceCount={answerText || diagnosis.answerFocus ? 0 : 4} />
+    {/* 诊断：为什么没有 AI 文本（不猜，直接显示后端返回的校验状态）。
+        answerCheck 缺失 = 后端进程还是旧代码（没有 answer_llm/answer_check 字段）。 */}
+    {!answerText && <details className="ain-ai-details">
+      <summary>AI 文本状态（排查用）</summary>
+      {diagnosis.answerCheck ? <>
+        <p>是否通过校验：{diagnosis.answerCheck.ok ? "通过" : "未通过"}；来源：{diagnosis.answerCheck.source}
+          {diagnosis.answerCheck.attempts ? `；重写次数：${diagnosis.answerCheck.attempts}` : ""}</p>
+        {diagnosis.answerCheck.violations.length > 0 && <ul>
+          {diagnosis.answerCheck.violations.map((line, i) => <li key={i}>{line}</li>)}
+        </ul>}
+        {!diagnosis.answerCheck.violations.length && <p>后端未给出违规原因：可能是模型未启用或调用失败。</p>}
+      </> : <p>后端**未返回** answer_check 字段 —— 当前后端进程仍是旧代码（没有加载 answer_llm.py），请重启后端后再试。</p>}
+    </details>}
   </>;
 }
