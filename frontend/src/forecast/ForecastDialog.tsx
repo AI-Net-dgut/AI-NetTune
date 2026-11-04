@@ -103,6 +103,9 @@ export default function ForecastDialog({ request, result, pending, error, onClos
             <div><dt>参考历史</dt><dd>{shownHistory.start} — {shownHistory.end}</dd></div>
             <div><dt>预测范围</dt><dd>{result ? `${result.forecast.start} — ${result.forecast.end}` : `${request.baseTime}之后${request.horizonMinutes}分钟`}</dd></div>
           </dl>
+          {/* 复查 P1-9：预计发生时间是**趋势外推**，误差可达数分钟，不能呈现为精确倒计时。 */}
+          <p className="ain-ai-note">口径：预计越阈时刻为<strong>趋势估计</strong>（基于近期走势外推），
+            与真实越阈时刻可能有数分钟偏差；提高刷新频率不会改变该误差，请按"提前量参考"使用。</p>
           {request.question && <p>本次提问：{request.question}</p>}
           {request.targetWindow && <p>关注时段：{request.targetWindow.start} — {request.targetWindow.end}</p>}
           {windowUncovered && <p className="ain-ai-warning" role="status">
