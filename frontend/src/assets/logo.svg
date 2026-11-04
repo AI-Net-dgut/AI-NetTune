@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="AI-NetTune">
+  <!-- 按用户提供的图形复刻：三个节点 + 两条连线 + 一条右侧辐射弧 -->
+  <g fill="none" stroke="#1b2b3a" stroke-linecap="round">
+    <path d="M30 26 L62 50" stroke-width="9"/>
+    <path d="M30 74 L62 50" stroke-width="9"/>
+  </g>
+  <circle cx="28" cy="24" r="12.5" fill="#1b2b3a"/>
+  <circle cx="28" cy="76" r="12.5" fill="#1b2b3a"/>
+  <circle cx="64" cy="50" r="14.5" fill="#1b2b3a"/>
+  <path d="M79 30 Q89 50 79 70" fill="none" stroke="#4ec3e0" stroke-width="8" stroke-linecap="round"/>
+</svg>

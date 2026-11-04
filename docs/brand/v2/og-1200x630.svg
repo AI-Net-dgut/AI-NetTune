@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="AI-NetTune 分享封面 v2">
+  <defs>
+    <linearGradient id="ogbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16222f"/>
+      <stop offset="1" stop-color="#0a121a"/>
+    </linearGradient>
+    <linearGradient id="heat2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6d365"/>
+      <stop offset="0.5" stop-color="#7fd1c1"/>
+      <stop offset="1" stop-color="#2b6fb3"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#ogbg)"/>
+
+  <!-- 左上：符号 + 名称 -->
+  <g transform="translate(72 92)">
+    <g transform="scale(1.55)">
+      <path d="M11 11 L20 16 M11 24 L20 16" stroke="#eaf2fb" stroke-width="3.4" stroke-linecap="round"/>
+      <circle cx="10" cy="10.5" r="3.6" fill="#eaf2fb"/>
+      <circle cx="10" cy="24.5" r="3.6" fill="#eaf2fb"/>
+      <circle cx="21" cy="17.5" r="4" fill="#eaf2fb"/>
+      <path d="M26 11 Q30 17.5 26 24" fill="none" stroke="#4ec3e0" stroke-width="2.8" stroke-linecap="round"/>
+    </g>
+    <text x="96" y="30" font-family="Segoe UI, Arial, sans-serif" font-size="48" font-weight="700" fill="#ffffff">AI-NetTune</text>
+  </g>
+
+  <!-- 主标题 -->
+  <g transform="translate(72 190)">
+    <text x="0" y="0" font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="40" font-weight="600" fill="#dce9f8">基于 LLM 意图驱动的多模态</text>
+    <text x="0" y="56" font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="40" font-weight="600" fill="#dce9f8">无线网络智能分析与管控平台</text>
+    <text x="0" y="118" font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="21" fill="#8fb3d9">自然语言提问 · 故障研判与证据链 · 区域电磁态势预测 · 方案仿真与闭环</text>
+    <g transform="translate(0 156)">
+      <rect x="0" y="0" width="208" height="42" rx="21" fill="#1d3040"/>
+      <text x="104" y="28" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="18" fill="#7fdcf2">仿真内闭环 · 可回滚</text>
+      <rect x="224" y="0" width="212" height="42" rx="21" fill="#1d3040"/>
+      <text x="330" y="28" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="18" fill="#7fdcf2">数字经证据校验</text>
+      <rect x="452" y="0" width="196" height="42" rx="21" fill="#1d3040"/>
+      <text x="550" y="28" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="18" fill="#7fdcf2">频谱态势预测</text>
+    </g>
+  </g>
+
+  <!-- 右侧：热力网格 + 趋势线 -->
+  <g transform="translate(742 112)">
+    <rect x="0" y="0" width="386" height="386" rx="22" fill="#0d1926" stroke="#26405a" stroke-width="2"/>
+    <g>
+      <rect x="26" y="26" width="72" height="72" rx="8" fill="url(#heat2)" opacity="0.85"/>
+      <rect x="106" y="26" width="72" height="72" rx="8" fill="#7fd1c1" opacity="0.5"/>
+      <rect x="186" y="26" width="72" height="72" rx="8" fill="#3f86c9" opacity="0.65"/>
+      <rect x="266" y="26" width="94" height="72" rx="8" fill="#2b6fb3" opacity="0.8"/>
+      <rect x="26" y="106" width="72" height="72" rx="8" fill="#f6d365" opacity="0.6"/>
+      <rect x="106" y="106" width="72" height="72" rx="8" fill="#9fd0a8" opacity="0.6"/>
+      <rect x="186" y="106" width="72" height="72" rx="8" fill="#4ec3e0" opacity="0.4"/>
+      <rect x="266" y="106" width="94" height="72" rx="8" fill="#173a5c" opacity="0.95"/>
+      <rect x="26" y="186" width="72" height="72" rx="8" fill="#e7b96a" opacity="0.45"/>
+      <rect x="106" y="186" width="72" height="72" rx="8" fill="#7fd1c1" opacity="0.7"/>
+      <rect x="186" y="186" width="72" height="72" rx="8" fill="#3f86c9" opacity="0.5"/>
+      <rect x="266" y="186" width="94" height="72" rx="8" fill="#2b6fb3" opacity="0.65"/>
+      <rect x="26" y="266" width="72" height="94" rx="8" fill="#b89355" opacity="0.4"/>
+      <rect x="106" y="266" width="72" height="94" rx="8" fill="#7fd1c1" opacity="0.45"/>
+      <rect x="186" y="266" width="72" height="94" rx="8" fill="#2b6fb3" opacity="0.6"/>
+      <rect x="266" y="266" width="94" height="94" rx="8" fill="#10233a" opacity="0.95"/>
+      <path d="M30 300 L100 282 L170 246 L240 268 L310 210 L378 236"
+            fill="none" stroke="#ffd88a" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="193" y="372" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="16" fill="#8fb3d9">空间 KPI 估计 · 黄=覆盖好 / 蓝=覆盖差</text>
+  </g>
+</svg>

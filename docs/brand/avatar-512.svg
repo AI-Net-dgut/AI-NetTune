@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="AI-NetTune 组织头像">
+  <defs>
+    <linearGradient id="bgA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b6fd0"/>
+      <stop offset="0.55" stop-color="#123a6b"/>
+      <stop offset="1" stop-color="#0a2342"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.34" cy="0.28" r="0.75">
+      <stop offset="0" stop-color="#4aa3ff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#4aa3ff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="circle"><circle cx="256" cy="256" r="256"/></clipPath>
+  </defs>
+  <g clip-path="url(#circle)">
+    <rect width="512" height="512" fill="url(#bgA)"/>
+    <rect width="512" height="512" fill="url(#glow)"/>
+    <!-- 背景网格：暗示"空间/区域"，极淡，不干扰主体 -->
+    <g stroke="#8fc4ff" stroke-opacity="0.14" stroke-width="2">
+      <path d="M64 128H448M64 192H448M64 256H448M64 320H448M64 384H448"/>
+      <path d="M128 64V448M192 64V448M256 64V448M320 64V448M384 64V448"/>
+    </g>
+    <!-- 主符号：天线塔 + 信号波（与页头、favicon 同一母题） -->
+    <g transform="translate(256 268)">
+      <path d="M0 -46 L-86 150 H86 Z" fill="none" stroke="#ffffff" stroke-width="18" stroke-linejoin="round"/>
+      <path d="M-44 74 H44" stroke="#ffffff" stroke-width="18" stroke-linecap="round"/>
+      <circle cx="0" cy="-74" r="20" fill="#ffffff"/>
+      <path d="M74 -112 Q132 -74 74 -36" fill="none" stroke="#9fd0ff" stroke-width="16" stroke-linecap="round"/>
+      <path d="M-74 -112 Q-132 -74 -74 -36" fill="none" stroke="#9fd0ff" stroke-width="16" stroke-linecap="round"/>
+      <path d="M112 -150 Q196 -74 112 2" fill="none" stroke="#5fb0ff" stroke-opacity="0.75" stroke-width="14" stroke-linecap="round"/>
+      <path d="M-112 -150 Q-196 -74 -112 2" fill="none" stroke="#5fb0ff" stroke-opacity="0.75" stroke-width="14" stroke-linecap="round"/>
+    </g>
+    <!-- AI 角标：说明是"AI 驱动"而不只是"信号" -->
+    <g transform="translate(356 366)">
+      <rect x="0" y="0" width="116" height="64" rx="18" fill="#0d2b4e" stroke="#57b0ff" stroke-width="3"/>
+      <text x="58" y="44" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif"
+            font-size="36" font-weight="700" fill="#8fd0ff" letter-spacing="2">AI</text>
+    </g>
+  </g>
+  <!-- 圆形描边（头像在浅色背景上也有边界） -->
+  <circle cx="256" cy="256" r="252" fill="none" stroke="#0a2342" stroke-opacity="0.35" stroke-width="8"/>
+</svg>

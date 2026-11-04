@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="AI-NetTune">
+  <defs>
+    <linearGradient id="nbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22344a"/>
+      <stop offset="1" stop-color="#101b28"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#nbg)"/>
+  <!-- 简化版：两个节点 + 一条弧（16px 下可辨） -->
+  <path d="M11 11 L20 16 M11 24 L20 16" stroke="#eaf2fb" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="10" cy="10.5" r="3.4" fill="#eaf2fb"/>
+  <circle cx="10" cy="24.5" r="3.4" fill="#eaf2fb"/>
+  <circle cx="21" cy="17.5" r="3.8" fill="#eaf2fb"/>
+  <path d="M25.5 11.5 Q29 17.5 25.5 23.5" fill="none" stroke="#4ec3e0" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

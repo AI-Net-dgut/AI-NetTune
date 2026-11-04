@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 180" width="560" height="180" role="img" aria-label="AI-NetTune 模块图标集">
+  <defs>
+    <style>
+      .lbl { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; font-size: 14px; fill: #45637f; }
+      .ln  { fill: none; stroke: #1685ff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+      .dot { fill: #1685ff; }
+    </style>
+  </defs>
+  <rect width="560" height="180" fill="#ffffff"/>
+
+  <!-- 1 观察与研判：放大镜 + 波形 -->
+  <g transform="translate(28 26)">
+    <rect x="-8" y="-8" width="112" height="112" rx="14" fill="#f4f9ff" stroke="#d8e8fa"/>
+    <circle cx="44" cy="40" r="17" class="ln"/>
+    <path d="M56 52 L70 66" class="ln"/>
+    <path d="M26 76 L36 66 L46 76 L56 64 L66 76" class="ln"/>
+    <text x="48" y="122" text-anchor="middle" class="lbl">观察与研判</text>
+  </g>
+
+  <!-- 2 预测与预警：趋势曲线上扬 + 阈值虚线 -->
+  <g transform="translate(168 26)">
+    <rect x="-8" y="-8" width="112" height="112" rx="14" fill="#f4f9ff" stroke="#d8e8fa"/>
+    <path d="M18 72 L34 58 L46 66 L60 40 L74 30" class="ln"/>
+    <path d="M16 52 H76" stroke="#f0a33c" stroke-width="2" stroke-dasharray="5 4" fill="none"/>
+    <circle cx="74" cy="30" r="3.4" class="dot"/>
+    <text x="48" y="122" text-anchor="middle" class="lbl">预测与预警</text>
+  </g>
+
+  <!-- 3 方案与评估：前后对比柱 -->
+  <g transform="translate(308 26)">
+    <rect x="-8" y="-8" width="112" height="112" rx="14" fill="#f4f9ff" stroke="#d8e8fa"/>
+    <rect x="24" y="46" width="16" height="30" rx="3" fill="#bfd9f6"/>
+    <rect x="48" y="34" width="16" height="42" rx="3" fill="#1685ff"/>
+    <rect x="72" y="54" width="16" height="22" rx="3" fill="#bfd9f6"/>
+    <path d="M20 80 H84" stroke="#9db8d4" stroke-width="2" fill="none"/>
+    <text x="48" y="122" text-anchor="middle" class="lbl">方案与评估</text>
+  </g>
+
+  <!-- 4 分析记录：文档 + 勾选 -->
+  <g transform="translate(448 26)">
+    <rect x="-8" y="-8" width="112" height="112" rx="14" fill="#f4f9ff" stroke="#d8e8fa"/>
+    <rect x="26" y="22" width="44" height="58" rx="5" class="ln"/>
+    <path d="M34 36 H60 M34 48 H60 M34 60 H50" stroke="#9db8d4" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+    <path d="M58 74 L64 80 L76 66" class="ln"/>
+    <text x="48" y="122" text-anchor="middle" class="lbl">分析记录</text>
+  </g>
+</svg>

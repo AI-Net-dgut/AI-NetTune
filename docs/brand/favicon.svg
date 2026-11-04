@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="AI-NetTune">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1685ff"/>
+      <stop offset="1" stop-color="#0b4f8a"/>
+    </linearGradient>
+  </defs>
+  <!-- 圆角底：保证 16px 下在任意背景上都清晰 -->
+  <rect x="0" y="0" width="32" height="32" rx="7" fill="url(#bg)"/>
+  <!-- 天线塔 -->
+  <path d="M16 13.5 L10.5 26.5 H21.5 Z" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linejoin="round"/>
+  <path d="M13.6 21.5 H18.4" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+  <!-- 塔顶信号点 -->
+  <circle cx="16" cy="10.6" r="1.9" fill="#ffffff"/>
+  <!-- 两道信号弧（右侧加粗，16px 下仍可辨） -->
+  <path d="M21 7.4 Q24.4 10.6 21 13.8" fill="none" stroke="#bfe0ff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M11 7.4 Q7.6 10.6 11 13.8" fill="none" stroke="#bfe0ff" stroke-width="2" stroke-linecap="round"/>
+</svg>
