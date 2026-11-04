@@ -173,3 +173,9 @@
   .ain-forecast-summary > div { align-items: flex-start; }
   .ain-forecast-summary h3 { overflow-wrap: anywhere; }
 }
+
+/* 只表示最近已查询结果中存在风险；具体基准可悬停查看。 */
+.ain-forecast-trigger.has-risk { color: #b42328; border-color: #e49a9e; background: #fff1f2; font-weight: 600; }
+.ain-forecast-trigger.has-risk span { color: #a83b40; }
+.ain-forecast-trigger.has-risk:hover:not(:disabled) { background: #ffe5e7; border-color: #ce5a63; }
+.ain-forecast-risk-icon { width: 15px; height: 15px; flex-shrink: 0; }

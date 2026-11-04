@@ -64,8 +64,8 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
       const typeLabel = TYPE_LABEL[event.faultType] ?? event.faultType;
       // 按钮上带**完整日期**（MM-DD HH:mm）：6 个案例跨 7 天，只显示时分会分不清
       // （10-30 清单第 2 点要求按状态显示状态与完整日期）。
-      const label = `${event.apId} ${typeLabel} ${event.start.slice(5, 16)}`
-        + (phase === "running" ? "（进行中）" : "");
+      const label = `${event.apId} ${typeLabel}案例 ${event.start.slice(5, 16)}开始`
+        + (phase === "running" ? "（事件进行中）" : "");
       const phaseText = phase === "pending"
         ? "未开始（主时钟尚未到事件开始时刻）"
         : phase === "running"
@@ -78,7 +78,7 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
       const fixedView = state.viewMode !== "live";
       return <button key={event.eventId} type="button" className="ain-button"
         disabled={disabled || !selectable}
-        title={`${event.eventId} ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）\n${phaseText}`
+        title={`${event.eventId} 案例时段：${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟；实际是否异常以监测研判为准）\n${phaseText}`
           // 实际行为：切换案例会把分析范围改成该事件，但视图仍停在固定查看；
           // 要回到跟随主时钟需点 QueryPanel 里的「退出分析，返回当前」。
           + (fixedView ? "\n当前是固定查看：切换后仍停留在固定查看，需要时可点「退出分析，返回当前」。" : "")
@@ -86,10 +86,11 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
         onClick={() => {
           act({ type: "select-range", startMs, endMs: rangeEnd });
           // 只预填问题，不发送：用户仍可改写后再点「发送」
-          onPrefill?.(`分析 ${event.apId} 在 ${event.start} 到 ${formatReplayTime(rangeEnd)} 为什么${typeLabel}`);
+          onPrefill?.(`分析 ${event.apId} 在 ${event.start} 到 ${formatReplayTime(rangeEnd)} 的网络状态，是否存在${typeLabel}，说明依据与可能原因`);
         }}>
         {label}
       </button>;
     })}
+    <span className="ain-replay-note">案例开始包含渐变阶段，是否异常以监测研判为准。</span>
   </div>;
 }

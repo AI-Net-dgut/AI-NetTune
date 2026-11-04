@@ -33,6 +33,7 @@ export function candidateGroups(d: Diagnosis): { id: string; candidates: Candida
   return [{ id: '主要异常', candidates: merge(d.candidates) }, ...d.apCandidates.map(g => ({ id: g.id, candidates: merge(g.candidates) }))].filter(g => g.candidates.length);
 }
 export function fallbackPlan(d: Diagnosis): TreatmentPlan | null {
+  if (d.answerFocus?.planEligible === false) return null;
   if (d.state !== 'anomaly' || !d.suggestion.trim()) return null;
   return { id: 'legacy-suggestion', name: '研判处理建议', description: d.suggestion, scope: d.scope, objectIds: d.affectedAps,
     goals: [], conditions: [], tradeoffs: [], tasks: [], parameters: [], simulation: null };

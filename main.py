@@ -21,6 +21,9 @@ import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 import llm_agent
+import forecast_answer
+from risk_state import crossing_state
+import diagnosis_focus  # 按原问题筛选已有诊断证据与对应方案
 import answer_llm      # 由模型写整段回答 + harness 校验（answer_llm.py）
 from llm_agent import get_intent, rule_intent, extract_time_range, call_llm_chat
 import forecast_model as _fm
@@ -488,6 +491,8 @@ class AnomalyRequest(BaseModel):
     # 可选：只研判指定 AP。默认 None = 现有行为（整窗、按 AP 逐一研判），
     # 因此前端/报告导出等既有调用完全不受影响。
     ap_id: str | None = None
+    # 聊天入口传入原问题供回答生成使用；旧 REST/报告调用可省略。
+    message: str | None = None
 
 def _trigger_evidence_text(ev: dict) -> str:
     """把一条触发证据翻译成"数值 + 阈值 + 比较方向"都正确的文案。
@@ -692,12 +697,9 @@ def _spec_verdict(ap: str, start: str, end: str) -> dict:
     out["max_power_bands"] = int(counted["_p"].max())
     out["max_occ_bands"] = int(counted["_o"].max())
     for col, key in (("_p", "weak"), ("_o", "cong")):
-        run = 0
-        for hit in (counted[col] >= min_bands):
-            run = run + 1 if hit else 0
-            if run >= ALERT_MIN_CROSSING_MINUTES:
-                out[key] = True
-                break
+        state = crossing_state(counted[col].items(), min_bands, ALERT_MIN_CROSSING_MINUTES)
+        out[key] = state["confirmed"]
+        out[key + "_state"] = state
     return out
 
 
@@ -976,8 +978,10 @@ def _invalidate_sim_caches() -> None:
 def analyze_anomaly(req: AnomalyRequest):
     if not _ANOMALY_CACHE_ON:
         return _analyze_anomaly_uncached(req)
+    # 缓存包含已生成的回答：同一窗口的不同问题不能共用一份文字。
+    # 数据/配置版本仍放在最后，沿用原有仿真修订隔离逻辑。
     key = (req.scenario, req.window_start, req.window_end,
-           getattr(req, "ap_id", None) or "", _data_version())
+           req.ap_id or "", req.message or "", bool(ENABLE_LLM), _data_version())
     hit = _ANOMALY_CACHE.get(key)
     if hit is not None:
         ts, payload = hit
@@ -1089,7 +1093,7 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
             ]
         else:
             hour_findings = []
-        hour_findings_all.extend(hour_findings)
+        hour_findings_all.extend([{**x, "hour": hour} for x in hour_findings])
         if hour_findings:
             hour_findings.sort(key=lambda f: sev_rank.get(f["level"], 9))
             top = hour_findings[0]
@@ -1191,6 +1195,45 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                 })
     alarm_history = alarm_history[:50]
 
+    # 回答视图只筛选已经完成的 AP / 小时研判，不改变 judge_ap 的阈值与算法。
+    _focus, _selected, _selected_hours = diagnosis_focus.prepare(
+        req.message, findings, hour_findings_all, ap_results)
+    if _focus:
+        _focus["overview"] = {"anomaly_type": anomaly_type, "affected_aps": list(affected_aps)}
+    if _focus and _focus["kind"] != "overview":
+        findings, hour_findings_all = _selected, _selected_hours
+        _matches = findings or hour_findings_all
+        perf_hints = []  # 其他专项的性能提示不充当本次结论。
+        if _matches:
+            m = _matches[0]
+            is_anomaly, anomaly_type, level = True, m["anomaly_type"], m["level"]
+            anomaly_scope = "window" if findings else "hour"
+            evidence, cause, suggestion = m["evidence"], m["cause"], m["suggestion"]
+            if anomaly_scope == "hour":
+                cause = "时段性异常：仅个别小时越阈，整窗均值正常。" + cause
+            nstatus = m["network_status"]
+            affected_aps = list(dict.fromkeys(f["ap_id"] for f in _matches))
+            candidates = m.get("candidates", [])
+            ap_candidates = [{"ap_id": f["ap_id"], "candidates": f.get("candidates", [])} for f in _matches]
+            confidence = round(min(0.99 if findings else 0.75,
+                                   (0.6 if findings else 0.5) + 0.08 * len(evidence)), 2)
+        else:
+            m = None
+            is_anomaly, anomaly_scope, level = False, "none", "低"
+            anomaly_type = ("连接分配待核查" if _focus["kind"] == "connections" else
+                            "未确诊拥塞" if _focus["kind"] == "congestion" else
+                            "未确诊弱覆盖" if _focus["kind"] == "coverage" else "正常")
+            cause, suggestion = "现有专项证据不足以确认所问故障", "先补充专项证据，不沿用其他故障方案"
+            evidence, affected_aps, candidates, ap_candidates = [], [], [], []
+            nstatus, confidence = "normal", 0.0
+    elif not is_anomaly:
+        m = None
+
+    if _focus and _focus["kind"] != "overview":
+        _targets = set(affected_aps)
+        alarm_history = [a for a in alarm_history if a["ap_id"] in _targets
+                         and a["anomaly_type"] == anomaly_type]
+
     # 5) 处理方案与对比仿真（闭环里的"方案制定"）：按主异常 AP 生成候选方案。
     #    仿真失败不影响研判本身，所以整体包在 try 里并只打印告警。
     plans = []
@@ -1216,88 +1259,17 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     _plan_narrative_text = explain_plans(plans, anomaly_type)
     _plan_narrative_from_llm = bool(_plan_narrative_text and _plan_narrative_text != _plan_fallback)
 
-    # ===== 由模型写整段回答，并用校验器闭环把关（answer_llm）=====
-    # 只喂**已经算好的证据**；模型写的每个数字/对象都会被逐条核对，不合格重写一次，
-    # 仍不合格就返回 None，界面继续用规则文案。见 answer_llm.py 的校验项说明。
-    # 注意：此处只能用**已计算好的变量**（m / req / plans / is_anomaly / anomaly_type）。
-    _answer_llm_text = None
-    _answer_llm_check = {"ok": False, "violations": ["未启用"], "source": "rule", "attempts": 0}
-    if ENABLE_LLM:
-        try:
-            # 方案对象既可能是 dict 也可能是模型对象（plan_model 的 dataclass），
-            # 统一用 _g/_lst 取值，否则 `p.get(...)` 会抛 AttributeError 把整段回答废掉。
-            def _g(node, key, default=None):
-                if isinstance(node, dict):
-                    return node.get(key, default)
-                return getattr(node, key, default)
-
-            def _lst(node):
-                return list(node) if isinstance(node, (list, tuple)) else []
-
-            def _sim_metrics(node):
-                """把方案仿真折算成 before/after/delta 列表（复查：metrics 实际是 list，
-                早期只处理 dict → 证据里没有效果数值，模型写不出【预计效果】）。"""
-                out = []
-                metrics = _g(node, "metrics", None)
-                rows = metrics if isinstance(metrics, (list, tuple)) else []
-                for row in rows:
-                    key = _g(row, "key")
-                    before, after = _g(row, "before"), _g(row, "after")
-                    if key and isinstance(before, (int, float)) and isinstance(after, (int, float)):
-                        out.append({"metric": key, "before": before, "after": after,
-                                    "delta": round(float(after) - float(before), 2)})
-                if not out and isinstance(node, dict):
-                    out = [{"metric": k, "delta": v} for k, v in node.items() if isinstance(v, (int, float))]
-                return out[:6]
-
-            def _eff(plan):
-                return _sim_metrics(_g(plan, "simulation"))
-
-            def _plan_names(plan):
-                return {"id": _g(plan, "id"), "name": _g(plan, "name"), "objects": _g(plan, "objectIds")}
-
-            _main_ap = m.get("ap_id") if isinstance(m, dict) else None
-            _evidence_bundle = {
-                "scenario": req.scenario,
-                "window": {"start": req.window_start, "end": req.window_end},
-                "ap": _main_ap,
-                "anomaly_type": anomaly_type,
-                "is_anomaly": bool(is_anomaly),
-                "level": m.get("level") if isinstance(m, dict) else None,
-                "cause": m.get("cause") if isinstance(m, dict) else None,
-                "root_cause_confirmed": False,      # 候选原因，未经现场核实
-                "candidates": [{"cause": _g(c, "cause"), "score": _g(c, "score")}
-                               for c in (m.get("candidates") or [])][:3] if isinstance(m, dict) else [],
-                "metrics": {k: v for k, v in zip(
-                                ("rsrp", "sinr", "throughput", "prb_usage"),
-                                (m.get("rsrp_avg"), m.get("sinr_avg"), m.get("thr_avg"), m.get("prb_avg")))
-                            if isinstance(v, (int, float))} if isinstance(m, dict) else {},
-                "plans": [{"name": _g(p, "name"),
-                           "parameters": [{"id": _g(q, "id"), "current": _g(q, "currentValue"),
-                                           "suggested": _g(q, "suggestedValue")}
-                                          for q in _lst(_g(p, "parameters"))],
-                           "effects": _eff(p)}
-                          for p in (plans or [])][:2],
-            }
-            # AnomalyRequest 没有 message 字段（只有 REST 诊断入口才会走到这里），安全取用
-            _ans_question = (getattr(req, "message", "") or
-                             f"请解读 {req.scenario} 在 {req.window_start} 至 {req.window_end} 的研判结论")
-            _answer_result = answer_llm.generate(_ans_question, _evidence_bundle, llm_agent.call_llm_chat)
-            _answer_llm_text = _answer_result.get("text")
-            _answer_llm_check = {**_answer_result.get("check", {}),
-                                 "source": _answer_result.get("source") or "rule",
-                                 "attempts": _answer_result.get("attempts", 0)}
-        except Exception as exc:   # noqa: BLE001 - 生成失败一律退回规则文案
-            _answer_llm_check = {"ok": False, "violations": [f"生成失败：{type(exc).__name__}"],
-                                 "source": "rule", "attempts": 0}
-
     # ===== 状态语义计算（队友反馈第4点）=====
     # 窗口是"过去 N 分钟"，出现过的异常不等于**此刻**仍在故障，必须分开表达：
     #   fault_active          窗口末尾 10 分钟内仍有异常（_RECOVER_GRACE_SEC=600）→ 当前仍在故障
     #   recovered_in_window   窗口内有异常区间，但末尾已恢复
     #   performance_warning   指标偏低但未达故障判据（不算异常，给提示）
     #   normal                都没有
-    _spans = _anomaly_spans(rows)
+    # 专项先取得完整标签区间再筛选，不能让其他 AP 提前耗尽全局 20 段配额。
+    _spans = _anomaly_spans(rows, limit=len(rows)) if _focus else _anomaly_spans(rows)
+    if _focus and _focus["kind"] != "overview":
+        _allowed = {(r["ap_id"], r["network_status"]) for r in (findings or hour_findings_all)}
+        _spans = [sp for sp in _spans if (sp["ap_id"], sp["type"]) in _allowed]
     # 由**频谱维度**触发的故障，网络标签可能整窗都是 normal（故障期 UE 采样也可能正常）。
     # 这种时候若只按标签算区间，就会出现"存在故障 + 当前正常 + 没有异常区间"三者互斥
     # （唐苗检测报告第 4 条）。这里把频谱越阈的分钟也补成区间，保证状态/正文/证据一致。
@@ -1392,6 +1364,10 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
             if _hour_key:
                 _s = f"{_hour_key}:00:00" if len(_hour_key) == 13 else f"{_hour_key}"
                 _e = f"{_hour_key}:59:59" if len(_hour_key) == 13 else window_end
+                _observed = [r["timestamp"] for r in by_ap.get(_ap0, [])
+                             if r["timestamp"][:13] == _hour_key[:13]]
+                _s = max(window_start, _s, min(_observed) if _observed else window_start)
+                _e = min(window_end, _e, max(_observed) if _observed else window_end)
             else:
                 _s, _e = window_start, window_end
         else:
@@ -1439,6 +1415,90 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
         _current_state = "performance_warning"
     else:
         _current_state = "normal"
+
+    _focus = diagnosis_focus.finish(_focus, {
+        "anomaly_scope": anomaly_scope, "anomaly_type": anomaly_type,
+        "current_state": _current_state, "cause": cause, "candidates": candidates,
+        "kpi_evidence": evidence, "plans": plans, "performance_hints": perf_hints,
+    }, ap_results, rows)
+
+    # ===== 由模型写整段回答，并用校验器闭环把关（answer_llm）=====
+    # 只喂**已经算好的证据**；模型写的每个数字/对象都会被逐条核对，不合格重写一次，
+    # 仍不合格就返回 None，界面继续用规则文案。见 answer_llm.py 的校验项说明。
+    # 注意：此处只能用**已计算好的变量**（m / req / plans / is_anomaly / anomaly_type）。
+    _answer_llm_text = None
+    _answer_llm_check = {"ok": False, "violations": ["未启用"], "source": "rule", "attempts": 0}
+    if ENABLE_LLM:
+        try:
+            # 方案对象既可能是 dict 也可能是模型对象（plan_model 的 dataclass），
+            # 统一用 _g/_lst 取值，否则 `p.get(...)` 会抛 AttributeError 把整段回答废掉。
+            def _g(node, key, default=None):
+                if isinstance(node, dict):
+                    return node.get(key, default)
+                return getattr(node, key, default)
+
+            def _lst(node):
+                return list(node) if isinstance(node, (list, tuple)) else []
+
+            def _sim_metrics(node):
+                """把方案仿真折算成 before/after/delta 列表（复查：metrics 实际是 list，
+                早期只处理 dict → 证据里没有效果数值，模型写不出【预计效果】）。"""
+                out = []
+                metrics = _g(node, "metrics", None)
+                rows = metrics if isinstance(metrics, (list, tuple)) else []
+                for row in rows:
+                    key = _g(row, "key")
+                    before, after = _g(row, "before"), _g(row, "after")
+                    if key and isinstance(before, (int, float)) and isinstance(after, (int, float)):
+                        out.append({"metric": key, "before": before, "after": after,
+                                    "delta": round(float(after) - float(before), 2)})
+                if not out and isinstance(node, dict):
+                    out = [{"metric": k, "delta": v} for k, v in node.items() if isinstance(v, (int, float))]
+                return out[:6]
+
+            def _eff(plan):
+                return _sim_metrics(_g(plan, "simulation"))
+
+            def _plan_names(plan):
+                return {"id": _g(plan, "id"), "name": _g(plan, "name"), "objects": _g(plan, "objectIds")}
+
+            _main_ap = m.get("ap_id") if isinstance(m, dict) else None
+            _evidence_bundle = {
+                "scenario": req.scenario,
+                "window": {"start": window_start, "end": window_end},
+                "ap": _main_ap,
+                "anomaly_type": anomaly_type,
+                "is_anomaly": bool(is_anomaly),
+                "level": m.get("level") if isinstance(m, dict) else None,
+                "cause": m.get("cause") if isinstance(m, dict) else None,
+                "current_state": _current_state,
+                "anomaly_scope": anomaly_scope,
+                "answer_focus": _focus,
+                "root_cause_confirmed": False,      # 候选原因，未经现场核实
+                "candidates": [{"cause": _g(c, "cause"), "score": _g(c, "score")}
+                               for c in (m.get("candidates") or [])][:3] if isinstance(m, dict) else [],
+                "metrics": {k: v for k, v in zip(
+                                ("rsrp", "sinr", "throughput", "prb_usage"),
+                                (m.get("rsrp_avg"), m.get("sinr_avg"), m.get("thr_avg"), m.get("prb_avg")))
+                            if isinstance(v, (int, float))} if isinstance(m, dict) else {},
+                "plans": [{"name": _g(p, "name"),
+                           "parameters": [{"id": _g(q, "id"), "current": _g(q, "currentValue"),
+                                           "suggested": _g(q, "suggestedValue")}
+                                          for q in _lst(_g(p, "parameters"))],
+                           "effects": _eff(p)}
+                          for p in (plans or [])][:2],
+            }
+            # 聊天问题原样传入；未提供 message 的旧 REST/报告入口继续用通用解读。
+            _ans_question = (req.message or
+                             f"请解读 {req.scenario} 在 {req.window_start} 至 {req.window_end} 的研判结论")
+            _answer_result = answer_llm.generate(_ans_question, _evidence_bundle, llm_agent.call_llm_chat)
+            _answer_llm_text = _answer_result.get("text")
+            _answer_llm_check = {**_answer_result.get("check", {}),
+                                 "source": _answer_result.get("source") or "rule",
+                                 "attempts": _answer_result.get("attempts", 0)}
+        except Exception as exc:   # noqa: BLE001 - 生成失败一律退回规则文案
+            _answer_llm_check = {"ok": False, "violations": [f"生成失败：{type(exc).__name__}"],
+                                 "source": "rule", "attempts": 0}
 
     return {
         "code": 0,
@@ -1495,6 +1555,7 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
             "plan_narrative_source": "llm" if _plan_narrative_from_llm else "template",
             # 由模型**写整段回答**，并经 answer_llm.verify 逐条核对后才放行（harness 闭环）。
             # 校验不通过就是 None，前端继续用规则文案，绝不把可能编造的内容展示给用户。
+            "answer_focus": _focus,
             "answer_llm": _answer_llm_text,
             "answer_check": _answer_llm_check,
         },
@@ -1735,6 +1796,9 @@ def tool_query_kpi(scenario: str, win_start: str | None = None, win_end: str | N
 def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> str:
     """故障研判文案：LLM 润色四段式（发现问题/判断依据/候选原因与不确定性/下一步验证）；
     LLM 不可用或异常时降级为同结构模板。数字与结论全部来自规则引擎 d，LLM 只负责表达、不编数据。"""
+    if d.get("answer_focus"):
+        return (d.get("answer_llm") if (d.get("answer_check") or {}).get("ok")
+                else diagnosis_focus.rule_reply(d["answer_focus"]))
     ap = "、".join(d.get("affected_aps") or ["未知AP"])
     cand = d.get("candidates") or []
     cand_txt = "；".join(
@@ -1815,7 +1879,9 @@ def _forecast_template(data: dict) -> str:
                                             "%Y-%m-%d %H:%M:%S")).total_seconds() // 60)
         except (KeyError, ValueError, TypeError):
             lead = 0
-        if lead > 0:
+        if first.get("riskState") in ("developing", "ongoing", "historical"):
+            parts.append(f"{first['title']}。{first['summary']}")
+        elif lead > 0:
             parts.append(f"{first['target']} 预计 {lead} 分钟后越阈（{first['title']}）。")
         else:
             parts.append(f"{first['target']} 已处于越阈状态，预计持续（{first['title']}）。")
@@ -1984,7 +2050,8 @@ def _plan_chain(req, scenario, params) -> dict | None:
 
     diag = analyze_anomaly(AnomalyRequest(scenario=scenario,
                                          window_start=window_start,
-                                         window_end=window_end))["data"]
+                                         window_end=window_end,
+                                         message=req.message))["data"]
     worst = _worst_ap(diag)
     steps.append({"tool": "analyze_anomaly", "title": "查对象与证据", "status": "ok",
                   "summary": f"研判完成：最差对象 {worst or '未识别'}（{diag.get('anomaly_type')} / {diag.get('level')}）",
@@ -2040,7 +2107,7 @@ def _plan_chain(req, scenario, params) -> dict | None:
 
 
 def tool_fault_diagnosis(scenario: str, win_start: str | None = None, win_end: str | None = None,
-                         ap_id: str | None = None) -> dict:
+                         ap_id: str | None = None, message: str | None = None) -> dict:
     """故障研判。ap_id 指定时只研判该 AP（默认 None = 现有行为，整窗按 AP 逐一研判）。
 
     修复的缺陷：意图层早就抽出了 ap_id（intent_debug.parsed.ap_id 能看到 AP-01），
@@ -2050,7 +2117,7 @@ def tool_fault_diagnosis(scenario: str, win_start: str | None = None, win_end: s
     win_start, win_end = win_start or TOOL_WINDOW_START, win_end or TOOL_WINDOW_END
     ap_filter = (ap_id or "").strip() or None
     an = analyze_anomaly(AnomalyRequest(scenario=scenario, window_start=win_start,
-                                        window_end=win_end, ap_id=ap_filter))
+                                        window_end=win_end, ap_id=ap_filter, message=message))
     d = an["data"]
     reply = _build_fault_reply(d, scenario, win_start, win_end)
     if ap_filter:
@@ -2480,8 +2547,10 @@ def agent_chat(req: ChatRequest):
         handler = TOOLS[intent]
         if intent == "forecast":
             data = handler(scenario, req.window_start, req.window_end, req.message)
-        elif intent in ("fault_diagnosis", "query_kpi"):
-            # 只有这两个工具支持按 AP 过滤，其余工具签名不变，避免牵连。
+        elif intent == "fault_diagnosis":
+            data = handler(scenario, req.window_start, req.window_end, params.get("ap_id"), message=req.message)
+        elif intent == "query_kpi":
+            # KPI 工具保持原签名；只有故障研判需要原问题来生成解释。
             data = handler(scenario, req.window_start, req.window_end, params.get("ap_id"))
         else:
             data = handler(scenario, req.window_start, req.window_end)
@@ -3464,7 +3533,8 @@ def forecast_preview(req: ForecastPreviewRequest):
         ap_df = (_SPEC.get("by_ap") or {}).get(ap)
         if ap_df is None or ap_df.empty:
             continue
-        hist_sub = spectrum_window(ap, hist_start, hist_end)
+        # 与现存研判一样包含基准时刻已有采样；未来时刻仍不读取。
+        hist_sub = spectrum_window(ap, hist_start, hist_end, inclusive_end=True)
         # spectrum_window 在"窗口内没有任何频谱行"时返回 None。
         # 原先没有这个保护，选一个太早的基准（历史窗口落在数据集起点之前）会直接
         # AttributeError → 500。这里跳过该 AP；若所有 AP 都无数据，下面统一返回
@@ -3501,6 +3571,9 @@ def forecast_preview(req: ForecastPreviewRequest):
         def build_hist(metric):
             frames = []
             for ts in ts_list:
+                # 基准采样参与计算，历史区间图仍只画在基准之前，避免越界帧。
+                if ts >= hist_end:
+                    continue
                 pmap, omap = hist_by_ts[ts]
                 mp = pmap if metric == "power" else omap
                 frames.append({
@@ -3570,9 +3643,8 @@ def forecast_preview(req: ForecastPreviewRequest):
 
         # ---- 预警判据：看"预测帧"里第几分钟越过阈值，而不是统计已发生的历史标签 ----
         # 阈值与 docs/api.md、频谱转交说明一致：功率 < −95 dBm 视为弱覆盖；占用率 > 80% 视为拥塞。
-        # 输出分两种语义，与《问题状态与责任分工》里"持续风险"和"提前预警"分别验收一致：
-        #   already=True  → 基准时刻已越阈，提示"已发生、预计持续"（持续风险）
-        #   already=False → 基准时刻未越阈，提示"预计 N 分钟后…"（提前预警，带提前量）
+        # 当前短时越阈、历史连续确认、未来趋势风险分别表述。
+        # 状态确认复用现存研判的观测时间边界与持续性判据；不把单帧当确诊。
         # 越阈频段数下限：要求"大多数频段"越阈，而不是几个边缘频段。
         # 起因：包络中心 −60 dBm、边缘 −70 dBm，边缘频段更容易先跌破阈值；
         # 实测只按 5/50 个频段判定时，正常时段也会因为边缘频段而误报。
@@ -3583,6 +3655,7 @@ def forecast_preview(req: ForecastPreviewRequest):
         # 起因：KPI 有阴影衰落，单分钟噪声就可能让若干频段瞬间跌破阈值，
         # 若只按"某一分钟越阈"触发，正常时段也会冒出误报（实测出现过 1 次）。
         min_crossing_minutes = ALERT_MIN_CROSSING_MINUTES
+        observed_verdict = _spec_verdict(ap, req.history.start, req.history.end)
 
         def _bands_over(values, threshold, direction):
             """返回越阈频段列表；按越阈幅度从最严重排起。"""
@@ -3605,13 +3678,15 @@ def forecast_preview(req: ForecastPreviewRequest):
             # 原实现取"首个合格段 → 最后命中点"，中间恢复的间隙被并进同一条风险，
             # 用户会以为"从头到尾一直在故障"。现在每段独立成一条风险。
             runs = _split_crossing_runs(hit_minutes, min_crossing_minutes)
-            already = bool(hist_frames[metric]) and len(
-                _bands_over(hist_frames[metric][-1]["values"], threshold, direction)
-            ) >= min_crossing_bands
+            observed = observed_verdict.get("weak_state" if metric == "power" else "cong_state") or {}
+            already = observed.get("latestCount", 0) >= min_crossing_bands
+            fresh_observation = observed.get("observedAt") == req.baseTime
+            confirmed_now = observed.get("active", False) and fresh_observation
+            projected_persistent = bool(runs)
             if not runs:
                 # 没有够长的连续段 ≠ 当前没问题（独立审计 P2）：预测时长 <3 分钟时
                 # 连续段必然不足 3 分钟，而基准时刻可能已经 50/50 频段越阈 ——
-                # 这时绝不能返回"整体正常"（漏报式全清），至少要报"已处于…预计持续"。
+                # 此时保留短时越阈提示，是否已确认仍由历史连续观测决定。
                 if not already:
                     continue
                 runs = [[0, max(0, len(frames) - 1)]]
@@ -3623,22 +3698,35 @@ def forecast_preview(req: ForecastPreviewRequest):
                 hardest = crossing[first_minute]
                 ratio = len(hardest) / max(1, len(bands))
 
-                if already:
+                if already and first_minute == 0:
                     severity = "high" if ratio >= 0.5 else "medium"
                     if last_minute + 1 >= len(frames):
                         duration_text = f"预测整个 {int(req.horizonMinutes)} 分钟内该状态维持"
                     else:
                         duration_text = (f"预计持续到第 {last_minute + 1} 分钟"
                                          f"（{frames[last_minute]['end'][11:16]}）后逐步恢复")
-                    title = f"{ap} 已处于{'弱覆盖' if metric == 'power' else '拥塞'}，预计持续"
-                    summary = (
-                        f"基准时刻（{req.baseTime}）已有 {len(hardest)}/{len(bands)} 个频段"
-                        f"{label}{verb} {threshold}{unit_text}；按当前趋势，{duration_text}。"
+                    fault_name = '弱覆盖' if metric == 'power' else '拥塞'
+                    if not fresh_observation:
+                        title = f"{ap} 历史频谱已越阈，当前状态待核查"
+                    elif confirmed_now:
+                        title = f"{ap} 已确认频谱{fault_name}，预计持续" if projected_persistent else f"{ap} 已确认频谱{fault_name}，未来走势待观察"
+                    else:
+                        title = f"{ap} 频谱短时越阈，存在持续{fault_name}风险" if projected_persistent else f"{ap} 频谱短时越阈，持续风险待观察"
+                    observed_text = (
+                        f"最新观测（{observed.get('observedAt')}）有 {observed.get('latestCount', 0)}/{len(bands)} 个频段"
+                        f"{label}{verb} {threshold}{unit_text}，已连续越阈 {observed.get('consecutiveMinutes', 0)} 分钟。"
                     )
+                    confirmation = (f"满足连续 {min_crossing_minutes} 分钟的频谱故障确认条件。" if confirmed_now
+                                    else f"尚未满足连续 {min_crossing_minutes} 分钟的确认条件，当前为风险提示。")
+                    if not fresh_observation:
+                        confirmation = "参考历史未覆盖预测基准时刻，不能确认当前故障状态；以下仅按该历史趋势推算。"
+                    summary = observed_text + confirmation + (f"按当前趋势，{duration_text}。" if projected_persistent
+                              else "本次预测时长或预测连续段不足，不能据此确认未来持续故障。")
                 else:
                     severity = "high" if first_minute <= 10 else ("medium" if first_minute <= 30 else "low")
                     summary = (
-                        f"基准时刻（{req.baseTime}）尚未越阈；按当前趋势外推，"
+                        (f"参考历史末帧尚未越阈；按所选历史趋势外推，" if not already
+                         else f"基准时刻已有越阈；本段为预测恢复后再次越阈风险。按当前趋势外推，") +
                         f"预计第 {first_minute} 分钟后开始有 {len(hardest)}/{len(bands)} 个频段"
                         f"{label}{verb} {threshold}{unit_text}。"
                         # 措辞校准：这是"趋势延续"判断，不是保证。实测 01-02 AP-03 弱覆盖
@@ -3664,6 +3752,10 @@ def forecast_preview(req: ForecastPreviewRequest):
                     "id": (f"ALT-{ap}-{'weak' if metric == 'power' else 'cong'}"
                            + (f"-{run_index}" if len(runs) > 1 else "")),
                     "target": ap,
+                    "riskState": ("historical" if not fresh_observation else "ongoing" if confirmed_now else "developing") if already and first_minute == 0 else "predicted",
+                    "observedAt": observed.get("observedAt"),
+                    "observedConsecutiveMinutes": observed.get("consecutiveMinutes", 0),
+                    "requiredConsecutiveMinutes": min_crossing_minutes,
                     "title": title,
                     "summary": summary,
                     "severity": severity,
@@ -3929,12 +4021,20 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
     # 用户的问题与关注时段（v3）：只在**有值**时参与，未传时输出与旧行为逐字节一致。
     question_text = (req.question or "").strip()
     target_window = req.targetWindow
+    answer_focus = forecast_answer.answer_focus(question_text)
     # 未指定 alertId 但给了关注时段时，挑与该时段相交的预警来研判（否则整窗）
     if target_window is not None and alert_detail is None:
         for a in cached.get("alerts", []):
             if (a.get("start") or "") <= target_window.end and (a.get("end") or "") >= target_window.start:
                 alert_detail = a
                 break
+
+    # 先确定唯一风险，再提取该 AP 的频谱；不能到构造回答时才补选对象。
+    if answer_focus != 'overview' and alert_detail is None:
+        matches = [a for a in cached.get('alerts', []) if target_window is None or
+                   ((a.get('start') or '') <= target_window.end and (a.get('end') or '') >= target_window.start)]
+        if len(matches) == 1:
+            alert_detail = matches[0]
 
     # 拉历史窗口真实数据，算 KPI 现状与近窗口趋势（供 prompt 使用）
     try:
@@ -4024,6 +4124,37 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
         f"{trend_text}\n{alert_desc}\n{extra_ctx}请按系统要求输出研判文字。"
     )
 
+    focus_context = None
+    if answer_focus != 'overview':
+        scoped_alerts = [a for a in cached.get('alerts', []) if target_window is None or
+                         ((a.get('start') or '') <= target_window.end and (a.get('end') or '') >= target_window.start)]
+        if req.alertId:
+            scoped_alerts = [alert_detail]
+        selected = alert_detail if req.alertId or len(scoped_alerts) == 1 else None
+        if selected is None and len(scoped_alerts) == 1:
+            selected = scoped_alerts[0]
+        focus_context = forecast_answer.make_context(
+            question=question_text, base_time=req.baseTime, history=req.history.model_dump(),
+            forecast=req.forecast.model_dump(), target_window=target_window.model_dump() if target_window else None,
+            alerts=scoped_alerts, selected=selected, rows=hist_rows, spectrum_text=_spectrum_ctx,
+            method=cached.get('method'), limitations=cached.get('limitations'))
+        if answer_focus in ('prevention', 'comparison') and scoped_alerts:
+            if selected:
+                try:
+                    plan_response = forecast_plans(ForecastPlanRequest(
+                        forecastId=req.forecastId, scenario=req.scenario, baseTime=req.baseTime,
+                        alertId=selected.get('id'), history=req.history, forecast=req.forecast, targetWindow=target_window))
+                    forecast_answer.add_plans(focus_context, plan_response)
+                except Exception:
+                    focus_context['planNotice'] = '方案评估暂不可用，请重试方案效果页。'
+            else:
+                focus_context['planNotice'] = '本轮涉及多个风险，请先在预测预警中选择一条风险，再比较其方案。'
+        system_prompt = forecast_answer.system_prompt(answer_focus)
+        user_message = (f"用户的问题：{question_text}\n"
+                        + (f"用户关注时段：{target_window.start} ~ {target_window.end}\n" if target_window else '')
+                        + '本轮已校验的证据（JSON，历史不是未来实测）：\n'
+                        + _json.dumps(focus_context, ensure_ascii=False))
+
     reply = None
     source = "rule"
     try:
@@ -4084,11 +4215,15 @@ def forecast_analyze(req: ForecastAnalyzeRequest):
             reply += f"关于你的问题「{question_text}」：上面已给出该时段的风险判断与处置建议；" \
                      "若涉及具体业务类型，可结合第③项证据判断影响程度。"
 
+    if source == 'rule' and focus_context is not None:
+        reply = forecast_answer.rule_reply(answer_focus, focus_context)
+
     return success_response({
         "forecastId": req.forecastId,
         "baseTime": req.baseTime,
         "alertId": req.alertId,
         "source": source,
+        "answerFocus": answer_focus,
         "reply": reply,
         # 回显用户输入，便于前端确认"它确实读到了这句话/这个时段"
         "question": question_text,
@@ -4274,7 +4409,10 @@ def forecast_plans(req: ForecastPlanRequest):
         "forecastId": req.forecastId,
         "risk": {"ap": ap, "type": anomaly_type, "start": alert.get("start"),
                  "end": alert.get("end"), "title": alert.get("title"),
-                 "severity": alert.get("severity")},
+                 "severity": alert.get("severity"),
+                 "riskState": alert.get("riskState"), "summary": alert.get("summary"),
+                 "observedAt": alert.get("observedAt"),
+                 "observedConsecutiveMinutes": alert.get("observedConsecutiveMinutes")},
         "basisWindow": basis_window,               # 参数基线与效应评估用的实测窗口
         "targetWindow": ({"start": req.targetWindow.start, "end": req.targetWindow.end}
                          if req.targetWindow is not None else None),
@@ -4297,8 +4435,10 @@ def forecast_plans(req: ForecastPlanRequest):
         p["basis"] = basis
         _remember_plan(p)                          # 让 /api/plan/simulate 可用
 
-    disclaimer = (
-        f"方案依据：本轮预测预计 {alert.get('start')} ~ {alert.get('end')} 期间 {ap} 出现{anomaly_type}"
+    state_notice = ("当前仅短时越阈，尚未确诊持续故障；方案为预防性候选方向。" if alert.get("riskState") == "developing"
+                    else "参考历史未覆盖基准时刻，当前状态待核查；方案仅为候选方向。" if alert.get("riskState") == "historical" else "")
+    disclaimer = state_notice + (
+        f"方案依据：本轮风险提示为{alert.get('title')}，关注时段为 {alert.get('start')} ~ {alert.get('end')}，对象为{ap}"
         f"（{alert.get('title')}）。参数与效应基于**预测基准前的实测窗口** {basis_window['start']} ~ "
         f"{basis_window['end']} 评估，属当前配置下的等效测算，不是该未来时段的实测结果；"
         f"若目标时段尚无实测数据，请把结论当作处置方向而不是效果承诺。"

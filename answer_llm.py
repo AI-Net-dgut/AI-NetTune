@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import diagnosis_focus
 
 REQUIRED_SECTIONS = ("结论", "依据", "方案")
 MAX_CHARS = 1200
@@ -112,6 +113,36 @@ def verify(answer: str, evidence: dict) -> dict:
     for section in REQUIRED_SECTIONS:
         if f"【{section}】" not in text:
             violations.append(f"缺少小节【{section}】")
+
+    focus = evidence.get("answer_focus") or {}
+    topic_words = {"coverage": r"覆盖", "congestion": r"拥塞", "connections": r"连接|接入|切换",
+                   "priority": r"优先|同档|先核查|排序"}
+    topic = topic_words.get(focus.get("category")) or topic_words.get(focus.get("kind"))
+    if focus and focus.get("status") != "confirmed":
+        violations.append("本次专项未确诊，仅使用确定性提示，不接受模型编写故障与方案")
+    if focus.get("kind") == "priority" and focus.get("status") == "confirmed":
+        conclusion = re.search(r"【结论】([^【]*)", text)
+        subject_ids = set(re.findall(r"AP-\d+", conclusion.group(1) if conclusion else ""))
+        targets = set(focus.get("target_aps") or [])
+        if not subject_ids.intersection(targets) or subject_ids - targets:
+            violations.append("优先级结论必须指向本次排序目标；同档及背景对象放在依据中说明")
+    if focus.get("kind") in ("coverage", "congestion") and focus.get("status") == "confirmed":
+        allowed = set(focus.get("target_aps") or [])
+        stated = {m.upper().replace("－", "-").replace(" ", "") for m in re.findall(r"AP[-－\s]?0*\d+", text)}
+        if stated - allowed or not stated.intersection(allowed):
+            violations.append("专项回答的诊断对象必须对应本次 target_aps，不能借用其他 AP 的指标")
+    if focus and focus.get("status") == "confirmed" and evidence.get("current_state") == "recovered_in_window":
+        if not re.search(r"已恢复|已经恢复|已结束|已经结束", text):
+            violations.append("窗口内故障已恢复，回答必须保留这一时间状态")
+    if topic and not re.search(topic, text):
+        violations.append("回答未回应本次专项问题")
+    if focus.get("status") in ("not_confirmed", "insufficient"):
+        if not re.search(r"未确诊|不足|待核查|无法确认|不能确认", text):
+            violations.append("专项证据不足时必须保留未确诊或无法确认的限制")
+        if re.search(r"(?:→|->|调整为|调整至)\s*[-+]?\d", text):
+            violations.append("未确诊专项不可给出其他故障的配置调整")
+    if not focus.get("plan_eligible", True) and re.search(r"(?:预计|预期|仿真).{0,12}(?:提升|改善|降低|增加).{0,5}\d", text):
+        violations.append("无对应方案时不可声称已得到量化仿真效果")
 
     # 1) 数字必须来自证据
     pool = _evidence_numbers(evidence)
@@ -224,6 +255,10 @@ def generate(question: str, evidence: dict, call_fn) -> dict:
       - 通过：source="llm"，text 可直接展示；
       - 不通过：source=None（上层退回规则文案），check 里保留违规原因便于排查。
     """
+    focus = evidence.get("answer_focus") or {}
+    if focus and focus.get("status") != "confirmed":
+        return {"text": None, "source": None, "attempts": 0,
+                "check": {"ok": False, "violations": ["专项未确诊，使用已有证据生成的规则提示"]}}
     feedback = ""
     last_check: dict = {"ok": False, "violations": ["未执行"]}
     for attempt in range(1, ATTEMPTS + 1):
@@ -233,7 +268,8 @@ def generate(question: str, evidence: dict, call_fn) -> dict:
             + (f"\n上一次回答的问题（必须修正）：{feedback}\n" if feedback else "")
         )
         try:
-            answer = call_fn(SYSTEM_PROMPT, user, 0.2)
+            answer = call_fn(SYSTEM_PROMPT + (diagnosis_focus.prompt(evidence["answer_focus"])
+                                             if evidence.get("answer_focus") else ""), user, 0.2)
         except Exception as exc:  # noqa: BLE001 - 失败即退回规则
             return {"text": None, "source": None, "attempts": attempt,
                     "check": {"ok": False, "violations": [f"模型调用失败：{type(exc).__name__}"]}}

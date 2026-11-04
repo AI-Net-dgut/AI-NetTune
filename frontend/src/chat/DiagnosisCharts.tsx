@@ -77,13 +77,15 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
   spatialPending: boolean; spatialError: string; onSpatialRetry: () => void; busy: boolean;
   onTool: (type: "heatmap" | "topology") => void; selection?: EvidenceSelection | null;
 }) {
-  const firstAp = diagnosis?.affectedAps.find(id => data.nodes.some(node => node.type === "ap" && node.id === id));
+  const targetAps = diagnosis?.answerFocus?.targetAps.length ? diagnosis.answerFocus.targetAps
+    : diagnosis?.answerFocus?.observedAps ?? diagnosis?.affectedAps;
+  const firstAp = targetAps?.find(id => data.nodes.some(node => node.type === "ap" && node.id === id));
   const selectedNode = data.nodes.find(n => n.id === selection?.objectId);
   const [target, setTarget] = useState<ObservationTarget>(selectedNode ? { kind: selectedNode.type, id: selectedNode.id }
     : firstAp ? { kind: "ap", id: firstAp } : { kind: "all" });
   const [metric, setMetric] = useState<MetricKey>(selection?.metric ?? (diagnosis ? diagnosisMetric(diagnosis) : "throughputMbps"));
   const toolView: EvidenceView | null = toolResult?.chart?.type === "heatmap" ? "coverage" : toolResult?.chart?.type === "graph" ? "connections" : toolResult?.chart?.type === "line" ? "trend" : null;
-  const [view, setView] = useState<EvidenceView>(selection?.view ?? toolView ?? "trend");
+  const [view, setView] = useState<EvidenceView>(selection?.view ?? (diagnosis?.answerFocus?.kind === "connections" ? "connections" : toolView) ?? "trend");
   // 原始趋势没有逐点对象标识，默认用已加载采样完成对象/指标联动。
   const [useTool, setUseTool] = useState(Boolean(toolView && toolView !== "trend" && !toolResult?.diagnosis));
   const [compareKind, setCompareKind] = useState<"ap" | "ue">("ue");

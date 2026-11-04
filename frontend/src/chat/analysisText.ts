@@ -24,3 +24,16 @@ export function analysisSections(reply: string): AnalysisSection[] {
   });
   return sections.length ? sections : [{ title: "研判结果", text }];
 }
+
+/** 只移除开头与本次问题完全相同的独立复述行；归档仍保留接口原文。 */
+export function withoutQuestionEcho(reply: string, question?: string): string {
+  if (!question?.trim()) return reply;
+  const source = reply.match(/^【(?:规则研判|AI研判)】\s*/)?.[0] ?? "";
+  const body = reply.slice(source.length);
+  const echo = `关于你的问题「${question}」`;
+  if (!body.startsWith(echo)) return reply;
+  const rest = body.slice(echo.length);
+  // 同一行还有判断内容时，不能把它当作纯复述删除。
+  if (rest && !/^[ \t]*\r?\n/.test(rest)) return reply;
+  return `${source.trim()}${rest.trimStart()}`;
+}

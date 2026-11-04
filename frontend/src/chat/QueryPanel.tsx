@@ -40,7 +40,7 @@ const FORECAST_EXAMPLES = [
 export default function QueryPanel({ query, scenario, window: scopeWindow, disabled, data,
   spatial = null, spatialPending = false, spatialError = "", onSpatialRetry = () => {}, focusedApId = null,
   dataLoading = false, dataError = "", replay, onSubmitAnalysis, referenceControls, analysisNotice = "",
-  onOpenForecast, forecastDisabled = false, forecastLabel = "查看未来风险", forecastReview,
+  onOpenForecast, forecastDisabled = false, forecastLabel = "查看未来风险", forecastAlertCount = 0, forecastResultTime, forecastReview,
   forecastContext, forecastPending = false, onForecastQuestion, onLeaveForecast,
   prefillQuestion = "",
 }: {
@@ -48,7 +48,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   data: DashboardData | null; spatial?: SpatialMapData | null; spatialPending?: boolean; spatialError?: string;
   onSpatialRetry?: () => void; focusedApId?: string | null;
   dataLoading?: boolean; dataError?: string; referenceControls?: ReactNode; analysisNotice?: string;
-  onOpenForecast?: () => void; forecastDisabled?: boolean; forecastLabel?: string; forecastReview?: ReactNode;
+  onOpenForecast?: () => void; forecastDisabled?: boolean; forecastLabel?: string; forecastAlertCount?: number; forecastResultTime?: string; forecastReview?: ReactNode;
   forecastContext?: ForecastHandoff; forecastPending?: boolean;
   onForecastQuestion?: (message: string) => string; onLeaveForecast?: () => void;
   /** 点案例时预填的问题：**只填进输入框，不自动发送**（用户仍可改写） */
@@ -220,6 +220,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               否则用户会把"过去 60 分钟里发生过"误读成"现在还在故障"。 */}
           <span data-state={query.pending ? "pending" : diagnosis?.currentState || ""}>
             {forecastMode ? "预测研判" : query.pending ? "等待本次结果"
+              : diagnosis?.answerFocus?.status === "insufficient" ? `${diagnosis.answerFocus.label} · 证据不足`
+              : diagnosis?.answerFocus?.status === "not_confirmed" ? `${diagnosis.answerFocus.label} · 未确诊`
               : diagnosis?.currentState === "fault_active" ? "当前故障中"
               : diagnosis?.currentState === "recovered_in_window" ? "窗口内有故障·已恢复"
               : diagnosis?.currentState === "performance_warning" ? "性能提示（未确诊）"
@@ -312,8 +314,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
       <div className="ain-ai-heading-title"><span className="ain-ai-symbol" aria-hidden="true">AI</span>
         <div><h2 id="ain-ai-title">AI 网络助手</h2><p>{workspace ? "在此提问，在左侧查看研判与方案" : "提问 → 原因与证据 → 处理方案 → 仿真效果对比"}</p></div></div>
       <div className="ain-ai-heading-actions">
-        <button type="button" className={onOpenForecast ? "ain-forecast-trigger" : "ain-forecast-placeholder"} disabled={historical || forecastDisabled || query.pending || dataLoading || !onOpenForecast}
-          onClick={onOpenForecast} title={historical ? "历史查看期间不提供未来预测" : "查看频谱态势、未来风险及相关指标；结果固定到打开时刻"}>{forecastMode ? "调整预测范围" : "预测预警"} {!forecastMode && <span>{historical ? "历史不可用" : forecastLabel}</span>}</button>
+        <button type="button" className={onOpenForecast ? `ain-forecast-trigger${!historical && forecastAlertCount > 0 ? " has-risk" : ""}` : "ain-forecast-placeholder"} disabled={historical || forecastDisabled || query.pending || dataLoading || !onOpenForecast}
+          onClick={onOpenForecast} title={historical ? "历史查看期间不提供未来预测" : `查看频谱态势、未来风险及相关指标${forecastResultTime ? `；最近预测基准：${forecastResultTime}（北京时间），打开后更新` : "；尚未查询预测"}`}>{!historical && forecastAlertCount > 0 && <svg className="ain-forecast-risk-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 19 18H1Z" fill="currentColor" /><path d="M10 7v5M10 15v.1" stroke="white" strokeWidth="2" strokeLinecap="round" /></svg>}{forecastMode ? "调整预测范围" : "预测预警"} {!forecastMode && <span>{historical ? "历史不可用" : forecastLabel}</span>}</button>
         <span className="ain-ai-status" data-tone={query.error || dataError ? "error" : query.pending || dataLoading ? "info" : "neutral"}>{status}</span>
       </div>
     </header>

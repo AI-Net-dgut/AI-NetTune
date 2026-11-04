@@ -27,6 +27,7 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
   const aiAnswerActive = Boolean((chatDiagnosis ?? diagnosis)?.answerCheck?.ok);
   const mismatch = Boolean(active && !sameQueryScope(active.scope, data.scope));
   const plans = useMemo(() => {
+    if (active?.answerFocus?.planEligible === false) return [];
     const valid = providedPlans.filter(p => sameQueryScope(p.scope, data.scope));
     if (valid.length) return valid;
     const fallback = active ? fallbackPlan(active) : null; return fallback ? [fallback] : [];
@@ -112,6 +113,12 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     } catch { setError('方案导出失败，请检查浏览器下载设置。'); }
     finally { if (url) window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
   }
+
+  if (active?.answerFocus?.planEligible === false) return <section ref={panelRef} className="ain-management-integrated" id="ain-management-panel" aria-labelledby="ain-management-title">
+    <header className="ain-ai-column-heading"><h3 id="ain-management-title" tabIndex={-1}>处理方案与仿真</h3><span>暂无对应方案</span></header>
+    {sourceQuestion && <p className="ain-management-muted">对应研判：{sourceQuestion}</p>}
+    <p>{active.answerFocus.sections.find(s => s.title === '处理与预估')?.text || '本次尚无对应问题的配置与仿真方案，请先核查专项证据。'}</p>
+  </section>;
 
   return <section ref={panelRef} className="ain-management-integrated" id="ain-management-panel" aria-labelledby="ain-management-title">
     <header className="ain-ai-column-heading"><h3 id="ain-management-title" tabIndex={-1}>处理方案与仿真</h3><span>方案预估</span></header>

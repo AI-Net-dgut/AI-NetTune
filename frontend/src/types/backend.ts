@@ -65,6 +65,15 @@ export interface PerformanceHint {
   apId: string; metric: string; value: number; threshold: number;
   cause: string; suggestion: string;
 }
+export interface DiagnosisFocus {
+  kind: 'overview' | 'priority' | 'coverage' | 'congestion' | 'connections';
+  label: string;
+  status: 'confirmed' | 'not_confirmed' | 'insufficient' | 'no_fault';
+  planEligible: boolean;
+  targetAps: string[];
+  observedAps: string[];
+  sections: { title: string; text: string }[];
+}
 export interface Diagnosis {
   scope: QueryScope; state: "anomaly" | "normal" | "empty";
   /**
@@ -87,6 +96,7 @@ export interface Diagnosis {
   planNarrativeSource?: "llm" | "template";
   /** 由大模型写的**整段回答**（经 answer_llm 校验器逐条核对后才放行）；
    *  为空表示未通过校验或未启用 → 界面继续用规则文案。 */
+  answerFocus?: DiagnosisFocus;
   answerLlm?: string;
   answerCheck?: { ok: boolean; violations: string[]; source: string; attempts?: number };
   affectedAps: string[];

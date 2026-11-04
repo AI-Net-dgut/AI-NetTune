@@ -2,7 +2,7 @@
 .ain-app.ain-shell .ain-workbench {
   --ain-pane-height: clamp(480px, calc(100dvh - 154px), 800px);
   display: grid;
-  grid-template-columns: minmax(0, 64fr) minmax(340px, 36fr);
+  grid-template-columns: minmax(0, 72fr) minmax(320px, 28fr);
   grid-template-rows: auto minmax(0, var(--ain-pane-height));
   align-items: start;
   gap: 10px;
@@ -125,7 +125,7 @@
 .ain-app.ain-shell .ain-workbench .ain-ue-comparison-buttons { flex-wrap: wrap; overflow: visible; }
 
 @media (max-width: 1300px) and (min-width: 1025px) {
-  .ain-app.ain-shell .ain-workbench { grid-template-columns: minmax(0, 61fr) minmax(340px, 39fr); padding-left: 12px; padding-right: 12px; }
+  .ain-app.ain-shell .ain-workbench { grid-template-columns: minmax(0, 70fr) minmax(320px, 30fr); padding-left: 12px; padding-right: 12px; }
 }
 @media (max-width: 1024px) {
   .ain-app.ain-shell .ain-workbench { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; padding: 12px; }
@@ -150,3 +150,9 @@
 .ain-app.ain-shell .ain-workbench .ain-ai-replay-scope { flex-wrap: wrap; gap: 5px 9px; }
 .ain-app.ain-shell .ain-workbench .ain-ai-replay-scope > span { overflow-wrap: anywhere; }
 .ain-app.ain-shell .ain-workbench .ain-spatial-footer { flex-wrap: wrap; font-size: 10px; }
+
+/* 收窄助手后标题、预警入口和状态按可用宽度换行，保持按钮可达。 */
+.ain-app.ain-shell .ain-workbench .ain-ai-heading { flex-wrap: wrap; gap: 8px; }
+.ain-app.ain-shell .ain-workbench .ain-ai-heading-title { min-width: 0; }
+.ain-app.ain-shell .ain-workbench .ain-ai-heading-actions { flex-wrap: wrap; margin-left: auto; max-width: 100%; }
+.ain-app.ain-shell .ain-workbench .ain-query-example { grid-template-columns: minmax(0, 1fr); gap: 2px; }

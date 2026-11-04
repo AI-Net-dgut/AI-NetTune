@@ -3,7 +3,7 @@ import { useContext, useEffect, useState } from "react";
 import { createPortal } from 'react-dom';
 import { WorkspacePresentationContext } from '../pages/workbench/WorkspacePresentationContext';
 import AnalysisNarrative from "../chat/AnalysisNarrative";
-import { analysisSections } from "../chat/analysisText";
+import { analysisSections, withoutQuestionEcho } from "../chat/analysisText";
 import { analyzeForecast } from "./api";
 import ForecastPlans from "./ForecastPlans";
 import type { ForecastAnalysis, ForecastHandoff } from "./types";
@@ -45,9 +45,9 @@ export default function ForecastReview({ handoff, reviewKey = '', onStatusChange
     {state.error && <div role="alert"><p>{state.error}</p><button type="button" onClick={() => { setState({ pending: true, result: null, error: "" }); setAttempt(n => n + 1); }}>重试预测研判</button></div>}
     {state.result && <AnalysisNarrative
       source={state.result.source === "demo" ? "界面示例 · 未调用大模型" : state.result.source === "rule" ? "规则研判" : "AI 研判"}
-      sections={analysisSections(reply || "接口未返回研判文字，请重试。")}
-      note={result.integrationNotice ? "本次研判依据预警摘要与历史网络指标。" : undefined} />}
-    {state.result && result.integrationNotice && !reply.includes("尚未结合完整频谱数值") && !reply.includes("未结合频谱细节") && <p className="ain-forecast-brief-note">本次依据预警摘要与历史指标研判，尚未结合完整频谱数值。</p>}
+      sections={analysisSections(withoutQuestionEcho(reply, question) || "接口未返回研判文字，请重试。")}
+      note={result.integrationNotice ? "本次采用的历史与频谱证据，以研判正文说明为准。" : undefined} />}
+    {state.result && result.integrationNotice && <p className="ain-forecast-brief-note">预测基于历史观测，原因与效果仍需验证；证据是否充分以本次研判说明为准。</p>}
     {/* 预测风险的处置方案：与「处理建议与效果」里现存问题的方案分开（审计第 6 条） */}
     {workspace
       ? workspace.plansHost && createPortal(<ForecastPlans handoff={handoff} parentId={reviewRecordId || undefined} />, workspace.plansHost)

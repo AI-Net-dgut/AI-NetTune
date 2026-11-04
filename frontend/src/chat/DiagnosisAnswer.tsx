@@ -12,7 +12,9 @@ export { ReplyText } from "./AnalysisNarrative";
 export default function DiagnosisAnswer({ result, onEvidence, showScope = true }: { result: ChatResult; onEvidence?: (selection: Omit<EvidenceSelection, "id">) => void; showScope?: boolean }) {
   const diagnosis = result.diagnosis;
   if (!diagnosis) return <ReplyText text={result.reply} />;
-  const objectId = diagnosis.affectedAps.length === 1 ? diagnosis.affectedAps[0] : undefined;
+  const targetAps = diagnosis.answerFocus?.targetAps.length ? diagnosis.answerFocus.targetAps
+    : diagnosis.answerFocus?.observedAps ?? diagnosis.affectedAps;
+  const objectId = targetAps.length === 1 ? targetAps[0] : undefined;
   // 模型写的整段回答：只有**通过校验**才展示（ok=true 且文本非空），否则退回规则文案
   const answerText = diagnosis.answerCheck?.ok ? (diagnosis.answerLlm ?? "").trim() : "";
   return <>
@@ -36,6 +38,6 @@ export default function DiagnosisAnswer({ result, onEvidence, showScope = true }
         <strong>{performanceHintText(hint)}</strong><p>{hint.cause || "未提供具体原因"}</p><p>建议：{hint.suggestion || "持续观察相关指标"}</p>
       </li>)}</ul>
     </details>}
-    <DiagnosisEvidence diagnosis={diagnosis} summarizedEvidenceCount={answerText ? 0 : 4} />
+    <DiagnosisEvidence diagnosis={diagnosis} summarizedEvidenceCount={answerText || diagnosis.answerFocus ? 0 : 4} />
   </>;
 }

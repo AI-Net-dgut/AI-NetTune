@@ -54,13 +54,13 @@ export default function ForecastDialog({ request, result, pending, error, onClos
   const shownHistory = result?.history ?? request.history;
   const ageMinutes = currentTime && result ? Math.max(0, Math.floor((toEpoch(currentTime) - toEpoch(result.baseTime)) / 60_000)) : 0;
   /* 提前量：alert.start 是后端算出的"预计越阈起始时刻"（= 基准 + first_minute）。
-     它相对**基准时刻**的差值就是这个预警的提前量——这才是"提前预警"的直接证据，
+     它相对基准时刻的差值只是预计越阈时间间隔，不能替代真实提前预警效果验证。
      之前只显示"预计时段"，用户看不出这是几十分钟后的预测而非事后确认。 */
   const leadMinutes = alert && result
     ? Math.round((toEpoch(alert.start) - toEpoch(result.baseTime)) / 60_000) : null;
   const leadText = leadMinutes == null ? ""
     : leadMinutes > 0 ? `按当前趋势约 ${leadMinutes} 分钟后越阈（预计 ${alert?.start?.slice(11, 16)}）`
-    : "基准时刻已越阈，以下为持续性预测";
+    : "当前频谱风险与后续走势，是否确诊以本条观测依据为准";
   useEffect(() => {
     if (typeof document === "undefined") return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;

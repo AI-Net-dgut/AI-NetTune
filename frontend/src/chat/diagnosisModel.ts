@@ -6,6 +6,8 @@ export function sameQueryScope(a: QueryScope, b: QueryScope) {
   return a.scenario === b.scenario && a.start === b.start && a.end === b.end;
 }
 export function diagnosisMetric(result: Diagnosis): MetricKey {
+  if (result.answerFocus?.kind === 'congestion') return 'resourceUtilizationPct';
+  if (result.answerFocus?.kind === 'coverage') return 'rsrpDbm';
   const keys: Record<string, MetricKey> = {
     rsrp: "rsrpDbm", sinr: "sinrDb", throughput: "throughputMbps",
     prb_usage: "resourceUtilizationPct", packet_loss: "packetLossPct",
@@ -31,6 +33,7 @@ export function performanceHintText(hint: PerformanceHint) {
 }
 
 export function diagnosisParagraphs(result: Diagnosis) {
+  if (result.answerFocus?.sections.length) return result.answerFocus.sections;
   const anomaly = result.state === "anomaly";
   const hints = result.performanceHints ?? [];
   const performance = result.state !== "empty" && !anomaly && (result.currentState === "performance_warning" || hints.length > 0);

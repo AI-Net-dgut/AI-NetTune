@@ -4,6 +4,8 @@ import { needsFutureForecast } from '../replay/questionIntent';
 
 export interface ForecastQuestionContext {
   baseTime: string;
+  /** 查询分流使用的已知主时钟，保留秒；不改变本轮预测的分钟基准。 */
+  knownTime?: string;
   defaultHorizonMinutes: number;
   maxHorizonMinutes: number;
 }
@@ -32,6 +34,7 @@ export function resolveForecastQuestion(message: string, context: ForecastQuesti
   if (!intended && !explicitDate) return { kind: 'none' };
   try {
     const base = toEpoch(context.baseTime);
+    const known = toEpoch(context.knownTime ?? context.baseTime);
     const maximum = context.maxHorizonMinutes;
     const fail = (text: string): ForecastQuestionTime => ({ kind: 'error', message: text });
     const horizon = (minutes: number, targetWindow?: { start: string; end: string }): ForecastQuestionTime => {
@@ -109,7 +112,9 @@ export function resolveForecastQuestion(message: string, context: ForecastQuesti
       if (calendar && dayWords.length && calendar.date !== relativeDay) throw new Error('相对日期与明确日期不一致，请保留一种表述。');
       return toEpoch(`${calendar?.date ?? relativeDay} ${token[1].padStart(2, '0')}:${token[2]}:${token[3] ?? '00'}`);
     });
-    if (!intended && stamps.every(stamp => stamp <= base)) return { kind: 'none' };
+    // 没有明确预测意图、且时间已被主时钟走过时，交给历史解析。
+    // 案例截止可为14:03:12；不能与预测接口取整后的14:03:00比较而误判未来。
+    if (!intended && stamps.every(stamp => stamp <= known)) return { kind: 'none' };
     if (dates.some(d => !used.has(d.index))) return fail('日期和钟点关系不明确，请在每个钟点前写明日期。');
     if (clockTokens.length === 2) {
       const between = normalized.slice((clockTokens[0].index ?? 0) + clockTokens[0][0].length, clockTokens[1].index)

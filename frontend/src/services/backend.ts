@@ -367,6 +367,17 @@ export function parseDiagnosis(value: unknown, scope: QueryScope): Diagnosis {
     // 大模型方案解读（含来源）：界面要能显示"这段是模型写的还是模板写的"
     planNarrative: str(d.plan_narrative) || undefined,
     planNarrativeSource: (str(d.plan_narrative_source) || undefined) as Diagnosis["planNarrativeSource"],
+    answerFocus: d.answer_focus ? (() => {
+      const f = obj(d.answer_focus);
+      const kind = str(f.kind), status = str(f.status);
+      if (!['overview','priority','coverage','congestion','connections'].includes(kind)
+        || !['confirmed','not_confirmed','insufficient','no_fault'].includes(status)) return undefined;
+      return { kind: kind as NonNullable<Diagnosis['answerFocus']>['kind'], label: str(f.label),
+        status: status as NonNullable<Diagnosis['answerFocus']>['status'], planEligible: f.plan_eligible === true,
+        targetAps: strings(f.target_aps), observedAps: strings(f.observed_aps),
+        sections: arr(f.sections).map(v => { const s = obj(v); return {title: str(s.title), text: str(s.text)}; })
+          .filter(s => s.title && s.text) };
+    })() : undefined,
     answerLlm: str(d.answer_llm) || undefined,
     answerCheck: d.answer_check ? (() => {
       const c = obj(d.answer_check);
