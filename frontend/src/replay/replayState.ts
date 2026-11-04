@@ -11,7 +11,7 @@ export interface ReplayState {
 }
 export type ReplayAction =
   | { type: "ready" | "unready" | "play" | "pause" | "restart" | "freeze" | "history" | "live" }
-  | { type: "tick"; elapsedMs: number }
+  | { type: "tick"; elapsedMs: number; loadedThroughMs?: number }
   | { type: "seek"; timeMs: number }
   | { type: "select-range"; startMs: number; endMs: number }
   | { type: "history-range"; startMs: number; endMs: number }
@@ -99,7 +99,9 @@ export function replayReducer(state: ReplayState, action: ReplayAction): ReplayS
         ? { ...state, currentMs: state.playbackStartMs, customStartMs: null, epoch: state.epoch + 1,
           viewMode: "live", viewMs: state.playbackStartMs, viewRevision: state.viewRevision + 1, locked: false }
         : { ...state, playing: false };
-      const currentMs = Math.min(state.endMs, state.currentMs + action.elapsedMs * 60 / state.realSecondsPerMinute * state.speed);
+      const currentMs = Math.min(state.endMs, action.loadedThroughMs ?? state.endMs,
+        state.currentMs + action.elapsedMs * 60 / state.realSecondsPerMinute * state.speed);
+      if (currentMs <= state.currentMs) return state;
       return { ...state, currentMs, playing: currentMs < state.endMs || state.loop };
     }
   }

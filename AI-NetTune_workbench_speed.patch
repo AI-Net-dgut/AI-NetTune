@@ -1,0 +1,413 @@
+diff --git a/frontend/src/pages/workbench/WorkbenchPage.tsx b/frontend/src/pages/workbench/WorkbenchPage.tsx
+index 9f4e2b0..8dcc2bc 100644
+--- a/frontend/src/pages/workbench/WorkbenchPage.tsx
++++ b/frontend/src/pages/workbench/WorkbenchPage.tsx
+@@ -1,4 +1,4 @@
+-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
++import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ import { loadDashboard, scopeLabel, toEpoch } from "../../services/backend";
+ import type { MetricRecord, NetworkNode } from "../../types/backend";
+ import { resolveHistoryQuestion } from "../../replay/historyQuestion";
+@@ -9,7 +9,8 @@ import DataObservation from "../../components/observation/DataObservation";
+ import { REPLAY_CONFIG } from "../../replay/config";
+ import { formatReplayTime, viewScope, replayContextKey, viewTime } from "../../replay/replayState";
+ import type { ReplayAction } from "../../replay/replayState";
+-import { buildReplayDashboard, loadReplayRecords } from "../../replay/replayData";
++import { buildReplayDashboard, createReplayBuffer, replayCovers, replayCoveredThrough } from "../../replay/replayData";
++import type { ReplayRange } from "../../replay/replayData";
+ import { SIM_CONFIG_CHANGED, type SimConfigChangeDetail } from "../../components/management/SimConfigBar";
+ import { captureAnalysis } from "../../replay/analysisSnapshot";
+ import type { AnalysisSnapshot } from "../../replay/analysisSnapshot";
+@@ -37,20 +38,26 @@ import type { WorkspaceTab } from './WorkspacePresentationContext';
+ import './WorkbenchTabs.css';
+ 
+ interface ReplaySource {
+-  status: "loading" | "ready" | "error" | "empty";
+-  records: MetricRecord[]; aps: NetworkNode[]; error: string; notice: string;
++  status: "loading" | "ready" | "error";
++  records: MetricRecord[]; ranges: ReplayRange[]; aps: NetworkNode[]; error: string; notice: string;
+ }
+ 
+ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: ReplayConfig } = {}) {
+-  const replay = useReplay(config);
++  const bufferRef = useRef<ReturnType<typeof createReplayBuffer> | null>(null);
++  const coveredThrough = useCallback((at: number) =>
++    replayCoveredThrough(bufferRef.current?.ranges ?? [], at) ?? at, []);
++  const replay = useReplay(config, coveredThrough);
+   const { state: clock, act: dispatchClock, latest, readClock } = replay;
+   const contextKey = replayContextKey(clock);
+-  const [source, setSource] = useReducer((_previous: ReplaySource, next: ReplaySource) => next,
+-    { status: "loading", records: [], aps: [], error: "", notice: "" });
++  const [source, setSource] = useState<ReplaySource>(
++    { status: "loading", records: [], ranges: [], aps: [], error: "", notice: "" });
+   const [reloadCount, reload] = useState(0);
+   // 仿真配置变更后重新取数用的计数（与 reloadCount 分开：不能重置时钟，也不能回到演示起点）
+   const [simRevision, setSimRevision] = useState(0);
+   // 点案例后要预填进输入框的问题（只填不发送）
++  const [rangeFailure, setRangeFailure] = useState<{ key: string; message: string } | null>(null);
++  const [prefetchError, setPrefetchError] = useState("");
++  const [rangeRetry, setRangeRetry] = useState(0);
+   const [caseQuestion, setCaseQuestion] = useState("");
+   const [analysisNotice, setAnalysisNotice] = useState<{ key: string; text: string }>({ key: "", text: "" });
+   const [focus, setFocus] = useState<{ contextKey: string; id: string | null }>({ contextKey, id: null });
+@@ -80,30 +87,39 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+     if (after !== before) clearContext(after);
+   }, [dispatchClock, readClock, clearContext]);
+ 
++  const ensureReplayRange = useCallback(async (scope: ReturnType<typeof viewScope>) => {
++    const buffer = bufferRef.current;
++    if (!buffer) throw new DOMException("回放数据已重置", "AbortError");
++    await buffer.ensure(scope);
++    if (bufferRef.current !== buffer) throw new DOMException("回放数据已重置", "AbortError");
++    const { records, ranges } = buffer;
++    setSource(current => current.ranges === ranges ? current : { ...current, records, ranges });
++    return records;
++  }, []);
++
+   useEffect(() => {
+-    const controller = new AbortController(); let active = true;
+-    // simRevision 参与依赖：应用/回滚仿真配置后重新取数（保持观看时刻，不回到演示起点）
+-    void simRevision;
+-    loadReplayRecords(config, controller.signal).then(records => {
+-      if (!active) return;
+-      if (!records.length) {
+-        setSource({ status: "empty", records: [], aps: [], error: "", notice: "" }); return;
+-      }
+-      const loaded: ReplaySource = { status: "ready", records, aps: [], error: "", notice: "" };
+-      setSource(loaded); act({ type: "ready" });
+-      // 静态部署只从首个已有采样时刻读取；不使用预加载末尾的 UE 坐标/连接。
+-      const first = records[0].backendTime;
+-      void loadDashboard({ scenario: config.scenario, start: first, end: first }, controller.signal).then(result => {
+-        if (active) setSource({ ...loaded, aps: result?.nodes.filter(node => node.type === "ap") ?? [] });
+-      }).catch(() => {
+-        if (active) setSource({ ...loaded, notice: "静态部署暂未返回；主图使用已到达采样中的位置与连接。" });
+-      });
++    const controller = new AbortController();
++    const buffer = createReplayBuffer(config.scenario, controller.signal);
++    bufferRef.current = buffer;
++    void buffer.ensure(viewScope(config, readClock())).then(records => {
++      if (controller.signal.aborted || bufferRef.current !== buffer) return;
++      setSource({ status: "ready", records, ranges: buffer.ranges, aps: [], error: "", notice: "" });
++      if (!readClock().ready) act({ type: "ready" });
++      // 主图从已返回采样构建；静态 AP 补充独立加载。
++      void loadDashboard({ scenario: config.scenario, start: config.start, end: config.start }, controller.signal)
++        .then(result => {
++          if (!controller.signal.aborted && bufferRef.current === buffer)
++            setSource(current => ({ ...current, aps: result?.nodes.filter(node => node.type === "ap") ?? [] }));
++        }).catch(() => {
++          if (!controller.signal.aborted && bufferRef.current === buffer)
++            setSource(current => ({ ...current, notice: "静态部署暂未返回，主图使用当前采样。" }));
++        });
+     }).catch(reason => {
+-      if (active && !controller.signal.aborted) setSource({ status: "error", records: [], aps: [],
++      if (!controller.signal.aborted && bufferRef.current === buffer) setSource({ status: "error", records: [], ranges: [], aps: [],
+         error: reason instanceof Error ? reason.message : "历史数据读取失败", notice: "" });
+     });
+-    return () => { active = false; controller.abort(); };
+-  }, [reloadCount, simRevision, act, config]);
++    return () => { controller.abort(); bufferRef.current = null; };
++  }, [reloadCount, simRevision, act, config, readClock]);
+ 
+   // 仿真配置应用/回滚后：丢弃旧配置下的分析（结论、方案、证据都不再成立），
+   // 保持当前观看时刻，然后重新取数。用事件解耦，避免三层 props 透传（复查 P0-3）。
+@@ -118,6 +134,10 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+           ? `已应用仿真配置（修订 ${detail.revision}）：正在按新配置刷新数据与图表；旧结论已清空，请重新研判。`
+           : `已回滚仿真配置（修订 ${detail?.revision ?? 0}）：正在恢复原始数据；旧结论已清空，请重新研判。`,
+       });
++      bufferRef.current = null;
++      setSource({ status: "loading", records: [], ranges: [], aps: [], error: "", notice: "" });
++      setRangeFailure(null);
++      setPrefetchError("");
+       setSimRevision(value => value + 1);      // 触发重新取数（不重置时钟）
+     };
+     window.addEventListener(SIM_CONFIG_CHANGED, onChanged);
+@@ -132,9 +152,47 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+   const selectedTime = viewTime(clock);
+   const scope = viewScope(config, clock);
+   const scopeStart = scope.start, scopeEnd = scope.end, scopeScenario = scope.scenario;
+-  const viewData = useMemo(() => source.status === "ready"
++  const windowLoaded = replayCovers(source.ranges, scope);
++  const rangeKey = `${simRevision}|${scopeScenario}|${scopeStart}|${scopeEnd}`;
++  const windowError = !windowLoaded && rangeFailure?.key === rangeKey ? rangeFailure.message : "";
++  useEffect(() => {
++    if (source.status !== "ready" || windowLoaded) return;
++    let current = true;
++    // 历史滑块停下来后再查，普通回放直接补缺失窗口。
++    const timer = setTimeout(() => {
++      void ensureReplayRange({ scenario: scopeScenario, start: scopeStart, end: scopeEnd }).catch(reason => {
++        if (current) setRangeFailure({ key: rangeKey, message: reason instanceof Error ? reason.message : "读取时段失败" });
++      });
++    }, clock.viewMode === "history" ? 200 : 0);
++    return () => { current = false; clearTimeout(timer); };
++  }, [source.status, windowLoaded, scopeScenario, scopeStart, scopeEnd, clock.viewMode, ensureReplayRange, rangeKey, rangeRetry]);
++
++  const availableEnd = replayCoveredThrough(source.ranges, clock.currentMs);
++  const prefetchStart = clock.playing && source.status === "ready" && !prefetchError
++    && (availableEnd ?? clock.currentMs) < clock.endMs
++    && (availableEnd ?? clock.currentMs) - clock.currentMs <= Math.max(15 * 60_000, 2_000 * 60 / clock.realSecondsPerMinute * clock.speed)
++    ? availableEnd === undefined
++      ? Math.max(clock.startMs, Math.floor(clock.currentMs / 1000) * 1000 - clock.referenceMinutes * 60_000)
++      : availableEnd + 1000
++    : null;
++  const prefetchEnd = prefetchStart === null ? null : Math.min(clock.endMs,
++    (availableEnd === undefined ? Math.floor(clock.currentMs / 1000) * 1000 : prefetchStart - 1000) + 60 * 60_000);
++  useEffect(() => {
++    if (prefetchStart === null || prefetchEnd === null) return;
++    let current = true;
++    void ensureReplayRange({ scenario: config.scenario, start: formatReplayTime(prefetchStart), end: formatReplayTime(prefetchEnd) })
++      .catch(reason => {
++        if (current) setPrefetchError(reason instanceof Error ? reason.message : "回放补数失败");
++      });
++    return () => { current = false; };
++  }, [config.scenario, ensureReplayRange, prefetchStart, prefetchEnd, simRevision, reloadCount]);
++
++  const buffering = source.status === "ready" && clock.playing && clock.currentMs < clock.endMs
++    && (availableEnd ?? clock.currentMs) <= clock.currentMs;
++
++  const viewData = useMemo(() => source.status === "ready" && windowLoaded
+     ? buildReplayDashboard(source.records, { scenario: scopeScenario, start: scopeStart, end: scopeEnd }, source.aps)
+-    : null, [source, scopeStart, scopeEnd, scopeScenario]);
++    : null, [source, windowLoaded, scopeStart, scopeEnd, scopeScenario]);
+   const activeSnapshot = snapshot?.epoch === clock.epoch && snapshot.viewRevision === clock.viewRevision ? snapshot : null;
+   const data = activeSnapshot?.data ?? viewData;
+   const visibleSpatial = useScopedSpatial(clock.viewMode !== "live" && data?.metrics.length ? scope : null);
+@@ -146,7 +204,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+ 
+   async function submitAnalysis(message: string, preserveDiagnosis = false, retry = false) {
+     let current = latest.current;
+-    if (!message.trim() || source.status !== "ready") return;
++    if (!message.trim() || current.locked || source.status !== "ready") return;
+     // 用户要求：**有内容就能发**。跟随主时钟时在此自动固定时刻（无需先手动点固定），
+     // 然后按冻结后的时刻取范围，保证"分析截至"等于用户点击瞬间。
+     if (!current.locked && current.viewMode === "live") {
+@@ -198,14 +256,24 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+     const key = replayContextKey(current);
+     // 可能恰好经历timer跨轮且尚未执行effect；先取消旧上下文，再开启本次请求。
+     if (clearedContext.current !== key) clearContext(key);
++    const serial = ++requestSerial.current;
+     const previous = snapshotRef.current?.epoch === current.epoch && snapshotRef.current.viewRevision === current.viewRevision ? snapshotRef.current : null;
+-    const captured = (preserveDiagnosis || retry) && previous ? previous
+-      : captureAnalysis(source.records, config, current, source.aps, focus.contextKey === key ? focus.id : null);
++    let captured = (preserveDiagnosis || retry) && previous ? previous : null;
++    if (!captured) {
++      try {
++        const records = await ensureReplayRange(viewScope(config, current));
++        if (requestSerial.current !== serial || replayContextKey(readClock()) !== key) return;
++        captured = captureAnalysis(records, config, current, source.aps, focus.contextKey === key ? focus.id : null);
++      } catch (reason) {
++        if (requestSerial.current === serial && replayContextKey(readClock()) === key)
++          setAnalysisNotice({ key, text: `分析数据读取失败：${reason instanceof Error ? reason.message : "请重试"}` });
++        return;
++      }
++    }
+     if (!captured.data.metrics.length) { setAnalysisNotice({ key, text: "指定范围暂无监测采样，未发送分析；可以调整范围或返回当前。" }); return; }
+     setForecastTransfer(null);
+     snapshotRef.current = captured; setSnapshot(captured);
+     act({ type: "lock", value: true });
+-    const serial = ++requestSerial.current;
+     if (!preserveDiagnosis && !retry && typeof document !== 'undefined') requestAnimationFrame(() =>
+       document.getElementById('ain-tab-diagnosis')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' }));
+     try {
+@@ -225,7 +293,10 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+   function reloadSource() {
+     if (replay.latest.current.locked || loading) return;
+     act({ type: "restart" }); act({ type: "unready" });
+-    setSource({ status: "loading", records: [], aps: [], error: "", notice: "" });
++    setSource({ status: "loading", records: [], ranges: [], aps: [], error: "", notice: "" });
++    bufferRef.current = null;
++    setRangeFailure(null);
++    setPrefetchError("");
+     reload(value => value + 1);
+   }
+ 
+@@ -336,7 +407,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+       <p>主时钟支持暂停与继续，固定查看时刻研判原因与处理方案。</p></div>
+       <span className="ain-source-badge">历史数据回放</span></div>
+ 
+-    <ReplayControls state={clock} act={act} loading={loading} onReload={reloadSource} config={config} />
++    <ReplayControls state={clock} act={act} loading={loading} buffering={buffering} onReload={reloadSource} config={config} />
+ 
+     <section className="ain-workspace-results" aria-label="数据与分析工作区">
+       <div className="ain-workspace-tabs" role="tablist" aria-label="工作区内容" onKeyDown={event => {
+@@ -387,8 +458,12 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+       {loading && <p className="ain-load-state" role="status">正在读取历史数据，完成后自动开始回放…</p>}
+       {source.error && <div className="ain-error" role="alert"><p>{source.error}</p>
+         <button type="button" className="ain-button" disabled={clock.locked} onClick={reloadSource}>重试读取历史数据</button></div>}
+-      {source.status === "empty" && <div className="ain-load-state" role="status"><h2>配置的回放时段暂无数据</h2>
+-        <p>请确认后端已有 {config.start} — {config.end} 的校园记录。</p></div>}
++      {source.status === "ready" && !windowLoaded && (windowError
++        ? <div className="ain-error" role="alert"><p>{windowError}</p>
++          <button type="button" className="ain-button" onClick={() => { setRangeFailure(null); setRangeRetry(n => n + 1); }}>重试所选时段</button></div>
++        : <p className="ain-load-state" role="status">正在加载所选时段…</p>)}
++      {prefetchError && <div className="ain-error" role="alert"><p>回放补数失败：{prefetchError}</p>
++        <button type="button" className="ain-button" onClick={() => setPrefetchError("")}>重试回放补数</button></div>}
+       {data && <>
+         {!data.metrics.length && <p className="ain-load-state" role="status">当前查看窗口尚无采样，可返回当前或查看已经到达的历史时段。</p>}
+         <DataObservation key={contextKey} data={data} spatial={visibleSpatial.data} pending={visibleSpatial.loading}
+@@ -415,7 +490,7 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
+       disabled={!data?.metrics.length || loading || Boolean(source.error)} data={data}
+       spatial={visibleSpatial.data} spatialPending={visibleSpatial.loading} spatialError={visibleSpatial.error}
+       onSpatialRetry={visibleSpatial.retry} focusedApId={activeSnapshot ? activeSnapshot.focusedApId : focusedApId}
+-      dataLoading={loading} dataError={source.error} onSubmitAnalysis={submitAnalysis}
++      dataLoading={loading || (source.status === "ready" && !windowLoaded && !windowError)} dataError={source.error || windowError} onSubmitAnalysis={submitAnalysis}
+       replay={{ playing: clock.playing, currentTime, analysisTime: activeSnapshot?.data.scope.end ?? null,
+         viewTime: displayedTime, mode: clock.viewMode, canAnalyzeQuestionTime: source.status === "ready", hasCurrentData: Boolean(data?.metrics.length),
+         onFreeze: () => act({ type: "freeze" }), onExit: () => act({ type: "live" }) }} />
+diff --git a/frontend/src/replay/ReplayControls.tsx b/frontend/src/replay/ReplayControls.tsx
+index d7f2e5e..061a85b 100644
+--- a/frontend/src/replay/ReplayControls.tsx
++++ b/frontend/src/replay/ReplayControls.tsx
+@@ -5,12 +5,12 @@ import type { ReplayAction, ReplayState } from "./replayState";
+ import { formatReplayTime } from "./replayState";
+ import "./ReplayControls.css";
+ 
+-export default function ReplayControls({ state, act, loading, onReload, config }: {
++export default function ReplayControls({ state, act, loading, onReload, config, buffering = false }: {
+   state: ReplayState; act: (action: ReplayAction) => void; loading: boolean;
+-  onReload: () => void; config: ReplayConfig;
++  onReload: () => void; config: ReplayConfig; buffering?: boolean;
+ }) {
+   const disabled = state.locked || loading || !state.ready;
+-  const status = loading ? "正在读取历史数据" : !state.ready ? "等待数据" : state.locked
++  const status = loading ? "正在读取历史数据" : !state.ready ? "等待数据" : buffering ? "正在缓冲回放数据" : state.locked
+     ? `分析时刻已锁定 · 主时钟${state.playing ? '继续运行' : '已暂停'}` : state.playing ? "主时钟运行中" : state.currentMs >= state.endMs ? "主时钟已到末尾" : "主时钟已暂停";
+   return <section className="ain-replay-controls" aria-label="历史数据回放控制">
+     <div className="ain-replay-main">
+diff --git a/frontend/src/replay/replayData.ts b/frontend/src/replay/replayData.ts
+index ff2212c..1cfb688 100644
+--- a/frontend/src/replay/replayData.ts
++++ b/frontend/src/replay/replayData.ts
+@@ -4,21 +4,70 @@ import { getLatestFrame } from "../services/metrics";
+ import { sceneArea } from "../services/sceneGeometry";
+ import type { DashboardData, MetricRecord, NetworkLink, NetworkNode, QueryScope } from "../types/backend";
+ import { formatReplayTime } from "./replayState";
+-import type { ReplayConfig } from "./config";
+ 
+-export async function loadReplayRecords(config: ReplayConfig, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<MetricRecord[]> {
+-  const start = toEpoch(config.start), end = toEpoch(config.end);
+-  if (end < start) throw new Error("回放结束时间早于开始时间");
+-  const rows: MetricRecord[] = [];
+-  // 兼容旧服务的三天上限；旧 fetchRecords 内部仍负责拆窗、接口上限和取消请求。
+-  const chunk = 2 * 86400_000;
+-  for (let time = start; time <= end; time += chunk) {
+-    rows.push(...await fetchRecords({ scenario: config.scenario, start: formatReplayTime(time),
+-      end: formatReplayTime(Math.min(end, time + chunk - 1000)) }, signal, fetcher));
++export interface ReplayRange { start: number; end: number }
++
++const SECOND = 1000;
++
++export function replayCoveredThrough(ranges: ReplayRange[], at: number): number | undefined {
++  const second = Math.floor(at / SECOND) * SECOND;
++  return ranges.find(range => range.start <= second && second <= range.end)?.end;
++}
++
++export function replayCovers(ranges: ReplayRange[], scope: QueryScope): boolean {
++  return (replayCoveredThrough(ranges, toEpoch(scope.start)) ?? -Infinity) >= toEpoch(scope.end);
++}
++
++function mergeRanges(ranges: ReplayRange[]): ReplayRange[] {
++  const merged: ReplayRange[] = [];
++  for (const range of ranges.sort((a, b) => a.start - b.start)) {
++    const last = merged.at(-1);
++    if (last && range.start <= last.end + SECOND) last.end = Math.max(last.end, range.end);
++    else merged.push({ ...range });
+   }
+-  return uniqueObservationRecords(rows).filter(row => {
+-    const time = Date.parse(row.timestamp); return time >= start && time <= end;
+-  });
++  return merged;
++}
++
++export function createReplayBuffer(scenario: string, signal: AbortSignal, fetcher: typeof fetchRecords = fetchRecords) {
++  let records: MetricRecord[] = [];
++  let ranges: ReplayRange[] = [];
++  const pending = new Set<ReplayRange & { promise: Promise<void> }>();
++
++  async function ensure(scope: QueryScope): Promise<MetricRecord[]> {
++    const start = toEpoch(scope.start), end = toEpoch(scope.end);
++    if (scope.scenario !== scenario || start > end) throw new Error("回放查询范围无效");
++    let next = start;
++    while (next <= end) {
++      signal.throwIfAborted();
++      const covered = replayCoveredThrough(ranges, next);
++      if (covered !== undefined) {
++        next = covered + SECOND;
++        continue;
++      }
++      const running = [...pending].find(range => range.start <= next && next <= range.end);
++      if (running) {
++        await running.promise;
++        continue;
++      }
++      // 已缓存或正在请求的区间都不重复查询。接口区间两端包含，下一段从下一秒开始。
++      const boundary = Math.min(end, ...[...ranges, ...pending]
++        .filter(range => range.start > next).map(range => range.start - SECOND));
++      const range = { start: next, end: boundary };
++      const promise = fetcher({ scenario, start: formatReplayTime(range.start), end: formatReplayTime(range.end) }, signal)
++        .then(rows => {
++          signal.throwIfAborted();
++          records = uniqueObservationRecords([...records, ...rows]);
++          // 空响应同样表示范围已经查过，失败或取消时不写覆盖范围。
++          ranges = mergeRanges([...ranges, range]);
++        });
++      const entry = { ...range, promise };
++      pending.add(entry);
++      try { await promise; } finally { pending.delete(entry); }
++    }
++    return records;
++  }
++
++  return { ensure, get records() { return records; }, get ranges() { return ranges; } };
+ }
+ 
+ function windowLinks(metrics: MetricRecord[]): NetworkLink[] {
+diff --git a/frontend/src/replay/replayState.ts b/frontend/src/replay/replayState.ts
+index ab4b03a..5e8dae1 100644
+--- a/frontend/src/replay/replayState.ts
++++ b/frontend/src/replay/replayState.ts
+@@ -11,7 +11,7 @@ export interface ReplayState {
+ }
+ export type ReplayAction =
+   | { type: "ready" | "unready" | "play" | "pause" | "restart" | "freeze" | "history" | "live" }
+-  | { type: "tick"; elapsedMs: number }
++  | { type: "tick"; elapsedMs: number; loadedThroughMs?: number }
+   | { type: "seek"; timeMs: number }
+   | { type: "select-range"; startMs: number; endMs: number }
+   | { type: "history-range"; startMs: number; endMs: number }
+@@ -99,7 +99,9 @@ export function replayReducer(state: ReplayState, action: ReplayAction): ReplayS
+         ? { ...state, currentMs: state.playbackStartMs, customStartMs: null, epoch: state.epoch + 1,
+           viewMode: "live", viewMs: state.playbackStartMs, viewRevision: state.viewRevision + 1, locked: false }
+         : { ...state, playing: false };
+-      const currentMs = Math.min(state.endMs, state.currentMs + action.elapsedMs * 60 / state.realSecondsPerMinute * state.speed);
++      const currentMs = Math.min(state.endMs, action.loadedThroughMs ?? state.endMs,
++        state.currentMs + action.elapsedMs * 60 / state.realSecondsPerMinute * state.speed);
++      if (currentMs <= state.currentMs) return state;
+       return { ...state, currentMs, playing: currentMs < state.endMs || state.loop };
+     }
+   }
+diff --git a/frontend/src/replay/useReplay.ts b/frontend/src/replay/useReplay.ts
+index f0c1efb..b6f90f2 100644
+--- a/frontend/src/replay/useReplay.ts
++++ b/frontend/src/replay/useReplay.ts
+@@ -3,7 +3,7 @@ import type { ReplayConfig } from "./config";
+ import { initialReplayState, replayReducer } from "./replayState";
+ import type { ReplayAction } from "./replayState";
+ 
+-export default function useReplay(config: ReplayConfig) {
++export default function useReplay(config: ReplayConfig, coveredThrough?: (at: number) => number) {
+   const [state, dispatch] = useReducer(replayReducer, config, initialReplayState);
+   const latest = useRef(state);
+   const act = useCallback((action: ReplayAction) => {
+@@ -17,10 +17,10 @@ export default function useReplay(config: ReplayConfig) {
+     const timer = setInterval(() => {
+       const now = Date.now();
+       // 切出标签页后不追赶大量时间，以免演示跳过异常片段。
+-      act({ type: "tick", elapsedMs: Math.min(2000, Math.max(0, now - previous)) }); previous = now;
++      act({ type: "tick", elapsedMs: Math.min(2000, Math.max(0, now - previous)), loadedThroughMs: coveredThrough?.(latest.current.currentMs) }); previous = now;
+     }, 1000);
+     return () => clearInterval(timer);
+-  }, [state.playing, act]);
++  }, [state.playing, act, coveredThrough]);
+   const readClock = useCallback(() => latest.current, []);
+   return { state, act, latest, readClock };
+ }

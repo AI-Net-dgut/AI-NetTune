@@ -4,21 +4,70 @@ import { getLatestFrame } from "../services/metrics";
 import { sceneArea } from "../services/sceneGeometry";
 import type { DashboardData, MetricRecord, NetworkLink, NetworkNode, QueryScope } from "../types/backend";
 import { formatReplayTime } from "./replayState";
-import type { ReplayConfig } from "./config";
 
-export async function loadReplayRecords(config: ReplayConfig, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<MetricRecord[]> {
-  const start = toEpoch(config.start), end = toEpoch(config.end);
-  if (end < start) throw new Error("回放结束时间早于开始时间");
-  const rows: MetricRecord[] = [];
-  // 兼容旧服务的三天上限；旧 fetchRecords 内部仍负责拆窗、接口上限和取消请求。
-  const chunk = 2 * 86400_000;
-  for (let time = start; time <= end; time += chunk) {
-    rows.push(...await fetchRecords({ scenario: config.scenario, start: formatReplayTime(time),
-      end: formatReplayTime(Math.min(end, time + chunk - 1000)) }, signal, fetcher));
+export interface ReplayRange { start: number; end: number }
+
+const SECOND = 1000;
+
+export function replayCoveredThrough(ranges: ReplayRange[], at: number): number | undefined {
+  const second = Math.floor(at / SECOND) * SECOND;
+  return ranges.find(range => range.start <= second && second <= range.end)?.end;
+}
+
+export function replayCovers(ranges: ReplayRange[], scope: QueryScope): boolean {
+  return (replayCoveredThrough(ranges, toEpoch(scope.start)) ?? -Infinity) >= toEpoch(scope.end);
+}
+
+function mergeRanges(ranges: ReplayRange[]): ReplayRange[] {
+  const merged: ReplayRange[] = [];
+  for (const range of ranges.sort((a, b) => a.start - b.start)) {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end + SECOND) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
   }
-  return uniqueObservationRecords(rows).filter(row => {
-    const time = Date.parse(row.timestamp); return time >= start && time <= end;
-  });
+  return merged;
+}
+
+export function createReplayBuffer(scenario: string, signal: AbortSignal, fetcher: typeof fetchRecords = fetchRecords) {
+  let records: MetricRecord[] = [];
+  let ranges: ReplayRange[] = [];
+  const pending = new Set<ReplayRange & { promise: Promise<void> }>();
+
+  async function ensure(scope: QueryScope): Promise<MetricRecord[]> {
+    const start = toEpoch(scope.start), end = toEpoch(scope.end);
+    if (scope.scenario !== scenario || start > end) throw new Error("回放查询范围无效");
+    let next = start;
+    while (next <= end) {
+      signal.throwIfAborted();
+      const covered = replayCoveredThrough(ranges, next);
+      if (covered !== undefined) {
+        next = covered + SECOND;
+        continue;
+      }
+      const running = [...pending].find(range => range.start <= next && next <= range.end);
+      if (running) {
+        await running.promise;
+        continue;
+      }
+      // 已缓存或正在请求的区间都不重复查询。接口区间两端包含，下一段从下一秒开始。
+      const boundary = Math.min(end, ...[...ranges, ...pending]
+        .filter(range => range.start > next).map(range => range.start - SECOND));
+      const range = { start: next, end: boundary };
+      const promise = fetcher({ scenario, start: formatReplayTime(range.start), end: formatReplayTime(range.end) }, signal)
+        .then(rows => {
+          signal.throwIfAborted();
+          records = uniqueObservationRecords([...records, ...rows]);
+          // 空响应同样表示范围已经查过，失败或取消时不写覆盖范围。
+          ranges = mergeRanges([...ranges, range]);
+        });
+      const entry = { ...range, promise };
+      pending.add(entry);
+      try { await promise; } finally { pending.delete(entry); }
+    }
+    return records;
+  }
+
+  return { ensure, get records() { return records; }, get ranges() { return ranges; } };
 }
 
 function windowLinks(metrics: MetricRecord[]): NetworkLink[] {
