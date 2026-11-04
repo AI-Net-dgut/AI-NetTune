@@ -438,7 +438,7 @@ def data_query(
         user_id: str | None = Query(None, description="用户编号，不传查全部"),
         metrics: str | None = Query(None, description="要返回的KPI列，逗号分隔，如 rsrp,sinr；不传返回全部"),
         offset: int = Query(0, ge=0, description="分页偏移量，从第几条开始"),
-        limit: int = Query(100, ge=1, le=1000, description="最多返回条数"),
+        limit: int = Query(1000, ge=1, le=5000, description="最多返回条数"),
 ):
     # 1. 先按条件全量过滤，得到所有符合条件的数据
     all_rows = filter_rows(scenario, start_time, end_time, ap_id, user_id)
@@ -4730,3 +4730,24 @@ def sim_config_compare(
     })
 
 
+# ============ 前端 SPA 静态文件托管 ============
+# 注意：不要用 StaticFiles(mount="/")，会拦截 catch-all 导致子路由返回 JSON 404。
+# 这里只对非 /api 路径返回 index.html，API 请求继续走上面的路由。
+from fastapi.responses import FileResponse as _FileResponse
+_DIST_DIR = BASE_DIR / "dist"
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def _spa_fallback(full_path: str):
+    # API 路径不兜底，交给上面的路由（如果没匹配到会自然 404）
+    if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi"):
+        return error_response(ERROR_CODE["NOT_FOUND"], "请求的接口不存在")
+    # 静态资源文件（JS/CSS/图片）直接返回文件
+    file_path = _DIST_DIR / full_path
+    if full_path and file_path.is_file():
+        return _FileResponse(file_path)
+    # 其余路径返回 index.html（前端路由接管）
+    index = _DIST_DIR / "index.html"
+    if index.is_file():
+        return _FileResponse(index)
+    return error_response(ERROR_CODE["NOT_FOUND"], "前端 dist 目录未找到，请先 build")
