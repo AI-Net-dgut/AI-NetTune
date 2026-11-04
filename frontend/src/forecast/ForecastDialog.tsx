@@ -137,7 +137,7 @@ export default function ForecastDialog({ request, result, pending, error, onClos
             {request.targetWindow && <p>本次仅展示与关注时段相交的风险。</p>}
             {result.integrationNotice && <p>频谱风险阈值：逐频段功率 &lt; −95 dBm，至少40/50个频段越阈且连续不少于3分钟，或占用率 &gt; 80%。网络 KPI 异常可另交给 AI 研判核对。</p>}
           </details>
-          {result.status !== "ready" ? <div className="ain-forecast-state" role="status"><strong>{result.status === "insufficient_data" ? "参考数据不足" : "预测服务暂不可用"}</strong><p>{result.message || "当前不能生成可靠预测，请稍后重试。"}</p></div> : <>
+          {result.status !== "ready" ? <div className="ain-forecast-state" role="status"><strong>{result.status === "insufficient_data" ? "该场景/该时刻暂无可用数据" : "预测服务暂不可用"}</strong><p>{result.message || "当前不能生成可靠预测，请更换场景、时间或稍后重试。"}</p><p className="ain-ai-note">这不是"无风险"，而是**无法判断**：请换一个场景/时刻，或在数据覆盖范围内再试。</p></div> : <>
             {scopedAlerts.length > 1 && <div className="ain-forecast-risk-tabs" aria-label="选择关注风险">{scopedAlerts.map(a => <button type="button" key={a.id} aria-label={`查看${a.target}的预测风险`} aria-pressed={a.id === alert?.id} onClick={() => setSelected(a.id)}>{a.target} · {a.title}</button>)}</div>}
             <section className={`ain-forecast-summary${alert ? "" : " is-normal"}`} aria-label="预警摘要">
               <div><h3>{alert ? (alert.title.includes(alert.target) ? alert.title : `${alert.target} · ${alert.title}`) : request.targetWindow ? '关注时段未触发风险提示' : result.integrationNotice ? "当前未触发风险提示" : "预测范围内未发现明显风险"}</h3>{alert && <span data-level={alert.severity}>{level[alert.severity]}风险</span>}</div>

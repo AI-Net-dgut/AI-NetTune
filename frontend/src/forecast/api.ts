@@ -31,6 +31,24 @@ export function parseForecast(raw: unknown, request: ForecastRequest): ForecastR
   const v = object(raw); same(v.scenario, request.scenario); same(v.baseTime, request.baseTime);
   const history = range(v.history), forecast = range(v.forecast);
   same(history.start, request.history.start); same(history.end, request.history.end); same(forecast.start, request.baseTime);
+  // 无数据时后端可能给"预测窗口内暂无可用数据"这类说明，且不保证 forecast.end 恰好等于
+  // base + horizon（复查 P3-7：页面因此报"预测结束时间与请求不一致"，把"没数据"说成"契约错误"）。
+  // 先看 status，再对 ready 的响应做严格时间校验。
+  const status = text(v.status);
+  if (status === "insufficient_data" || status === "unavailable") {
+    return {
+      scenario: request.scenario,
+      baseTime: text(v.baseTime) || request.baseTime,
+      history: { start: history.start, end: history.end },
+      forecast: { start: forecast.start, end: forecast.end },
+      source: v.source === "measurement" ? "measurement" : "simulation",
+      status: status as ForecastResult["status"],
+      message: text(v.message) || "该场景暂无可用数据，无法给出预测",
+      alerts: [], spectra: [], impacts: [],
+      generatedAt: text(v.generatedAt) || "",
+      id: text(v.id) || "",
+    } as ForecastResult;
+  }
   if (toEpoch(forecast.end) !== toEpoch(request.baseTime) + request.horizonMinutes * 60_000) throw new Error("预测结束时间与请求不一致");
   if (v.source !== "simulation" && v.source !== "measurement") throw new Error("真实接口来源不能标为示例demo");
   if (!["ready", "insufficient_data", "unavailable"].includes(text(v.status))) throw new Error("预测状态无效");
