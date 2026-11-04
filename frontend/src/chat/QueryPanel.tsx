@@ -95,7 +95,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   const diagnosisQuestion = query.diagnosisQuestion || (result === analysis ? query.question : "");
 
   const questionTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(draft) || needsFutureForecast(draft)));
-  const sendBlocked = forecastMode ? forecastPending || !onForecastQuestion : (disabled && !questionTime) || dataLoading || Boolean(dataError) || query.pending || (followingLive && !questionTime);
+  // 跟随当前时不再禁用发送：点击发送会自动固定当前时刻（见 WorkbenchPage.submitAnalysis）
+  const sendBlocked = forecastMode ? forecastPending || !onForecastQuestion : (disabled && !questionTime) || dataLoading || Boolean(dataError) || query.pending;
 
   /** 生成并打开/下载分析报告（接口4）。报告口径与当前展示范围一致。 */
   async function runExport(format: "md" | "html") {
@@ -195,7 +196,9 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
       return;
     }
     const explicitTime = Boolean(replay?.canAnalyzeQuestionTime && (hasHistoryTimeHint(message) || needsFutureForecast(message)) && !preserveDiagnosis && !retry);
-    if ((disabled && !explicitTime) || dataLoading || dataError || query.pending || (followingLive && !explicitTime) || !message.trim()) return;
+    // 复查（用户要求）：有内容就能发；"跟随当前"时由工作台在发送时**自动固定时刻**，
+    // 不再要求用户先手动点「固定当前时刻」。
+    if ((disabled && !explicitTime) || dataLoading || dataError || query.pending || !message.trim()) return;
     if (currentEmpty && !explicitTime && !preserveDiagnosis && !retry) {
       setSendNotice("当前统计窗口暂无采样，暂不能发起新分析；旧分析的证据和重试仍对应原截止时间。"); return;
     }
@@ -355,14 +358,14 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
             event.preventDefault(); send();
           }
         }} /><button type="submit" className="ain-button ain-primary" disabled={sendBlocked || (!forecastMode && currentEmpty && !questionTime) || !draft.trim()}>
-          {query.pending || forecastPending ? "分析中…" : !forecastMode && followingLive && !questionTime ? "先固定时刻" : "发送"}</button></div>
+          {query.pending || forecastPending ? "分析中…" : "发送"}</button></div>
       <div className="ain-query-input-meta"><span>{forecastMode ? "继续分析所选预测风险 · Ctrl / Cmd + Enter" : followingLive ? (replay?.canAnalyzeQuestionTime ? "历史时间或未来预测可直接发送；未来问题会固定查看时刻并打开预测。" : "可先编辑问题；固定当前时刻后发送，主时钟播放状态不变。") : "未来问题进入预测预警；点击示例填入后可编辑 · Ctrl / Cmd + Enter"}</span><span>{draft.length}/500</span></div>
       {/* 常驻操作提示（核查清单第 10 条）：主时钟在走时必须让人看见
           "时钟仍在走 / 分析时刻已固定"的区别，不能只靠一次性的警告条。 */}
       {followingLive && (
         <p className="ain-query-livehint" role="status">
-          主时钟正在播放：普通问题需先固定分析时刻（结果会标注分析截至时间）；含历史时间或未来预测的问题可直接发送。
-          点「固定当前时刻」可立即固定。
+          主时钟正在播放：直接输入问题发送即可，系统会**自动固定当前时刻**并在结果里标注"分析截至"时间；
+          含历史时间或未来预测的问题按你给的时间处理。
         </p>
       )}
     </form>

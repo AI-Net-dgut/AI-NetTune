@@ -146,8 +146,13 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
 
   async function submitAnalysis(message: string, preserveDiagnosis = false, retry = false) {
     let current = latest.current;
-    if (current.locked || !message.trim() || source.status !== "ready") return;
-    // 预测任务只通过明确的操作退出，普通提问不能悄悄改成现存分析。
+    if (!message.trim() || source.status !== "ready") return;
+    // 用户要求：**有内容就能发**。跟随主时钟时在此自动固定时刻（无需先手动点固定），
+    // 然后按冻结后的时刻取范围，保证"分析截至"等于用户点击瞬间。
+    if (!current.locked && current.viewMode === "live") {
+      act({ type: "freeze" });
+      current = readClock();
+    }
     if (forecastTransfer?.key === replayContextKey(current)) {
       setAnalysisNotice({ key: replayContextKey(current), text: '当前为预测风险研判；请先点击“切换到现存分析”，再查询当前或历史问题。' });
       return;
