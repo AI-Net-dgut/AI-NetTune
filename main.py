@@ -1565,6 +1565,15 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
             # 来源必须按**实际结果**标注：开关打开但模型失败时仍是模板，不能标 llm。
             "plan_narrative": _plan_narrative_text,
             "plan_narrative_source": "llm" if _plan_narrative_from_llm else "template",
+            # 无方案时说明"为什么没有"，避免用户以为是坏了（P2）
+            "plan_absent_reason": (
+                None if plans else (
+                    "当前窗口未判定为异常（运行平稳或仅性能提示），按规则不生成处置方案；"
+                    "若目标是提升吞吐/覆盖率，可先用「连接分配 / 用户横向对比」定位瓶颈对象，再发起针对性研判。"
+                    if not is_anomaly else
+                    f"当前异常类型（{anomaly_type}）暂不提供参数化方案。"
+                )
+            ),
             # 由模型**写整段回答**，并经 answer_llm.verify 逐条核对后才放行（harness 闭环）。
             # 校验不通过就是 None，前端继续用规则文案，绝不把可能编造的内容展示给用户。
             "answer_focus": _focus,
@@ -1776,11 +1785,14 @@ def resolve_scenario(params_scenario, default_scenario):
 # ---- 工具1：KPI 概况查询（真实 CSV 均值；窗口跟随前端，未传用默认三天） ----
 # 回放模式：回复注明分析截至时刻 win_end，保证"对话口径=页面口径"（win_end 未传时回落默认三天）
 def tool_query_kpi(scenario: str, win_start: str | None = None, win_end: str | None = None,
-                   ap_id: str | None = None) -> dict:
+                   ap_id: str | None = None, user_id: str | None = None) -> dict:
     win_start, win_end = win_start or TOOL_WINDOW_START, win_end or TOOL_WINDOW_END
     ap_filter = (ap_id or "").strip() or None
-    rows = filter_rows(scenario, win_start, win_end, ap_id=ap_filter)
-    subject = ap_filter or "网络整体"
+    user_filter = (user_id or "").strip().upper().replace("UE-", "UE-") or None
+    # user_id 必须真正参与过滤（复查：意图抽出了 UE-03 却在分发时丢掉，
+    # 结果回答只能给整网数据，还错说"证据中没有 UE 级指标"）。
+    rows = filter_rows(scenario, win_start, win_end, ap_id=ap_filter, user_id=user_filter)
+    subject = ap_filter or ("网络整体" if not user_filter else f"用户 {user_filter}")
     if rows:
         # 结论文案必须与数据一致：原先无论数据多差都写"整体运行平稳"，
         # 实测窗口 RSRP -111.2 dBm / SINR -15.0 dB 时仍显示"平稳"，评委一眼可见矛盾。
@@ -1800,10 +1812,13 @@ def tool_query_kpi(scenario: str, win_start: str | None = None, win_end: str | N
                  f"PRB利用率{avg(rows,'prb_usage'):.1f}%，共{_n}条采样。")
     elif ap_filter:
         reply = f"截至{win_end}，未找到 {ap_filter} 在 {win_start} ~ {win_end} 的采样数据（该时段无该 AP 的采样）。"
+    elif user_filter:
+        reply = f"截至{win_end}，未找到用户 {user_filter} 在 {win_start} ~ {win_end} 的采样数据。"
     else:
         reply = f"截至{win_end}，未找到场景「{scenario}」在所选时段的数据。"
     return {"reply": reply, "intent": "query_kpi", "chart": None,
-            "query_ref": {"scenario": scenario, "start_time": win_start, "end_time": win_end}}
+            "query_ref": {"scenario": scenario, "start_time": win_start, "end_time": win_end,
+                          "ap_id": ap_filter, "user_id": user_filter}}
 
 # ---- 工具2：故障研判（意图 → 确定性规则引擎=接口2，LLM 不参与计算，规避幻觉） ----
 def _build_fault_reply(d: dict, scenario: str, win_start: str, win_end: str) -> str:
@@ -2472,7 +2487,15 @@ def agent_chat(req: ChatRequest):
         params["ap_id"] = _normalize_ap(params["ap_id"])
     hit = rule.get("hit", False)
 
-    # 2. 第二层：关键词未命中 + 启用LLM时，才调用大模型增强识别（get_intent 内部自带降级）
+    # 2. 意图层：**默认大模型优先**，规则作为兜底与参数补充。
+    #    为什么改：原先"规则先跑、命中就不再调模型"，用户问"如何将 UE3 的吞吐量提高 10%"
+    #    被"吞吐"关键词截住，模型一步都没走，界面既显示"意图·规则"也没有 AI 回答 —— 与
+    #    "LLM 意图驱动"的定位不符。现在改为：
+    #      ① 有 key 且未关闭 → 先让模型解析意图；
+    #      ② 模型给出合法工具且**没有把明确的规则命中降级成闲聊** → 采用模型结果；
+    #      ③ 否则（未启用/失败/输出非法/规则更具体）→ 用规则结果，并写明原因。
+    #    可用 NETTUNE_LLM_INTENT_FIRST=0 回到"规则优先"（演示网络不稳时用）。
+    _intent_first = os.getenv("NETTUNE_LLM_INTENT_FIRST", "1").strip().lower() not in ("0", "false", "off", "no")
     intent_source = "rule" if hit else "fallback"
     # 降级原因（模型不可用/输出不可解析时才非空），随响应透出，便于说明"这句为什么没走大模型"
     intent_degrade_reason = ""
@@ -2480,6 +2503,8 @@ def agent_chat(req: ChatRequest):
         # 无 key / 显式关闭时也要给出原因，否则"没走大模型"在响应里看不出为什么（复审 P3）
         intent_degrade_reason = ("未启用大模型（未配置 LLM_API_KEY 或 NETTUNE_ENABLE_LLM=0），"
                                  "本句由规则识别")
+    elif not _intent_first:
+        intent_degrade_reason = "已按 NETTUNE_LLM_INTENT_FIRST=0 设为规则优先"
     # 大模型自评的意图理解置信度（0~1）。规则命中路径没有这个值，保持 None —— 
     # 不拿规则分数冒充"概率"，与 B-6 的 rule_score 口径一致。
     intent_confidence: float | None = None
@@ -2490,35 +2515,52 @@ def agent_chat(req: ChatRequest):
     # 是否新会话/是否已被淘汰：前端据此提示"上文已失效"，不要假装还记得
     session_is_new = not turns
     context_note = _context_line(turns) if turns else ""
-    if not hit and ENABLE_LLM:
+    if ENABLE_LLM and _intent_first:
         try:
             # 把上文一并交给 LLM，让它能理解"那给它出个方案"里的"它"
             intent_obj = get_intent(f"{context_note}{req.message}" if context_note else req.message)
-            intent = intent_obj.get("intent", intent)
+            _llm_intent = intent_obj.get("intent")
+            _llm_source = intent_obj.get("source") or "rule"
             # 大模型返回的 params 不能直接覆盖已有槽位：
             # 它可能给 null/空串（把正则抽到的值清掉），也可能给 "ap-1" 这种非规范写法。
             _llm_params = {k: v for k, v in (intent_obj.get("params") or {}).items()
                            if v not in (None, "", [])}
-            params = {**params, **_llm_params}
-            if params.get("ap_id"):
-                params["ap_id"] = _normalize_ap(params["ap_id"])
-            # 标记意图来源，便于前端/答辩说明"这句是大模型识别的还是规则识别的"。
-            # 必须沿用 llm_agent.get_intent 给出的实际 source（核查清单第 4 条）：
-            # 该函数失败时返回的是规则结果，之前只看"有没有 intent"会误标成 llm。
-            # 直接采用 llm_agent.get_intent 给出的实际 source，**不再**用"有 intent 就标 llm"
-            # 兜底（复审 P3：那正是本次要消除的反模式，留着就是活口子）。
-            intent_source = intent_obj.get("source") or "rule"
-            if intent_obj.get("degrade_reason"):
-                intent_degrade_reason = str(intent_obj["degrade_reason"])
-            if intent_obj.get("intent"):
+            # 采用条件：模型真的识别成功（source=llm）、工具名合法；
+            # 且**不能把明确的规则命中降级成闲聊**（否则"为什么信号差"会退化成聊天）。
+            # 采用条件：模型真的识别成功（source=llm）、工具名合法；
+            # 且**不能把明确的规则命中降级成闲聊**，也不能对含网络关键词的问题回"闲聊"——
+            # 否则"如何将 UE3 的吞吐量提高 10%"会被答成"我建议关注 KPI"。
+            _domain_hit = any(k in req.message for k in (
+                "吞吐", "RSRP", "SINR", "rsrp", "sinr", "覆盖", "拥塞", "时延", "丢包",
+                "AP-", "AP ", "UE-", "UE ", "用户", "网络", "优化", "方案", "指标", "频谱"))
+            _accept_llm = (_llm_source == "llm" and isinstance(_llm_intent, str)
+                           and _llm_intent in TOOLS
+                           and not (_llm_intent == "chat" and (hit or _domain_hit)))
+            if _accept_llm:
+                intent = _llm_intent
+                intent_source = "llm"
+                params = {**params, **_llm_params}
+                if params.get("ap_id"):
+                    params["ap_id"] = _normalize_ap(params["ap_id"])
                 raw_conf = intent_obj.get("confidence")
                 try:
                     intent_confidence = float(raw_conf) if raw_conf is not None else None
                 except (TypeError, ValueError):
                     intent_confidence = None
+            else:
+                # 模型不可用 / 输出非法 / 只是闲聊而规则更具体 → 保持规则结果并说明原因
+                intent_source = "rule" if hit else "fallback"
+                if _llm_source != "llm":
+                    intent_degrade_reason = str(intent_obj.get("degrade_reason")
+                                                or "模型未给出可用意图，已退回规则")
+                elif _llm_intent == "chat" and (hit or _domain_hit):
+                    intent_degrade_reason = "模型判为闲聊，但问题含网络关键词，已采用规则结果"
+                else:
+                    intent_degrade_reason = f"模型给出的工具不可用（{_llm_intent!r}），已退回规则"
         except Exception:
             # get_intent 已内部降级到 rule_intent，此处仅做最终兜底，不抛出错误
-            pass
+            intent_source = "rule" if hit else "fallback"
+            intent_degrade_reason = "模型调用异常，已退回规则识别"
 
     # 2.4 "出个方案/怎么处置"这类请求没有独立工具：方案本身是研判的产物
     #     （analyze_anomaly 会带上 plans），所以先落到 fault_diagnosis，
@@ -2585,7 +2627,9 @@ def agent_chat(req: ChatRequest):
             data = handler(scenario, req.window_start, req.window_end, params.get("ap_id"), message=req.message)
         elif intent == "query_kpi":
             # KPI 工具保持原签名；只有故障研判需要原问题来生成解释。
-            data = handler(scenario, req.window_start, req.window_end, params.get("ap_id"))
+            # user_id 一起传下去：否则"UE-03 的吞吐"会被当成整网问题（复查踩到）。
+            data = handler(scenario, req.window_start, req.window_end,
+                           params.get("ap_id"), params.get("user_id"))
         elif intent == "chat":
             # 闲聊/能力询问：把原问题传进去，让模型回答（失败回退模板）
             data = handler(scenario, req.window_start, req.window_end, question=req.message)
@@ -2599,6 +2643,43 @@ def agent_chat(req: ChatRequest):
     })
     # 把"这一轮用了上文什么"显式回给前端，便于展示"AI 记得上文"
     if isinstance(data, dict):
+        # ===== 所有工具回复统一交给模型写一遍（除状态型回复）=====
+        # 为什么放在这里：原先只有 analyze_anomaly 接了 answer_llm，KPI/拓扑/预测等
+        # 仍是模板拼装，于是出现"意图是大模型、回答却是模板"的割裂（用户实测反馈）。
+        # 状态型回复（无数据/失败/超出覆盖）保持模板，避免模型把"没数据"写成"正常"。
+        _status_only = str(data.get("status") or "") in ("no_data", "failed", "insufficient_data") \
+            or bool(data.get("error")) or not data.get("reply")
+        # 研判路径已在 analyze_anomaly 内部生成并带了 answer_check —— 不要重复调用模型。
+        # 注意：tool 返回的是 data 内层，未必带 answer_check 字段，所以再按 intent 兜一层，
+        # 否则同一问题会打两次模型（实测踩到，且测试断言"每问题只调一次"会失败）。
+        _already_answered = data.get("answer_check") is not None or intent == "fault_diagnosis"
+        if ENABLE_LLM and not _status_only and not _already_answered:
+            try:
+                _tool_evidence = {
+                    "intent": intent,
+                    "scenario": scenario,
+                    # 问题本身也进证据：用户问"提高10%"，回答里出现 10% 是合法的
+                    "question": req.message,
+                    "window": {"start": req.window_start, "end": req.window_end},
+                    "ap": params.get("ap_id"),
+                    "user": params.get("user_id"),
+                    "reply_draft": str(data.get("reply"))[:800],   # 模板草稿：只作为事实来源
+                    "detail": data.get("detail") if isinstance(data.get("detail"), dict) else {},
+                    "query_ref": data.get("query_ref") if isinstance(data.get("query_ref"), dict) else {},
+                    "metrics": data.get("metrics") if isinstance(data.get("metrics"), dict) else {},
+                    "plans": (data.get("plans") or [])[:2] if isinstance(data.get("plans"), list) else [],
+                    "root_cause_confirmed": False,
+                }
+                _tool_answer = answer_llm.generate(req.message, _tool_evidence, llm_agent.call_llm_chat)
+                # 无论通过与否都回传校验结果：不通过时界面要能说明"为什么这段退回模板"
+                data["answer_check"] = {**_tool_answer.get("check", {}),
+                                        "source": _tool_answer.get("source") or "rule",
+                                        "attempts": _tool_answer.get("attempts", 0)}
+                if _tool_answer.get("text"):
+                    data["answer_llm"] = _tool_answer["text"]
+            except Exception as _exc:   # noqa: BLE001 - 失败保持模板回复
+                data.setdefault("answer_check", {"ok": False, "source": "rule", "attempts": 0,
+                                                 "violations": [f"生成失败：{type(_exc).__name__}"]})
         # 每份结果都绑定"数据来源 + 配置版本"（整改总约束）：前端据此丢弃过期响应、
         # 分析记录据此保留当时的口径，避免旧结论被新配置悄悄覆盖。
         data.setdefault("configRevision", sim_config.revision())

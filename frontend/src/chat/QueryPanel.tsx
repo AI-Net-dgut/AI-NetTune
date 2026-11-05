@@ -261,7 +261,22 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
             <button type="button" className="ain-button" disabled={busy} onClick={() => send(query.question, query.contextRequest, true)}>重试本次问题</button></div>}
           {mismatch && <p className="ain-ai-warning">本次返回范围与已加载数据不同，请核对范围后使用结果。</p>}
           {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，方案暂不可采用，辅助图使用已加载数据。</p>}
-          {!query.pending && !query.error && result && !result.diagnosis && <div className="ain-ai-tool-reply"><ReplyText text={result.reply} />
+          {!query.pending && !query.error && result && !result.diagnosis && <div className="ain-ai-tool-reply">
+            {/* 工具回复的 AI 版本（KPI/拓扑/预测等）：通过校验才显示，否则显示模板文案。
+                之前只有"故障研判"有 AI 标记，KPI 类回复全是模板，看起来像没用大模型。 */}
+            {result.answerLlm && result.answerCheck?.ok
+              ? <div className="ain-diagnosis-prose ain-ai-answer">
+                <div>
+                  <h4><span className="ain-ai-chip" aria-hidden="true">AI</span>回答由大模型生成 · 数字已核对</h4>
+                  <p>{result.answerLlm}</p>
+                </div>
+              </div>
+              : <ReplyText text={result.reply} />}
+            {result.answerCheck && !result.answerCheck.ok && (result.answerCheck.violations?.length ?? 0) > 0 && (
+              <details className="ain-ai-details">
+                <summary>为什么这段不是大模型写的（已回退模板）</summary>
+                <ul>{result.answerCheck.violations.map((line, i) => <li key={i}>{line}</li>)}</ul>
+              </details>)}
             {/* 多步编排：把每一步的实际结果列出来（核查清单第 5 条：
                 不要只返回"已执行两步"的文案，要能看出每步做了什么、结论是什么） */}
             {result.chain && result.chain.length > 0 && (

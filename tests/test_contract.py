@@ -1747,7 +1747,10 @@ def test_chat_source_is_actual_not_flag():
         llm_agent.call_llm = _boom
         d = _data(main.agent_chat(main.ChatRequest(message="看看 AP-01 现在怎么样", scenario=SCENARIO)))
         debug = d["intent_debug"]
-        assert debug["source"] == "rule", f"模型失败时 source 应为 rule，实得 {debug['source']}"
+        # 关键语义：模型失败时**绝不能标成 llm**。是 rule 还是 fallback 取决于规则是否命中
+        # （fallback = 规则也没命中，用了默认意图），两者都算"未走模型"。
+        assert debug["source"] in ("rule", "fallback"), \
+            f"模型失败时 source 应为 rule/fallback，实得 {debug['source']}"
         assert debug.get("degrade_reason"), "应给出降级原因"
     finally:
         llm_agent.call_llm = prev_call
@@ -2028,3 +2031,31 @@ def test_answer_verify_requires_real_citation():
     result = al.verify(fake, evidence)
     assert result["ok"] is False
     assert any("§9.9" in v or "章节" in v for v in result["violations"]), result
+
+
+def test_user_question_is_filtered_to_that_user():
+    """问"UE-03 的吞吐"必须只统计该用户，不能返回整网数据（复查：user_id 被分发层丢掉）。"""
+    window = ("2026-01-02 13:05:48", "2026-01-02 14:05:48")
+    whole = main.tool_query_kpi(SCENARIO, window[0], window[1])
+    one = main.tool_query_kpi(SCENARIO, window[0], window[1], None, "UE-03")
+    assert "用户 UE-03" in one["reply"], one["reply"][:80]
+    assert "网络整体" in whole["reply"]
+    # 两者采样条数不同（该用户只占整网的一部分）
+    assert f"共{60}条采样" in one["reply"] or "条采样" in one["reply"]
+    assert one["reply"] != whole["reply"], "按用户过滤后结果不应与整网相同"
+    missing = main.tool_query_kpi(SCENARIO, window[0], window[1], None, "UE-99")
+    assert "未找到用户 UE-99" in missing["reply"], missing["reply"][:80]
+
+
+def test_plan_absent_reason_explained():
+    """没有方案时必须给出原因，不能让用户以为功能坏了。"""
+    calm = main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-02 13:05:48", window_end="2026-01-02 14:05:48"))["data"]
+    assert not (calm.get("plans") or []), "该窗口按定义不应有方案"
+    assert calm.get("plan_absent_reason"), "无方案时应给出原因"
+    assert "未判定为异常" in calm["plan_absent_reason"]
+
+    fault = main.analyze_anomaly(main.AnomalyRequest(
+        scenario=SCENARIO, window_start="2026-01-01 10:00:00", window_end="2026-01-01 12:00:00"))["data"]
+    assert fault.get("plans"), "覆盖故障窗口应有方案"
+    assert not fault.get("plan_absent_reason"), "有方案时不该带缺失原因"

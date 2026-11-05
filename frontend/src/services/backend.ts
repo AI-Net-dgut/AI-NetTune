@@ -375,6 +375,7 @@ export function parseDiagnosis(value: unknown, scope: QueryScope): Diagnosis {
     // 大模型方案解读（含来源）：界面要能显示"这段是模型写的还是模板写的"
     planNarrative: str(d.plan_narrative) || undefined,
     planNarrativeSource: (str(d.plan_narrative_source) || undefined) as Diagnosis["planNarrativeSource"],
+    planAbsentReason: str(d.plan_absent_reason) || undefined,
     answerFocus: d.answer_focus ? (() => {
       const f = obj(d.answer_focus);
       const kind = str(f.kind), status = str(f.status);
@@ -542,6 +543,16 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
         alertCount: alerts.length,
         firstTitle: first ? (str(first.title) || str(first.summary) || undefined) : undefined,
         apId: str(fc.apId ?? fc.ap_id) || undefined,
+      };
+    })() : undefined,
+    // 所有工具回复的 AI 版本（KPI/拓扑/预测等）：模型写、校验通过才有值
+    answerLlm: str(data.answer_llm) || undefined,
+    answerCheck: data.answer_check ? (() => {
+      const c = obj(data.answer_check);
+      return {
+        ok: c.ok === true, violations: strings(c.violations),
+        source: str(c.source) || "rule",
+        attempts: c.attempts == null ? undefined : numeric(c.attempts),
       };
     })() : undefined,
     chart: rawChart?.option ? { type: str(rawChart.type), option: obj(rawChart.option) } : null,

@@ -191,7 +191,12 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
         {/* 有 AI 回答时不再重复模板描述（AI 已写【方案】），保留对象与按钮 */}
         {!aiAnswerActive && <span className="ain-suggestion-text">{plan.description || '后端未提供方案说明'}</span>}
         <span className="ain-plan-object">对象：{plan.objectIds.join('、') || '待明确'}</span></button>)}</div>
-        : <p className="ain-management-empty">{active?.state === 'normal' ? '未发现明显异常，暂不建议调整配置。' : active?.state === 'empty' ? '此范围没有可用研判。' : '提问后，这里展示对应的处理方案。'}</p>}
+        : <p className="ain-management-empty">{
+          // 优先用后端给出的"为什么没有方案"（平稳/异常类型无参数方案），而不是笼统的"等待研判"
+          (active as { planAbsentReason?: string } | null)?.planAbsentReason
+          || (active?.state === 'normal' ? '未发现明显异常，暂不建议调整配置。'
+            : active?.state === 'empty' ? '此范围没有可用研判。'
+              : '提问后，这里展示对应的处理方案。')}</p>}
       {mismatch && <p className="ain-management-warning">研判范围与当前数据不同，请重新分析；此建议暂不可选择。</p>}
     </section>
 

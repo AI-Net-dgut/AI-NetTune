@@ -94,6 +94,8 @@ export interface Diagnosis {
    *  之前前端完全没消费这两个字段，导致"大模型在做事但界面看不见"。 */
   planNarrative?: string;
   planNarrativeSource?: "llm" | "template";
+  /** 无方案时的原因说明（判定为平稳 / 异常类型无参数方案），避免用户以为功能坏了 */
+  planAbsentReason?: string;
   /** 由大模型写的**整段回答**（经 answer_llm 校验器逐条核对后才放行）；
    *  为空表示未通过校验或未启用 → 界面继续用规则文案。 */
   answerFocus?: DiagnosisFocus;
@@ -123,6 +125,9 @@ export interface ChatResult {
   chain?: ChainStep[];
   worstAp?: string;
   horizonMinutes?: number;
+  /** 工具回复的 AI 版本（KPI/拓扑/预测等路径）：模型写、校验通过才有值 */
+  answerLlm?: string;
+  answerCheck?: { ok: boolean; violations: string[]; source: string; attempts?: number };
   /** 复合编排里预测步骤的摘要（目标 AP、时长、风险条数、首条风险标题）——
    *  复查 P1-8：不能只给"已执行两步"，要能看出预测的是哪个 AP、看到了几条风险。 */
   chainForecast?: {
