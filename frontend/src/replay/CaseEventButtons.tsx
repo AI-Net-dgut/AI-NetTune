@@ -63,15 +63,14 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
       const rangeEnd = phase === "running" ? Math.min(nowMs, endMs) : endMs;
       const selectable = state.ready && !state.locked && phase !== "pending" && rangeEnd > startMs;
       const typeLabel = TYPE_LABEL[event.faultType] ?? event.faultType;
-      // 复查（用户反馈按钮太长、"（50 频段）"没必要）：
-      // 按钮只留"越阈时刻 + 状态"这一主信息；注入区间与越阈频段数放进悬浮提示。
-      // 越阈时刻本身已有完整日期（MM-DD HH:mm），跨天案例不会混淆。
+      // 复查（用户反馈"越阈"太术语）：按钮只留"AP + 类型 + 时刻 + 状态"，
+      // 时刻统一取真实越阈时间，含义在悬浮提示里说明（避免把注入开始误当成异常时刻）。
       const crossingText = event.crossingAt
-        ? ` ${event.crossingAt.slice(5, 16)} 越阈`
-        : ` ${event.start.slice(5, 16)} 开始`;
+        ? ` ${event.crossingAt.slice(5, 16)}`
+        : ` ${event.start.slice(5, 16)}`;
       // 三种状态都标出来，便于从早到晚看完整条时间线。
-      const phaseTag = phase === "running" ? " · 进行中" : phase === "ended" ? " · 已结束" : " · 未开始";
-      const label = `${event.apId} ${typeLabel}${crossingText}${phaseTag}`;
+      const phaseTag = phase === "running" ? "（进行中）" : phase === "ended" ? "（已结束）" : "（未开始）";
+      const label = `${event.apId} ${typeLabel}${crossingText} ${phaseTag}`;
       const phaseText = phase === "pending"
         ? "未开始（主时钟尚未到事件开始时刻）"
         : phase === "running"
