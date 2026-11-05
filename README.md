@@ -288,39 +288,20 @@ npm run dev
 | 右上角入口 | `预测预警 N 项（未检出风险）`——**不开弹窗也会自动检查** |
 | 提问徽标 | `意图·规则`（未配模型）/ `大模型识别`（已配模型）|
 
-### 第 5 步（可选）：接入大模型
+### 第 5 步：接入大模型
 
-| 服务 | `LLM_URL` | `LLM_MODEL` | 备注 |
-|---|---|---|---|
-| DeepSeek（默认）| 留空即默认 | `deepseek-chat` | 只设 key 即可 |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `glm-4-flash` | OpenAI 兼容接口，本项目服务器实测可用 |
+不配也能跑（自动降级为规则，`source` 字段如实标 `rule`）。配好后规则未命中的提问、
+预测/方案解释与**研判整段回答**改由模型生成（单次约 2~5 秒）。
+
+| 服务 | `LLM_URL` | `LLM_MODEL` |
+|---|---|---|
+| DeepSeek（默认）| 留空即默认 | `deepseek-chat` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `glm-4-flash` |
 
 ```powershell
-# Windows：setx 只对新进程生效，设置后必须重开终端
-setx LLM_API_KEY "你的key"
-setx LLM_URL "https://open.bigmodel.cn/api/paas/v4/chat/completions"   # 用 GLM 才需要
-setx LLM_MODEL "glm-4-flash"
-```
-
-```bash
-# Linux / macOS
-export LLM_API_KEY="你的key"
-export LLM_URL="https://open.bigmodel.cn/api/paas/v4/chat/completions"
-export LLM_MODEL="glm-4-flash"
-```
-
-也可复制 [.env.example](.env.example) 为 `.env` 后填写；前端变量见 [frontend/.env.example](frontend/.env.example)。
-
-**不配也能跑**：意图识别与文案生成自动降级为规则模板，接口照常返回，`source` / `answer_check.source` / `narrative_source` 如实标为 `rule` / `template`。
-配好后，规则未命中的提问、预测解释、方案解释与**研判整段回答**改由大模型生成（单次约 2~5 秒）。
-
-**如何确认模型真的在工作**（三处可见证据）：
-
-1. 提问后徽标显示 **`大模型识别`**（而非 `意图·规则`）
-2. 研判区标题显示 **`AI 研判 · 数字已核对`**（而非 `规则研判`）
-3. 展开「**AI 文本状态**」应看到 `是否通过校验：通过；来源：llm；重写次数：1`；若显示"后端未返回 answer_check 字段"，说明后端进程还是旧代码，需重启
-
-配置与排查细节见 [DEPLOY.md](DEPLOY.md) 第 7 节。
+setx LLM_API_KEY "你的key"                       # 设置后必须重开终端
+setx LLM_MODEL "glm-4-flash"                     # 用 GLM 时再加下面一行
+setx LLM_URL "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 ### 遇到问题
 
