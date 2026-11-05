@@ -2,6 +2,9 @@
 
 **基于 LLM 意图驱动的多模态无线网络智能分析与管控平台**
 
+> 🌐 **在线预览**：<https://ai-net-dgut.github.io/AI-NetTune/> ｜ ⚡ **本地部署**：[快速开始](#快速开始) ｜ 📄 **部署细节**：[DEPLOY.md](DEPLOY.md)
+> 在线版只托管前端静态页；**提问、研判、方案仿真、分析记录等功能需要后端**，请按快速开始的第 2~4 步本地启动。
+
 面向**网络测试与优化人员**的多接入点无线组网（5G 现网 / 校园 / 商场等）场景 Web 智能管控平台：**以自然语言为唯一入口**，用户一句话即可完成"找对象 → 查证据 → 判故障 → 给方案 → 看效果 → 可回滚"的完整链路；融合位置感知与电磁频谱预测（区域信号/频谱态势预测）**提前预警**；以**文本、图表、地图、拓扑及序列态势图**多模态呈现网络状态（非专业用户亦可看懂）。
 
 > **大模型在这里做什么**：听懂口语化问题（规则兜底）、把算好的证据写成**整段可读回答**、并把多步分析**编排成一条链路**；所有数字由确定性工具计算，模型输出的每个数字都经 harness 校验。
@@ -183,87 +186,155 @@ LLM 不是"接了个聊天接口"，而是**贯穿全流程、且每一步都有
 
 ## 快速开始
 
-> **完整部署步骤、环境变量、反向代理配置与故障排查见 [DEPLOY.md](DEPLOY.md)。**
-> 数据文件不在仓库里（约 120 MB），**部署前必须先放数据**，见 [data/README.md](data/README.md)。
+> **🌐 在线预览**：<https://ai-net-dgut.github.io/AI-NetTune/>
+> GitHub Pages 只托管**前端静态页**；提问、研判、方案仿真等功能需要后端服务，因此"看界面"用在线版，"跑功能"请按下面的本地部署操作。
+> 数据文件不在仓库里（约 120 MB），**部署前必须先放数据**；服务器部署、反向代理与环境变量见 [DEPLOY.md](DEPLOY.md)。
 
-### 环境要求
+### 三种使用方式
+
+| 方式 | 需要什么 | 能做什么 | 适用场景 |
+|---|---|---|---|
+| **A. 在线预览** | 浏览器 | 浏览界面、图表与说明页（后端未连时数据类操作会失败提示）| 快速看效果、评审截图 |
+| **B. 本地完整部署** ⭐ | Python + Node + 数据 | **全部功能**：提问、研判、方案、仿真闭环、分析记录、报告导出 | 演示、答辩、开发 |
+| **C. 服务器部署** | 服务器 + Nginx | 公网可访问的完整演示 | 多人联调、外网演示（见 DEPLOY.md）|
+
+### 前置检查（30 秒）
 
 | 组件 | 要求 | 说明 |
 |---|---|---|
-| **Python** | **≥ 3.10**（本项目在 3.13.10 上验证） | 代码用了 `str \| None` 等 3.10+ 语法，**3.9 会直接 `TypeError` 起不来** |
-| Node.js | ≥ 20 | 前端 Vite 构建 |
-| 数据 | 约 120 MB | 见下方「0. 先放数据」 |
-
-> 不确定当前 `python` 是哪个版本、依赖是否齐全？用 `python scripts/doctor.py` 自检（退出码 0 = 可以启动）。
-> 环境变量（LLM 密钥、数据目录、预测标定等）见根目录 [.env.example](.env.example)：可复制为 `.env`，
-> 或用 `setx` 永久设置（见下方后端启动步骤）。前端变量见 [frontend/.env.example](frontend/.env.example)。
-> Windows 上如果机器装了多个 Python，**推荐用 `scripts/start_backend.ps1` 启动** —— 它会自动挑 ≥3.10 的解释器，
-> 并检查数据与依赖，避免用错解释器导致的莫名报错：
+| **Python** | **≥ 3.10**（本项目在 3.13.10 验证）| 代码使用 `str \| None` 等 3.10+ 语法，**3.9 会直接 `TypeError` 起不来** |
+| **Node.js** | **≥ 20** | 前端 Vite 构建与开发服务器 |
+| **数据** | 约 120 MB | `data/network_data_30d.csv`（14.6 MB）+ `data/spectrum_7d.csv`（103.4 MB）|
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\start_backend.ps1
-#   加 -Reload 开发热重载；加 -Port 8001 换端口
+python --version     # 期望 ≥ 3.10，例如 Python 3.13.10
+node --version       # 期望 ≥ 20
+python scripts/doctor.py    # 环境+数据一键自检，退出码 0 = 可以启动
 ```
 
-### 0. 先放数据
+> Windows 上装了多个 Python？优先用 `powershell -ExecutionPolicy Bypass -File scripts\start_backend.ps1`，
+> 它会自动挑 ≥3.10 的解释器并检查数据与依赖。
 
-把 `network_data_30d.csv`（14.6 MB）与 `spectrum_7d.csv`（103.4 MB）放进 `data/`。
-然后一条命令自检：
+### 第 1 步：放数据
+
+把两个 CSV 放到项目根目录的 `data/` 下：
+
+| 文件 | 大小 | 用途 |
+|---|---|---|
+| `network_data_30d.csv` | 14.6 MB | 网络 KPI 主表（129,600 条 × 18 列，01-01 ~ 01-30）|
+| `spectrum_7d.csv` | 103.4 MB | 频谱表（1,512,000 条 × 9 列，01-01 ~ 01-07），预测预警用 |
 
 ```powershell
-python scripts/doctor.py        # 退出码 0 = 可以启动
+python scripts/doctor.py            # 再次自检，应显示数据 ok
 ```
 
-如果拿到的是浏览器重复下载的 `network_data_30d(1).csv`，用 `python scripts/prepare_data.py --apply` 规范化文件名
-（不规范化也能启动，后端候选名兼容）。
+若文件名带浏览器后缀（如 `network_data_30d(1).csv`），运行 `python scripts/prepare_data.py --apply` 规范化
+（不规范也能启动，后端候选名兼容）。
 
-### 后端
+### 第 2 步：启动后端（约 1 分钟）
 
 ```powershell
-# 1. 安装依赖
+# ① 建议用虚拟环境（可选，但能避免污染全局环境）
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1          # Linux / macOS: source .venv/bin/activate
+
+# ② 安装依赖
 python -m pip install -r requirements.txt
-#    装不上 prophet / PyKrige 时用最小依赖（功能自动降级，服务仍可启动）：
+#    装不上 prophet / PyKrige 时，用最小依赖（功能自动降级，服务仍可启动）：
 #    python -m pip install -r requirements-min.txt
 
-# 2. 启动服务（局域网联调用 0.0.0.0）
+# ③ 启动（局域网联调用 0.0.0.0；本机自用可用 127.0.0.1）
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-> 若上一步的 `python` 不是 3.10+，请改用 `powershell -ExecutionPolicy Bypass -File scripts\start_backend.ps1`。
+**成功标志**：终端先打印「启动自检」横幅（数据行数、prophet/kriging/llm 能力状态），最后一行是
+`Uvicorn running on http://0.0.0.0:8000`。
 
-**接入大模型**
+**验证后端**（另开一个窗口）：
 
 ```powershell
-# DeepSeek（默认地址）
-setx LLM_API_KEY "sk-你的key"
-setx LLM_MODEL "deepseek-chat"     # 可选，默认就是 deepseek-chat
+(Invoke-RestMethod http://127.0.0.1:8000/api/health).data.ok     # 期望 True
+#   Linux/macOS: curl -s http://127.0.0.1:8000/api/health
+```
 
-# 智谱 GLM（OpenAI 兼容接口，free 档即可；本项目服务器实测可用）
-setx LLM_API_KEY "你的智谱key"
-setx LLM_URL "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+浏览器打开 <http://127.0.0.1:8000/docs> 可看 Swagger 接口面板。
+
+> 端口被占用时换端口：`--port 8001`（前端也要相应设置 `VITE_PROXY_TARGET=http://127.0.0.1:8001`）。
+
+### 第 3 步：启动前端（约 1 分钟）
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+**成功标志**：终端输出 `VITE vX.X.X ready` 与 `Local: http://localhost:5173/`。
+
+开发模式通过 `vite.config.ts` 的 proxy 把 `/api` 转发到 `http://127.0.0.1:8000`；后端换了端口就设 `VITE_PROXY_TARGET`（见 [frontend/.env.example](frontend/.env.example)）。
+`npm run build` 的产物**不带代理**，需用 `VITE_API_BASE` 或反向代理，见 [DEPLOY.md](DEPLOY.md) 第 6 节。
+
+### 第 4 步：验证全链路（30 秒）
+
+1. 打开 <http://localhost:5173/>
+2. 进入「**网络工作台**」→ 点案例 **「AP-02 弱覆盖案例 01-01 10:00 开始」**
+3. 点「**发送**」
+
+| 位置 | 期望结果 |
+|---|---|
+| 左侧研判区 | 出现「研判结论 / 判断依据 / 原因与限制 / 处理与预估」并可点证据链接 |
+| 右上角入口 | `预测预警 N 项（未检出风险）`——**不开弹窗也会自动检查** |
+| 提问徽标 | `意图·规则`（未配模型）/ `大模型识别`（已配模型）|
+
+### 第 5 步（可选）：接入大模型
+
+| 服务 | `LLM_URL` | `LLM_MODEL` | 备注 |
+|---|---|---|---|
+| DeepSeek（默认）| 留空即默认 | `deepseek-chat` | 只设 key 即可 |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `glm-4-flash` | OpenAI 兼容接口，本项目服务器实测可用 |
+
+```powershell
+# Windows：setx 只对新进程生效，设置后必须重开终端
+setx LLM_API_KEY "你的key"
+setx LLM_URL "https://open.bigmodel.cn/api/paas/v4/chat/completions"   # 用 GLM 才需要
 setx LLM_MODEL "glm-4-flash"
 ```
 
-> 换模型只改 `LLM_URL` + `LLM_MODEL` 两个变量；**只配 key 不配地址**会打到默认 DeepSeek 地址，需注意。
-> 设置后**必须重开终端**（`setx` 只对新进程生效）。
+```bash
+# Linux / macOS
+export LLM_API_KEY="你的key"
+export LLM_URL="https://open.bigmodel.cn/api/paas/v4/chat/completions"
+export LLM_MODEL="glm-4-flash"
+```
 
-不配置时，意图识别与文案生成**自动降级为规则模板**（接口照常返回，`source` / `answer_check.source` / `narrative_source` 字段会如实标为 `rule` / `template`）。
-配置后，规则未命中的自然语言提问、预测解释、方案解释与**研判整段回答**会改用大模型生成（单次约 2~5 秒）。
+也可复制 [.env.example](.env.example) 为 `.env` 后填写；前端变量见 [frontend/.env.example](frontend/.env.example)。
+
+**不配也能跑**：意图识别与文案生成自动降级为规则模板，接口照常返回，`source` / `answer_check.source` / `narrative_source` 如实标为 `rule` / `template`。
+配好后，规则未命中的提问、预测解释、方案解释与**研判整段回答**改由大模型生成（单次约 2~5 秒）。
 
 **如何确认模型真的在工作**（三处可见证据）：
 
-1. 提问后面板徽标显示 **`大模型识别`**（而非 `意图·规则`）
+1. 提问后徽标显示 **`大模型识别`**（而非 `意图·规则`）
 2. 研判区标题显示 **`AI 研判 · 数字已核对`**（而非 `规则研判`）
-3. 展开「**AI 文本状态**」可看到 `是否通过校验：通过；来源：llm；重写次数：1`；若显示"后端未返回 answer_check 字段"，说明后端进程还是旧代码，需重启
+3. 展开「**AI 文本状态**」应看到 `是否通过校验：通过；来源：llm；重写次数：1`；若显示"后端未返回 answer_check 字段"，说明后端进程还是旧代码，需重启
 
 配置与排查细节见 [DEPLOY.md](DEPLOY.md) 第 7 节。
 
-启动会打印「启动自检」横幅，直接显示数据是否到位、哪些能力处于降级状态。
+### 遇到问题
 
-浏览器打开 [http://localhost:8000/docs](http://localhost:8000/docs) 查看 Swagger 接口测试面板；
-打开 [http://localhost:8000/api/health](http://localhost:8000/api/health) 看部署自检结果（`data.ok` 应为 `true`）。
+| 现象 | 常见原因 | 解决 |
+|---|---|---|
+| `python scripts/doctor.py` 退出码非 0 | 解释器 <3.10 / 依赖缺失 / 数据未放 | 按上面的提示逐项修；Windows 用 `start_backend.ps1` |
+| 后端启动但 `/api/health` 的 `data.ok=false` | 数据文件名不对或不在 `data/` | `python scripts/prepare_data.py --apply` 后重启 |
+| 启动日志出现 `prophet=off` / `kriging=off` | 没装 prophet / PyKrige | 不影响使用：自动降级移动平均 / 网格均值；要全功能就补装 |
+| 前端页面报 502 / 一直转圈 | 后端没起，或端口与 `VITE_PROXY_TARGET` 不一致 | 先确认 <http://127.0.0.1:8000/api/health> 可访问 |
+| 页面提示"预测接口尚未接入（HTTP 404）" | 后端是旧版本或未启动 | 重启后端，确认 `/api/forecast/preview` 可用 |
+| 徽标一直是 `意图·规则`、AI 文本不出现 | 后端进程没读到 key | 重开终端 → 重启后端；展开「AI 文本状态」看具体原因 |
+| 端口 8000 被占用 | 已有实例在跑 | 换 `--port 8001`，前端设 `VITE_PROXY_TARGET=http://127.0.0.1:8001` |
 
-> 接口 1/2/3/5/6/9 读取 `data/` 下的网络表（当前 30 天版，129,600 条 × 18 列）；
+### 数据范围说明（重要）
+
+> 接口 1/2/3/5/6/9 读取 `data/` 下的网络表（30 天版，129,600 条 × 18 列）；
 > 接口 11/12（预测预警）额外读取 103.4 MB 的 `spectrum_7d.csv`（1,512,000 条 × 9 列）。
 >
 > 两张表覆盖范围不同：网络表 30 天（01-01 ~ 01-30，每天都有注入故障），
@@ -275,17 +346,6 @@ setx LLM_MODEL "glm-4-flash"
 > 时序预测（接口 10）使用 Prophet，缺失时自动降级为移动平均（`method` 字段如实返回）。
 > ⚠️ Windows 上 Prophet 首次拟合需编译 Stan 模型，可能耗时数分钟——**演示请勿直连接口 10**，
 > 前端预测走 `/api/forecast/preview`，不依赖 Prophet。
-
-### 前端
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-开发模式下前端通过 `vite.config.ts` 的 proxy 把 `/api` 转发到 `http://127.0.0.1:8000`。
-构建产物部署（`npm run build`）**不带代理**，需要用 `VITE_API_BASE` 或反向代理，见 [DEPLOY.md](DEPLOY.md) 第 6 节。
 
 ## API 接口一览
 
