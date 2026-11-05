@@ -89,6 +89,26 @@ export function RecordDetails({ entry }: { entry: QuestionEntry }) {
     </section>
   </>;
 }
+const historyExampleTitle = 'AP-02 弱覆盖复盘';
+
+function HistoryExample() {
+  return <article className="history-example" aria-labelledby="history-example-title">
+    <header className="history-question-heading">
+      <span>示例案例 · 未计入记录</span>
+      <h2 id="history-example-title" tabIndex={-1}>{historyExampleTitle}</h2>
+      <p>示例提问：分析 AP-02 为什么出现弱覆盖，并比较候选方案的预计效果。</p>
+    </header>
+    <section className="history-section">
+      <h3>分析与研判</h3>
+      <p className="history-answer">结合 RSRP 趋势、覆盖热力图和受影响终端，核查弱覆盖发生的时段与范围。</p>
+    </section>
+    <section className="history-section">
+      <h3>解决方案与预计效果</h3>
+      <p className="history-answer">对比候选方案在同一历史数据窗口下的预计效果。实际研判和评估结果以工作台返回内容为准。</p>
+    </section>
+    <Link className="ain-button" to="/workbench">前往工作台提问 →</Link>
+  </article>;
+}
 function HistoryContent() {
   const [items, setItems] = useState<HistoryRecord[]>([]);
   const [selected, setSelected] = useState(''), [q, setQ] = useState(''), [notice, setNotice] = useState('');
@@ -104,6 +124,7 @@ function HistoryContent() {
     return () => { alive = false; window.removeEventListener('aintune-history', load); };
   }, []);
   const entries = questionEntries(items), shown = entries.filter(e => searchable(e).includes(q.trim().toLowerCase()));
+  const showExample = !entries.length && !q.trim();
   const active = shown.find(e => e.record.id === selected) ?? shown[0];
   const picked = entries.filter(e => checked.has(e.record.id));
   const allShownChecked = shown.length > 0 && shown.every(e => checked.has(e.record.id));
@@ -145,9 +166,17 @@ function HistoryContent() {
         {managing && <input className="history-record-check" type="checkbox" aria-label={`选择记录：${text(r.question) || '未记录问题'}`} checked={checked.has(r.id)} disabled={deleting} onChange={e => toggle(r.id, e.target.checked)}/>}
         <button type="button" className={`history-card${active?.record.id === r.id ? ' selected' : ''}`} aria-pressed={active?.record.id === r.id} onClick={() => setSelected(r.id)}>
         <time>{savedTime(r.createdAt)}</time><strong>{text(r.question) || '未记录问题'}</strong><span>分析至 {text(r.analysisTime) || text(object(r.scope).end) || '时间未记录'}</span>
-        </button></div>)}{!shown.length && <p className="history-muted">{entries.length ? '没有匹配的问题。' : '暂无提问记录，发送分析问题后会自动保存。'}</p>}</aside>
+        </button></div>)}
+        {showExample && <button type="button" className="history-card selected"
+          onClick={() => document.getElementById('history-example-title')?.focus()}>
+          <span>示例案例 · 未计入记录</span>
+          <strong>{historyExampleTitle}</strong>
+          <span>查看研判与方案效果示例 →</span>
+        </button>}
+        {!shown.length && <p className="history-muted">{entries.length ? '没有匹配的问题。' : '发送分析问题后，真实记录会自动保存。'}</p>}
+      </aside>
       <section className="history-detail" aria-label="分析记录详情">{active ? <><div className="history-actions"><button type="button" disabled={deleting} onClick={() => exportGroups([active])}>导出本次记录</button><button type="button" disabled={deleting} onClick={() => remove([active])}>删除</button></div>
-        <HistoryErrorBoundary key={active.record.id}><RecordDetails entry={active}/></HistoryErrorBoundary></> : <p className="history-muted">选择一个问题，查看研判与方案效果。</p>}</section>
+        <HistoryErrorBoundary key={active.record.id}><RecordDetails entry={active}/></HistoryErrorBoundary></> : showExample ? <HistoryExample/> : <p className="history-muted">选择一个问题，查看研判与方案效果。</p>}</section>
     </div>}
     <p className="history-storage-note">仅保存在当前浏览器的当前网站地址下，不会同步给其他电脑或浏览器；共用同一浏览器时可见。最多保存 {MAX_HISTORY_QUESTIONS} 个问题及其研判、方案和仿真效果，满额后请先导出或删除，不自动清理旧记录。清除网站数据后记录会丢失。</p>
   </main>;

@@ -371,12 +371,15 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
       if (panel) panel.scrollTop = 0;
     }
   }, [analysisKey, contextKey]);
-  const requestedTab = tabChoice?.context === contextKey && tabChoice.analysis === analysisKey ? tabChoice.tab : hasAnalysis ? 'diagnosis' : 'data';
-  const activeTab: WorkspaceTab = requestedTab === 'plans' && !canViewPlans ? 'diagnosis'
-    : requestedTab !== 'data' && !hasAnalysis ? 'data' : requestedTab;
+  const activeTab: WorkspaceTab = tabChoice?.context === contextKey && tabChoice.analysis === analysisKey
+    ? tabChoice.tab : hasAnalysis ? 'diagnosis' : 'data';
   const selectTab = (tab: WorkspaceTab) => {
-    if ((tab === 'diagnosis' && !hasAnalysis) || (tab === 'plans' && !canViewPlans)) return;
     setTabChoice({ context: contextKey, analysis: analysisKey, tab });
+  };
+  const focusQuestion = () => {
+    const input = document.getElementById('ain-question');
+    input?.focus({ preventScroll: true });
+    input?.scrollIntoView({ block: 'center' });
   };
   // Evidence queries keep the original diagnosis and its plans. Their headers
   // must keep that same question/forecast context, even if the helper fails.
@@ -415,18 +418,20 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
     <section className="ain-workspace-results" aria-label="数据与分析工作区">
       <div className="ain-workspace-tabs" role="tablist" aria-label="工作区内容" onKeyDown={event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+        const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="tab"]'));
         const at = tabs.indexOf(document.activeElement as HTMLButtonElement);
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (at + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
         event.preventDefault(); tabs[next]?.focus(); tabs[next]?.click();
       }}>
-        {([{ id: 'data', label: '数据展示', enabled: true }, { id: 'diagnosis', label: '问题研判', enabled: hasAnalysis }, { id: 'plans', label: '方案效果', enabled: canViewPlans }] as const).map(tab =>
+        {([{ id: 'data', label: '数据展示' }, { id: 'diagnosis', label: '问题研判' }, { id: 'plans', label: '方案效果' }] as const).map(tab =>
           <button key={tab.id} id={`ain-tab-${tab.id}`} type="button" role="tab" aria-selected={activeTab === tab.id}
-            aria-controls={`ain-panel-${tab.id}`} disabled={!tab.enabled} tabIndex={activeTab === tab.id ? 0 : -1}
-            title={!tab.enabled ? tab.id === 'diagnosis' ? '发送问题后查看研判' : '研判完成后查看方案与效果' : undefined}
+            aria-controls={`ain-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1}
             onClick={() => selectTab(tab.id)}>{tab.label}</button>)}
-        <span>{hasAnalysis ? analysisContext.kind === 'forecast' ? '预测分析' : analysisContext.kind === 'mixed' ? '现存 + 预测' : '现存分析' : '提问后解锁研判与方案'}</span>
+        {hasAnalysis && <span>{analysisContext.kind === 'forecast' ? '预测分析' : analysisContext.kind === 'mixed' ? '现存 + 预测' : '现存分析'}</span>}
       </div>
+      {(activeTab === 'data' || hasAnalysis) && <div className="ain-workspace-mobile-actions">
+        <button type="button" className="ain-button" onClick={focusQuestion}>前往 AI 提问 ↓</button>
+      </div>}
       <div className="ain-workspace-body">
     <section hidden={activeTab !== 'data'} role="tabpanel" aria-labelledby="ain-tab-data" id="ain-panel-data" className="ain-data-module ain-feature-module">
       <header className="ain-feature-heading ain-data-heading"><div className="ain-module-title">
@@ -475,12 +480,21 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
       </>}
     </section>
         <section id="ain-panel-diagnosis" className="ain-workspace-panel ain-ai-v3" role="tabpanel" aria-labelledby="ain-tab-diagnosis" hidden={activeTab !== 'diagnosis'}>
-          {hasAnalysis && <AnalysisContextBanner context={analysisContext} section="问题研判" />}
-          <div ref={setDiagnosisHost} />
+          {hasAnalysis ? <AnalysisContextBanner context={analysisContext} section="问题研判" /> : <div className="ain-workspace-empty">
+            <h2>从一个网络问题开始</h2>
+            <p>在 AI 网络助手中选择示例或输入问题。发送后，这里会展示研判结论、判断依据和相关图表。</p>
+            <button type="button" className="ain-button ain-primary" onClick={focusQuestion}>去提问</button>
+          </div>}
+          <div ref={setDiagnosisHost} hidden={!hasAnalysis} />
         </section>
         <section id="ain-panel-plans" className="ain-workspace-panel ain-ai-v3" role="tabpanel" aria-labelledby="ain-tab-plans" hidden={activeTab !== 'plans'}>
-          {hasAnalysis && <AnalysisContextBanner context={analysisContext} section="方案效果" />}
-          <div ref={setPlansHost} />
+          {hasAnalysis ? <AnalysisContextBanner context={analysisContext} section="方案效果" /> : <div className="ain-workspace-empty">
+            <h2>完成研判后比较方案</h2>
+            <p>提出需要处理的网络问题后，可在此查看候选方案，并对比参数调整前后的仿真指标。</p>
+            <button type="button" className="ain-button ain-primary" onClick={focusQuestion}>去提问</button>
+          </div>}
+          {transferred && forecastPending && <p className="ain-load-state" role="status">正在研判所选风险，方案将在结果返回后展示。</p>}
+          <div ref={setPlansHost} hidden={!hasAnalysis} />
           <nav className="ain-workspace-next"><button type="button" className="ain-button" onClick={() => selectTab('diagnosis')}>← 返回问题研判</button><button type="button" className="ain-button" onClick={() => selectTab('data')}>查看数据展示</button></nav>
         </section>
       </div>

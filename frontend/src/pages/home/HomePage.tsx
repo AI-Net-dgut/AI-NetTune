@@ -136,7 +136,6 @@ export default function HomePage() {
         <p className="ain-home-v2-lead">在工作台依次查看数据、研判问题、比较方案；右侧 AI 助手负责提问，分析记录保留每次结果。</p>
         <div className="ain-home-v2-actions">
           <Link className="ain-button ain-primary" to="/workbench">进入网络工作台 <span aria-hidden="true">→</span></Link>
-          <Link className="ain-home-v2-guide-link" to="#ain-home-v2-flow">查看使用指南 <span aria-hidden="true">↗</span></Link>
         </div>
         <dl className="ain-home-v2-source">
           <div><dt>当前案例</dt><dd>{REPLAY_CONFIG.scenario} · 七天历史回放</dd></div>

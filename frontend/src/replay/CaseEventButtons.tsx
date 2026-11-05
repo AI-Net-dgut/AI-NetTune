@@ -20,6 +20,7 @@ const TYPE_LABEL: Record<string, string> = {
   weak_coverage: "弱覆盖",
   congestion: "拥塞",
 };
+const QUICK_CASE_LIMIT = 4;
 
 export default function CaseEventButtons({ state, act, scope, disabled = false, onPrefill }: {
   state: ReplayState;
@@ -36,9 +37,6 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
   useEffect(() => {
     let alive = true;
     fetchFaultEvents(scope.scenario)
-      // 不再 slice(0,6) 静默丢弃事件（独立审计 P3：后端 8 条只渲染 6 条，
-      // EV-007/EV-008 没有入口）。全部渲染，由 CSS 换行容纳。
-      // 复查（用户反馈"为什么不是从头进行"）：按注入时间排序，让案例从早到晚排列。
       .then(list => { if (alive) { setEvents([...list].sort((a, b) => a.start.localeCompare(b.start))); setError(""); } })
       .catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : "事件清单获取失败"); });
     return () => { alive = false; };
@@ -55,7 +53,7 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
 
   return <div className="ain-reference-row" aria-label="预置案例">
     <span className="ain-reference-hint">预置案例</span>
-    {events.map(event => {
+    {events.slice(0, QUICK_CASE_LIMIT).map(event => {
       const startMs = toEpoch(event.start);
       const endMs = toEpoch(event.end);
       const phase: "pending" | "running" | "ended" =

@@ -315,7 +315,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   return <section className="ain-ai-panel ain-ai-v3 ain-feature-module" id="ain-ai-module" aria-labelledby="ain-ai-title">
     <header className="ain-ai-heading">
       <div className="ain-ai-heading-title"><span className="ain-ai-symbol" aria-hidden="true">AI</span>
-        <div><h2 id="ain-ai-title">AI 网络助手</h2><p>{workspace ? "在此提问，在左侧查看研判与方案" : "提问 → 原因与证据 → 处理方案 → 仿真效果对比"}</p></div></div>
+        <div><h2 id="ain-ai-title">AI 网络助手</h2><p>{workspace ? "在此提问，在工作区查看研判与方案" : "提问 → 原因与证据 → 处理方案 → 仿真效果对比"}</p></div></div>
       <div className="ain-ai-heading-actions">
         <button type="button" className={onOpenForecast ? `ain-forecast-trigger${!historical && forecastAlertCount > 0 ? " has-risk" : ""}` : "ain-forecast-placeholder"} disabled={historical || forecastDisabled || query.pending || dataLoading || !onOpenForecast}
           onClick={onOpenForecast} title={historical ? "历史查看期间不提供未来预测" : `查看频谱态势、未来风险及相关指标${forecastResultTime ? `；最近预测基准：${forecastResultTime}（北京时间），打开后更新` : "；尚未查询预测"}`}>{!historical && forecastAlertCount > 0 && <svg className="ain-forecast-risk-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 19 18H1Z" fill="currentColor" /><path d="M10 7v5M10 15v.1" stroke="white" strokeWidth="2" strokeLinecap="round" /></svg>}{forecastMode ? "调整预测范围" : "预测预警"} {!forecastMode && <span>{historical ? "历史不可用" : forecastLabel}</span>}</button>
