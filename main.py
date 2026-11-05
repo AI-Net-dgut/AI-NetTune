@@ -492,6 +492,8 @@ class AnomalyRequest(BaseModel):
     # 可选：只研判指定 AP。默认 None = 现有行为（整窗、按 AP 逐一研判），
     # 因此前端/报告导出等既有调用完全不受影响。
     ap_id: str | None = None
+    # 可选：只研判指定用户（"UE-03 的吞吐怎么提高"）。缺省 None = 整窗/整网，既有调用不受影响。
+    user_id: str | None = None
     # 聊天入口传入原问题供回答生成使用；旧 REST/报告调用可省略。
     message: str | None = None
 
@@ -982,7 +984,8 @@ def analyze_anomaly(req: AnomalyRequest):
     # 缓存包含已生成的回答：同一窗口的不同问题不能共用一份文字。
     # 数据/配置版本仍放在最后，沿用原有仿真修订隔离逻辑。
     key = (req.scenario, req.window_start, req.window_end,
-           req.ap_id or "", req.message or "", bool(ENABLE_LLM), _data_version())
+           req.ap_id or "", (getattr(req, "user_id", None) or ""), req.message or "",
+           bool(ENABLE_LLM), _data_version())
     hit = _ANOMALY_CACHE.get(key)
     if hit is not None:
         ts, payload = hit
@@ -1040,7 +1043,19 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     ap_filter = getattr(req, "ap_id", None) or ""
     if ap_filter:
         rows = [r for r in rows if r["ap_id"] == ap_filter]
+    # 指定用户时再按 user_id 收窄（"UE-03 的吞吐"必须只统计该用户，
+    # 否则回答只能给整网数据，还会错说"证据中没有 UE 级指标"）。
+    user_filter = (getattr(req, "user_id", None) or "").strip().upper() or ""
+    if user_filter:
+        rows = [r for r in rows if str(r.get("user_id") or "").upper() == user_filter]
     if not rows:
+        if user_filter:
+            return {"code": 0, "message": "success",
+                    "data": {"is_anomaly": False, "reason": f"用户 {user_filter} 在所选时段无采样",
+                             "cause": f"{user_filter} 在该时间窗口没有采样数据（可能该用户不在该场景，或该时段未接入）",
+                             "anomaly_type": "正常", "level": "低", "current_state": "normal",
+                             "affected_aps": [], "ap_filter": ap_filter, "user_filter": user_filter,
+                             "hourly_trend": [], "ap_comparison": [], "alarm_history": []}}
         if ap_filter:
             return {"code": 0, "message": "success",
                     "data": {"is_anomaly": False, "reason": f"{ap_filter} 在所选时段无采样",
@@ -1480,6 +1495,9 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                 "scenario": req.scenario,
                 "window": {"start": window_start, "end": window_end},
                 "ap": _main_ap,
+                # 用户维度：让模型知道这份证据是"某个用户"还是"整网"
+                "user": getattr(req, "user_id", None),
+                "row_count": len(rows),
                 "anomaly_type": anomaly_type,
                 "is_anomaly": bool(is_anomaly),
                 "level": m.get("level") if isinstance(m, dict) else None,
@@ -2135,17 +2153,21 @@ def _plan_chain(req, scenario, params) -> dict | None:
 
 
 def tool_fault_diagnosis(scenario: str, win_start: str | None = None, win_end: str | None = None,
-                         ap_id: str | None = None, message: str | None = None) -> dict:
-    """故障研判。ap_id 指定时只研判该 AP（默认 None = 现有行为，整窗按 AP 逐一研判）。
+                         ap_id: str | None = None, message: str | None = None,
+                         user_id: str | None = None) -> dict:
+    """故障研判。ap_id / user_id 指定时只研判该对象（默认 None = 整窗按 AP 逐一研判）。
 
     修复的缺陷：意图层早就抽出了 ap_id（intent_debug.parsed.ap_id 能看到 AP-01），
     但分发时被丢掉，于是"问 AP-01"得到的是"窗口内最差的 AP"。这里把它贯通到
     analyze_anomaly（底层 filter_rows 本来就支持 ap_id 过滤）。
+    user_id 同理：问"UE-03 的吞吐"必须只统计该用户，否则回答只能给整网数据。
     """
     win_start, win_end = win_start or TOOL_WINDOW_START, win_end or TOOL_WINDOW_END
     ap_filter = (ap_id or "").strip() or None
+    user_filter = (user_id or "").strip().upper() or None
     an = analyze_anomaly(AnomalyRequest(scenario=scenario, window_start=win_start,
-                                        window_end=win_end, ap_id=ap_filter, message=message))
+                                        window_end=win_end, ap_id=ap_filter,
+                                        user_id=user_filter, message=message))
     d = an["data"]
     reply = _build_fault_reply(d, scenario, win_start, win_end)
     if ap_filter:
@@ -2483,6 +2505,12 @@ def agent_chat(req: ChatRequest):
         _ap_hit = re.search(r"AP\s*[-－]?\s*0*(\d+)", req.message, re.IGNORECASE)
         if _ap_hit:
             params["ap_id"] = f"AP-{int(_ap_hit.group(1)):02d}"
+    # 同理补 UE 编号：问"UE3 的吞吐"必须能抽到 user_id，
+    # 否则下层只能查整网，回答会错说"证据中没有 UE 级指标"（实测踩到）。
+    if not params.get("user_id"):
+        _ue_hit = re.search(r"UE\s*[-－]?\s*0*(\d+)", req.message, re.IGNORECASE)
+        if _ue_hit:
+            params["user_id"] = f"UE-{int(_ue_hit.group(1)):02d}"
     else:
         params["ap_id"] = _normalize_ap(params["ap_id"])
     hit = rule.get("hit", False)
@@ -2624,7 +2652,8 @@ def agent_chat(req: ChatRequest):
         if intent == "forecast":
             data = handler(scenario, req.window_start, req.window_end, req.message)
         elif intent == "fault_diagnosis":
-            data = handler(scenario, req.window_start, req.window_end, params.get("ap_id"), message=req.message)
+            data = handler(scenario, req.window_start, req.window_end, params.get("ap_id"), message=req.message,
+                           user_id=params.get("user_id"))
         elif intent == "query_kpi":
             # KPI 工具保持原签名；只有故障研判需要原问题来生成解释。
             # user_id 一起传下去：否则"UE-03 的吞吐"会被当成整网问题（复查踩到）。
@@ -2708,6 +2737,7 @@ def agent_chat(req: ChatRequest):
             "parsed": {
                 "scenario": scenario,
                 "ap_id": params.get("ap_id"),
+                "user_id": params.get("user_id"),
                 "time_range": params.get("time_range"),
                 "window": {"start": req.window_start, "end": req.window_end},
             },

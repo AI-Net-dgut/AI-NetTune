@@ -56,9 +56,17 @@ SYSTEM_PROMPT = """你是无线网络运维助手。你会收到一份**已由�
    写法为"依据："后直接接 references 中某条的 label 字段原文（例如"依据：故障定义 §2.2"）；
    不要输出 `<label>`、`<...>` 这类占位符或尖括号模板；
    **不得引用 references 之外的文档或章节号**（编造章节视为不合格）；
-8. 总长度不超过 500 字；
-9. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
+8. **不要出现内部字段名**：禁止写 plans / detail / query_ref / current / suggested /
+   evidence / metrics / rule_score 这类英文内部名，请改用中文表述
+   （"候选方案""当前值 / 建议值""指标"）；
+9. 总长度不超过 500 字；
+10. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
 """
+
+# 内部字段名：模型不该把它们暴露给用户（"证据内 plans 为空"这种话用户看不懂）
+INTERNAL_TOKENS = ("plans", "detail", "query_ref", "current/suggested", "currentvalue",
+                   "suggestedvalue", "answer_focus", "evidence_bundle", "rule_score",
+                   "current", "suggested")
 
 
 def _numbers(text: str) -> list[float]:
@@ -235,6 +243,11 @@ def verify(answer: str, evidence: dict) -> dict:
         for name in re.findall(r"[《「]([^》」]{2,20})[》」]", text):
             if name not in known_names and not any(name in k or k in name for k in known_names):
                 violations.append(f"出现证据之外的方案名：{name}")
+
+    # 7) 不得暴露内部字段名（"证据内 plans 为空"这种话用户看不懂）
+    leaked = [token for token in INTERNAL_TOKENS if token.lower() in text.lower()]
+    if leaked:
+        violations.append(f"出现了内部字段名：{leaked}（请改用中文表述）")
 
     return {"ok": not violations, "violations": violations, "numbers": len(_numbers(text)), "ids": sorted(mentioned)}
 
