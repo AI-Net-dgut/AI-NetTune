@@ -253,6 +253,7 @@ npm run dev
 setx LLM_API_KEY "你的key"                       # 设置后必须重开终端
 setx LLM_MODEL "glm-4-flash"                     # 用 GLM 时再加下面一行
 setx LLM_URL "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+```
 
 ### 遇到问题
 
