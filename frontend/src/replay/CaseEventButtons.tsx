@@ -38,7 +38,8 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
     fetchFaultEvents(scope.scenario)
       // 不再 slice(0,6) 静默丢弃事件（独立审计 P3：后端 8 条只渲染 6 条，
       // EV-007/EV-008 没有入口）。全部渲染，由 CSS 换行容纳。
-      .then(list => { if (alive) { setEvents(list); setError(""); } })
+      // 复查（用户反馈"为什么不是从头进行"）：按注入时间排序，让案例从早到晚排列。
+      .then(list => { if (alive) { setEvents([...list].sort((a, b) => a.start.localeCompare(b.start))); setError(""); } })
       .catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : "事件清单获取失败"); });
     return () => { alive = false; };
   }, [scope.scenario]);
@@ -62,15 +63,15 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
       const rangeEnd = phase === "running" ? Math.min(nowMs, endMs) : endMs;
       const selectable = state.ready && !state.locked && phase !== "pending" && rangeEnd > startMs;
       const typeLabel = TYPE_LABEL[event.faultType] ?? event.faultType;
-      // 按钮上带**完整日期**（MM-DD HH:mm）：6 个案例跨 7 天，只显示时分会分不清
-      // （10-30 清单第 2 点要求按状态显示状态与完整日期）。
-      // 复查（用户反馈："事件进行中"却看不到什么时候才真的异常）：
-      // 追加"真实首次越阈"时刻——注入开始 ≠ 越阈，两者常差十几分钟。
+      // 复查（用户反馈按钮太长、"（50 频段）"没必要）：
+      // 按钮只留"越阈时刻 + 状态"这一主信息；注入区间与越阈频段数放进悬浮提示。
+      // 越阈时刻本身已有完整日期（MM-DD HH:mm），跨天案例不会混淆。
       const crossingText = event.crossingAt
-        ? ` · ${event.crossingAt.slice(11, 16)} 起越阈${event.crossingBands ? `（${event.crossingBands} 频段）` : ""}`
-        : "";
-      const label = `${event.apId} ${typeLabel}案例 ${event.start.slice(5, 16)} 注入${crossingText}`
-        + (phase === "running" ? "（进行中）" : "");
+        ? ` ${event.crossingAt.slice(5, 16)} 越阈`
+        : ` ${event.start.slice(5, 16)} 开始`;
+      // 三种状态都标出来，便于从早到晚看完整条时间线。
+      const phaseTag = phase === "running" ? " · 进行中" : phase === "ended" ? " · 已结束" : " · 未开始";
+      const label = `${event.apId} ${typeLabel}${crossingText}${phaseTag}`;
       const phaseText = phase === "pending"
         ? "未开始（主时钟尚未到事件开始时刻）"
         : phase === "running"
@@ -83,7 +84,11 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
       const fixedView = state.viewMode !== "live";
       return <button key={event.eventId} type="button" className="ain-button"
         disabled={disabled || !selectable}
-        title={`${event.eventId} 案例时段：${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟；实际是否异常以监测研判为准）\n${phaseText}`
+        title={`${event.eventId} 注入 ${event.start} — ${event.end}（渐变 ${event.rampMinutes} 分钟）`
+          + (event.crossingAt
+            ? `\n真实越阈：${event.crossingAt}（${event.crossingBands ?? "?"}/50 频段，连续 3 分钟）`
+            : "\n真实越阈：未达到判据（≥40/50 频段且连续 3 分钟）")
+          + `\n${phaseText}`
           // 实际行为：切换案例会把分析范围改成该事件，但视图仍停在固定查看；
           // 要回到跟随主时钟需点 QueryPanel 里的「退出分析，返回当前」。
           + (fixedView ? "\n当前是固定查看：切换后仍停留在固定查看，需要时可点「退出分析，返回当前」。" : "")
