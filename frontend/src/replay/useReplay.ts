@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useContext, useEffect, useReducer, useRef } from "react";
+import { WorkbenchActivityContext } from "./WorkbenchActivityContext";
 import type { ReplayConfig } from "./config";
 import { initialReplayState, replayReducer } from "./replayState";
 import type { ReplayAction } from "./replayState";
 
 export default function useReplay(config: ReplayConfig, coveredThrough?: (at: number) => number) {
+  const active = useContext(WorkbenchActivityContext);
   const [state, dispatch] = useReducer(replayReducer, config, initialReplayState);
   const latest = useRef(state);
   const act = useCallback((action: ReplayAction) => {
@@ -12,7 +14,8 @@ export default function useReplay(config: ReplayConfig, coveredThrough?: (at: nu
     dispatch(action);
   }, []);
   useEffect(() => {
-    if (!state.playing) return;
+    // 站内切页期间暂挂计时；返回时从原时刻继续，不补算离开期间的时间。
+    if (!active || !state.playing) return;
     let previous = Date.now();
     const timer = setInterval(() => {
       const now = Date.now();
@@ -20,7 +23,7 @@ export default function useReplay(config: ReplayConfig, coveredThrough?: (at: nu
       act({ type: "tick", elapsedMs: Math.min(2000, Math.max(0, now - previous)), loadedThroughMs: coveredThrough?.(latest.current.currentMs) }); previous = now;
     }, 1000);
     return () => clearInterval(timer);
-  }, [state.playing, act, coveredThrough]);
+  }, [active, state.playing, act, coveredThrough]);
   const readClock = useCallback(() => latest.current, []);
   return { state, act, latest, readClock };
 }

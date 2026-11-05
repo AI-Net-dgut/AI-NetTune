@@ -1,4 +1,6 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Navigate, Route, Routes, useMatch } from "react-router-dom";
+import { WorkbenchActivityContext } from "./replay/WorkbenchActivityContext";
 import AppHeader from "./components/layout/AppHeader";
 import HistoryPage from "./history/HistoryPage";
 import HistoryNotice from "./history/HistoryNotice";
@@ -9,6 +11,16 @@ import "./App.css";
 import "./styles/WorkbenchSplitLayout.css";
 
 export default function App() {
+  const workbenchActive = useMatch("/workbench") !== null;
+  const [hasOpenedWorkbench, setHasOpenedWorkbench] = useState(workbenchActive);
+  // 首次进入后保留同一个工作台实例，站内导航不再丢失回放与分析状态。
+  if (workbenchActive && !hasOpenedWorkbench) setHasOpenedWorkbench(true);
+  useEffect(() => {
+    if (!workbenchActive) return;
+    // 隐藏后重新显示时，通知图表按可见容器重新计算尺寸。
+    const frame = requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    return () => cancelAnimationFrame(frame);
+  }, [workbenchActive]);
   return (
     <div className="ain-app ain-shell">
       {/* 低调的基站与信号背景，不接收鼠标操作 */}
@@ -64,7 +76,7 @@ export default function App() {
 
         <Route
           path="/workbench"
-          element={<WorkbenchPage />}
+          element={null}
         />
 
         <Route
@@ -87,6 +99,14 @@ export default function App() {
           element={<Navigate to="/" replace />}
         />
       </Routes>
+
+      {hasOpenedWorkbench && (
+        <WorkbenchActivityContext.Provider value={workbenchActive}>
+          <div hidden={!workbenchActive}>
+            <WorkbenchPage />
+          </div>
+        </WorkbenchActivityContext.Provider>
+      )}
 
       <footer className="ain-footer">
         <span>

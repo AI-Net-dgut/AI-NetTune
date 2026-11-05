@@ -1,5 +1,6 @@
 import { forecastRecordIds } from '../history/store';
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { WorkbenchActivityContext } from "../replay/WorkbenchActivityContext";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { ReplyText } from "../chat/DiagnosisAnswer";
@@ -20,6 +21,7 @@ export default function ForecastDialog({ request, result, pending, error, onClos
   follow?: boolean; onToggleFollow?: () => void; followStepMinutes?: number;
   onHorizonChange?: (minutes: number) => void; currentTime?: string;
 }) {
+  const workbenchActive = useContext(WorkbenchActivityContext);
   const [selected, setSelected] = useState<string | null>(null), dialog = useRef<HTMLElement>(null);
   const [globalMetric, setGlobalMetric] = useState("");
   // 当前生效的仿真配置（闭环切片 4b）：仅用于在标题旁标注，取不到就不显示
@@ -66,12 +68,14 @@ export default function ForecastDialog({ request, result, pending, error, onClos
     : leadMinutes > 0 ? `按当前趋势约 ${leadMinutes} 分钟后越阈（预计 ${alert?.start?.slice(11, 16)}）`
     : "当前频谱风险与后续走势，是否确诊以本条观测依据为准";
   useEffect(() => {
-    if (typeof document === "undefined") return;
+    if (!workbenchActive || typeof document === "undefined") return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const overflow = document.body.style.overflow; document.body.style.overflow = "hidden";
     dialog.current?.focus();
     return () => { document.body.style.overflow = overflow; if (previous?.isConnected) previous.focus(); };
-  }, []);
+  }, [workbenchActive]);
+  // 弹窗挂在 body，需单独隐藏，避免离开工作台后遮住首页或分析记录。
+  if (!workbenchActive) return null;
   const content = <div className="ain-forecast-overlay" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="ain-forecast-dialog" ref={dialog} role="dialog" aria-modal="true" aria-labelledby="ain-forecast-title" aria-describedby="ain-forecast-context" tabIndex={-1}
       onKeyDown={event => {
