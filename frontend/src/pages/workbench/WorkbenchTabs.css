@@ -5,10 +5,10 @@
   border-radius: 10px; background: #fff; box-shadow: 0 5px 18px rgb(37 76 126 / 4%);
 }
 .ain-workspace-tabs { display: flex; align-items: stretch; gap: 2px; flex: 0 0 auto; border-bottom: 1px solid #dce7f4; padding: 0 10px; background: #f7faff; }
-.ain-workspace-tabs > button { position: relative; border: 0; border-radius: 0; padding: 13px 18px; background: transparent; color: #647f9c; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ain-workspace-tabs > button { position: relative; border: 0; border-radius: 0; padding: 13px 18px; background: transparent; color: #365b82; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ain-workspace-tabs > button:hover { background: #eaf3ff; }
 .ain-workspace-tabs > button[aria-selected="true"] { color: #1769d2; background: #fff; }
 .ain-workspace-tabs > button[aria-selected="true"]::after { content: ''; position: absolute; bottom: 0; left: 16px; right: 16px; height: 3px; background: #237aed; border-radius: 3px 3px 0 0; }
-.ain-workspace-tabs > button:disabled { color: #a8b7c8; cursor: not-allowed; }
 .ain-workspace-tabs > button:focus-visible { outline: 2px solid #237aed; outline-offset: -4px; }
 .ain-workspace-tabs > span { margin: auto 0 auto auto; padding-left: 8px; color: #8c9db0; font-size: 10px; }
 .ain-workspace-body { flex: 1; min-height: 0; overflow: hidden; }
@@ -42,6 +42,10 @@
 .ain-workspace-panel .ain-forecast-param-grid { grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
 .ain-workspace-panel .ain-forecast-details .ain-reply-text p { font-size: 11px; }
 .ain-workspace-panel .ain-ai-details { margin-top: 10px; }
+.ain-workspace-mobile-actions { display: none; }
+.ain-workspace-empty { max-width: 560px; margin: clamp(12px, 4vw, 56px) auto; padding: clamp(16px, 4vw, 32px); text-align: center; border: 1px solid #d8e5f4; border-radius: 10px; background: #f7faff; }
+.ain-workspace-empty p { margin: 8px 0 16px; line-height: 1.65; color: #496681; }
+.ain-workspace-empty .ain-button { min-height: 44px; }
 .ain-question-time-settings, .ain-question-tools { margin: 8px 0; font-size: 11px; color: #7088a2; }
 .ain-question-time-settings > summary, .ain-question-tools > summary { cursor: pointer; color: #3f75ad; padding: 3px 0; }
 .ain-question-tools .ain-query-footer { display: flex; flex-wrap: wrap; gap: 7px; }
@@ -50,14 +54,19 @@
 .ain-app.ain-shell .ain-tabbed-workbench .ain-question-time-settings .ain-time-guide { display: block; }
 .ain-app.ain-shell .ain-tabbed-workbench .ain-question-time-settings .ain-reference-hint { display: block; }
 @media (max-width: 1024px) {
-  .ain-app.ain-shell .ain-tabbed-workbench > .ain-workspace-results { grid-column: 1; grid-row: 2; height: 620px; max-height: 80dvh; }
-  .ain-app.ain-shell .ain-tabbed-workbench > .ain-ai-panel.ain-ai-v3 { grid-column: 1; grid-row: 3; max-height: 600px; overflow: auto; }
+  .ain-app.ain-shell .ain-tabbed-workbench > .ain-workspace-results { height: auto; max-height: none; overflow: visible; }
+  .ain-workspace-tabs { border-radius: 10px 10px 0 0; }
+  .ain-workspace-mobile-actions { display: flex; justify-content: flex-end; padding: 4px 10px; border-bottom: 1px solid #e3ecf7; }
+  .ain-app.ain-shell .ain-tabbed-workbench .ain-workspace-mobile-actions .ain-button { min-height: 40px; }
+  .ain-workspace-body,
+  .ain-workspace-body > [role="tabpanel"] { height: auto; overflow: visible; overscroll-behavior: auto; scrollbar-gutter: auto; }
+  .ain-tabbed-workbench [role="tab"] { scroll-margin-top: 116px; }
 }
 @media (max-width: 680px) {
   .ain-workspace-tabs { padding: 0 4px; gap: 0; }
-  .ain-workspace-tabs > button { flex: 1; padding: 12px 5px; font-size: 12px; }
+  .ain-workspace-tabs > button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 8px 3px; font-size: 12px; }
   .ain-workspace-tabs > span { display: none; }
-  .ain-workspace-panel { padding: 10px; }
+  .ain-app.ain-shell .ain-tabbed-workbench .ain-workspace-panel.ain-ai-v3 { padding: 10px; }
   .ain-workspace-context small { margin-left: 0; }
   .ain-workspace-context dl > div { grid-template-columns: 56px minmax(0, 1fr); }
 }
