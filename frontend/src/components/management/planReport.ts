@@ -178,7 +178,14 @@ ${section('五、当前仿真配置状态', configurationSection(snapshot, confi
 
 export function planExportFilename(snapshot: PlanExportSnapshot, extension: 'html' | 'json') {
   const stem = `AI-NetTune_${snapshot.plan.name}_${snapshot.plan.objectIds.join('-')}_${snapshot.scope.end}`;
-  return `${stem.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/\s+/g, '_').slice(0, 140)}.${extension}`;
+  // 复查（ESLint no-control-regex）：原先正则里带 \u0000-\u001f，规则直接报错。
+  // 改成逐字符判断，行为等价：非法文件名字符与控制字符都替换为 '-'。
+  const safe = [...stem]
+    .map((ch) => (/[<>:"/\\|?*]/.test(ch) || ch.charCodeAt(0) < 32 ? '-' : ch))
+    .join('')
+    .replace(/\s+/g, '_')
+    .slice(0, 140);
+  return `${safe}.${extension}`;
 }
 
 export function downloadPlanFile(content: string, filename: string, mime: string) {
