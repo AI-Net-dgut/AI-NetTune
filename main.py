@@ -32,6 +32,7 @@ from forecast_model import build_series, DEFAULT_METRICS
 import spatial_model as _sm
 from spatial_model import build_spatial
 import plan_model
+import user_experience as ue
 import report_model
 import spectrum_frames as _sf
 import spatial_frames as _spf
@@ -1045,7 +1046,7 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
         rows = [r for r in rows if r["ap_id"] == ap_filter]
     # 指定用户时再按 user_id 收窄（"UE-03 的吞吐"必须只统计该用户，
     # 否则回答只能给整网数据，还会错说"证据中没有 UE 级指标"）。
-    user_filter = (getattr(req, "user_id", None) or "").strip().upper() or ""
+    user_filter = _normalize_ue(getattr(req, "user_id", None)) or ""
     if user_filter:
         rows = [r for r in rows if str(r.get("user_id") or "").upper() == user_filter]
     if not rows:
@@ -1514,7 +1515,9 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                             if isinstance(v, (int, float))} if isinstance(m, dict) else {},
                 "plans": [{"name": _g(p, "name"),
                            "parameters": [{"id": _g(q, "id"), "current": _g(q, "currentValue"),
-                                           "suggested": _g(q, "suggestedValue")}
+                                           "suggested": _g(q, "suggestedValue"),
+                                           "label": _g(q, "label"), "unit": _g(q, "unit"),
+                                           "objectId": _g(q, "objectId")}
                                           for q in _lst(_g(p, "parameters"))],
                            "effects": _eff(p)}
                           for p in (plans or [])][:2],
@@ -1610,15 +1613,12 @@ _PLAN_CACHE_LIMIT = 200
 
 
 def _remember_plan(plan):
-    """记住已生成的方案，供 /api/plan/simulate 反查参数定义。
-
-    方案 id 按 (AP, 故障类型, 序号) 生成，重复研判会覆盖同一条，所以缓存不会无限膨胀；
-    仍然加一个上限，避免长期运行累积（教训来自 _FORECAST_CACHE）。
-    """
+    """缓存方案快照，实例 ID 不与其他主体、时间窗复用。"""
     if len(_PLAN_CACHE) >= _PLAN_CACHE_LIMIT:
         for key in list(_PLAN_CACHE)[:50]:
             _PLAN_CACHE.pop(key, None)
-    _PLAN_CACHE[plan["id"]] = plan
+    plan.setdefault("configRevision", sim_config.revision())
+    _PLAN_CACHE[plan["id"]] = _copy.deepcopy(plan)
 
 
 class PlanSimulateRequest(BaseModel):
@@ -1645,6 +1645,16 @@ def plan_simulate(req: PlanSimulateRequest):
             ERROR_CODE["PARAM_INVALID"],
             "方案已过期（可能服务已重启），请重新发起一次研判后再仿真")
 
+    saved_scope = plan.get("scope") or {}
+    if (saved_scope.get("scenario") != req.scenario or saved_scope.get("start") != req.window_start
+            or saved_scope.get("end") != req.window_end):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "方案评估范围与原始分析不一致，请重新研判")
+    expected_ap = (plan.get("objectIds") or [None])[0]
+    if req.ap_id and _normalize_ap(req.ap_id) != expected_ap:
+        return error_response(ERROR_CODE["PARAM_INVALID"], "不能更换方案的执行 AP，请重新研判")
+    if plan.get("configRevision") != sim_config.revision():
+        return error_response(ERROR_CODE["PARAM_INVALID"], "配置版本已变化，请重新研判后再评估")
+
     if req.scenario not in VALID_SCENARIOS:
         return error_response(ERROR_CODE["PARAM_INVALID"],
                               "scenario仅支持" + "/".join(VALID_SCENARIOS))
@@ -1670,6 +1680,22 @@ def plan_simulate(req: PlanSimulateRequest):
     # 枚举参数白名单校验（审计 5.3）：前端下拉框不会传非法值，但接口是边界，
     # 必须在服务端拒绝，而不是把 "garbage" 当成与某个合法选项等效。
     _vals = req.parameter_values or {}
+    _definitions = {p["id"]: p for p in plan.get("parameters") or []}
+    if set(_vals) - set(_definitions):
+        return error_response(ERROR_CODE["PARAM_INVALID"], "请求包含该方案未定义的参数")
+    for _pid, _parameter in _definitions.items():
+        if _parameter.get("type") != "number":
+            continue
+        _number = ue.finite(_vals.get(_pid, _parameter.get("suggestedValue")))
+        if _number is None:
+            return error_response(ERROR_CODE["PARAM_INVALID"], "参数必须是有限数值")
+        _low, _high, _step = (_parameter.get(key) for key in ("min", "max", "step"))
+        if (_low is not None and _number < _low) or (_high is not None and _number > _high):
+            return error_response(ERROR_CODE["PARAM_INVALID"], "参数超出允许范围，请修改后再评估")
+        if _step is not None and _step > 0:
+            _steps = (_number - (_low or 0)) / _step
+            if abs(_steps - round(_steps)) > 1e-6:
+                return error_response(ERROR_CODE["PARAM_INVALID"], "参数未遵守允许步长")
     for _p in plan.get("parameters") or []:
         if _p.get("type") != "enum":
             continue
@@ -1683,7 +1709,7 @@ def plan_simulate(req: PlanSimulateRequest):
                 f"参数「{_p.get('label') or _p['id']}」取值 {_given!r} 不在允许范围 "
                 f"{sorted(_allowed)} 内")
 
-    ap_id = req.ap_id or plan["objectIds"][0]
+    ap_id = expected_ap
     rows = [r for r in filter_rows(req.scenario, req.window_start, req.window_end)
             if r["ap_id"] == ap_id]
     if not rows:
@@ -1691,7 +1717,15 @@ def plan_simulate(req: PlanSimulateRequest):
                               f"{ap_id} 在该窗口没有采样，无法做同条件对比")
 
     scope = {"scenario": req.scenario, "start": req.window_start, "end": req.window_end}
-    return success_response(plan_model.simulate(plan, rows, req.parameter_values or {}, scope, ap_id))
+    subject = plan.get("subject") or {"type": "ap", "id": ap_id}
+    metric_rows = None
+    if subject.get("type") == "user":
+        metric_rows = filter_rows(req.scenario, req.window_start, req.window_end,
+                                  ap_id=subject.get("apConstraint"), user_id=subject["id"])
+        if not metric_rows:
+            return error_response(ERROR_CODE["PARAM_INVALID"], "该用户在原方案范围内没有有效采样，请重新分析")
+    return success_response(plan_model.simulate(plan, rows, req.parameter_values or {}, scope, ap_id,
+                                               metric_rows=metric_rows, subject=subject))
 
 # ============ 接口3：自然语言对话（统一规则源：llm_agent.rule_intent → LLM 增强 → 工具注册表分发） ============
 class ChatRequest(BaseModel):
@@ -1805,8 +1839,8 @@ def resolve_scenario(params_scenario, default_scenario):
 def tool_query_kpi(scenario: str, win_start: str | None = None, win_end: str | None = None,
                    ap_id: str | None = None, user_id: str | None = None) -> dict:
     win_start, win_end = win_start or TOOL_WINDOW_START, win_end or TOOL_WINDOW_END
-    ap_filter = (ap_id or "").strip() or None
-    user_filter = (user_id or "").strip().upper().replace("UE-", "UE-") or None
+    ap_filter = _normalize_ap(ap_id)
+    user_filter = _normalize_ue(user_id)
     # user_id 必须真正参与过滤（复查：意图抽出了 UE-03 却在分发时丢掉，
     # 结果回答只能给整网数据，还错说"证据中没有 UE 级指标"）。
     rows = filter_rows(scenario, win_start, win_end, ap_id=ap_filter, user_id=user_filter)
@@ -2164,7 +2198,7 @@ def tool_fault_diagnosis(scenario: str, win_start: str | None = None, win_end: s
     """
     win_start, win_end = win_start or TOOL_WINDOW_START, win_end or TOOL_WINDOW_END
     ap_filter = (ap_id or "").strip() or None
-    user_filter = (user_id or "").strip().upper() or None
+    user_filter = _normalize_ue(user_id)
     an = analyze_anomaly(AnomalyRequest(scenario=scenario, window_start=win_start,
                                         window_end=win_end, ap_id=ap_filter,
                                         user_id=user_filter, message=message))
@@ -2421,15 +2455,176 @@ _DATA_HINTS = (
 )
 
 
+def _looks_like_no_data_reply(text: str) -> bool:
+    """回复本身就是"没数据/不可用"时，禁止再交给模型改写。
+
+    审查实测：问不存在的 UE-99，模板说"未找到用户"，模型却写成"该用户当前体验正常"，
+    因为守卫只认 status 字段，而这些工具分支根本没设置。这里按文案兜住。
+    """
+    cues = ("未找到", "无采样", "没有采样", "无数据", "暂无数据", "不在该场景",
+            "超出", "暂无法", "暂时不可用", "无法预测", "未覆盖",
+            # 用户级/参数缺失类回复也必须算"状态型"，不能交给模型改写
+            "没有指明", "无法做", "无法给出", "该用户不在", "不存在该用户")
+    return any(cue in (text or "") for cue in cues)
+
+
+def _plan_for_verify(plan: dict) -> dict:
+    """把 plan_model 的方案结构映射成 answer_llm 校验器认识的字段。
+
+    校验器读 plans[].parameters[].current/suggested 与 plans[].effects[].before/after，
+    而 plan_model 给的是 currentValue/suggestedValue 与 simulation.metrics，两者不一致
+    会导致工具路径上"参数对/效果对"校验整段空跑（审查实测：倾角 8→2 也能通过）。
+    """
+    params = []
+    for q in (plan.get("parameters") or []):
+        if not isinstance(q, dict):
+            continue
+        cur, sug = q.get("currentValue"), q.get("suggestedValue")
+        if isinstance(cur, (int, float)) and isinstance(sug, (int, float)):
+            params.append({"id": q.get("id"), "label": q.get("label"), "unit": q.get("unit"),
+                           "objectId": q.get("objectId"), "current": cur, "suggested": sug})
+    effects = []
+    for m in ((plan.get("simulation") or {}).get("metrics") or []):
+        if not isinstance(m, dict):
+            continue
+        before, after = m.get("before"), m.get("after")
+        if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+            effects.append({"metric": m.get("key"), "objectId": m.get("objectId"), "before": before, "after": after,
+                            "delta": round(float(after) - float(before), 2)})
+    return {"name": plan.get("name"), "parameters": params, "effects": effects}
+
+
+def _normalize_ue(value) -> str | None:
+    """把 ue3 / UE-3 / UE-03 / 3 统一成 UE-03（与 _normalize_ap 同口径）。
+
+    审查实测：模型或用户写 "ue3" 时命中不到任何采样，回答变成"没这个用户"。
+    """
+    if value is None:
+        return None
+    hit = re.fullmatch(r"(?:UE\s*[-－]?\s*)?(\d+)", str(value).strip(), re.I)
+    return f"UE-{int(hit.group(1)):02d}" if hit else None
+
+
 def _looks_like_data_query(message: str) -> bool:
     """粗判是否为数据类问题（宁可判成数据问题，也不要漏掉真实查询）。"""
     text = (message or "").strip().lower()
     return any(hint in text for hint in _DATA_HINTS)
 
 
+def tool_user_experience(scenario: str, win_start: str | None = None, win_end: str | None = None,
+                         user_id: str | None = None, message: str | None = None,
+                         ap_id: str | None = None) -> dict:
+    """用户为分析主体，AP 为配置落点；指定 AP 时只分析该 AP 下的用户采样。"""
+    win_start, win_end = win_start or TOOL_WINDOW_START, win_end or TOOL_WINDOW_END
+    uid, ap = _normalize_ue(user_id), _normalize_ap(ap_id)
+    ref = {"scenario": scenario, "start_time": win_start, "end_time": win_end,
+           "user_id": uid, "ap_id": ap}
+    def unavailable(reply, status="no_data"):
+        return {"reply": reply, "intent": "user_experience", "chart": None, "status": status,
+                "data_status": status, "plans": [], "query_ref": ref}
+    if not uid:
+        return unavailable("该问题没有指明具体用户，无法做用户级分析。", "insufficient_data")
+    if win_start > win_end:
+        return unavailable("起始时间不能晚于结束时间。", "failed")
+    rows = filter_rows(scenario, win_start, win_end, ap_id=ap, user_id=uid)
+    if not rows:
+        location = f"连接 {ap}" if ap else "在该场景"
+        return unavailable(f"未找到用户 {uid} 在 {win_start} ~ {win_end} {location}的采样，无法评估。")
+    assessment = ue.assess(rows, win_end)
+    averages = {field: ue.mean(rows, field) for field in
+                ("throughput", "sinr", "rsrp", "latency", "packet_loss", "prb_usage")}
+    aps = sorted({str(row["ap_id"]) for row in rows if row.get("ap_id")})
+    counts = {item: sum(row.get("ap_id") == item for row in rows) for item in aps}
+    plan_ap = ap or (max(counts, key=counts.get) if counts else None)
+    subject = {"type": "user", "id": uid, "servingAps": aps, "samples": len(rows),
+               "primaryAp": plan_ap, "apConstraint": ap}
+    # 只把吞吐目标解析为吞吐目标，避免把“降低时延 10%”误当吞吐提升。
+    match = re.search(r"(?:提高|提升|增加)[^。；\n%％]{0,32}?(?<![-\d.])(\d+(?:\.\d+)?)\s*[%％]", message or "")
+    pct = float(match.group(1)) if match and any(k in (message or "").lower()
+             for k in ("吞吐", "throughput", "速率", "网速")) else None
+    target = ue.goal(averages["throughput"], pct) if pct is not None else None
+    checks = assessment["checks"]
+    unmet = [c for c in checks if c["ok"] is False or c["endState"] in ("persistent_anomaly", "warning")]
+    plans = []
+    ready = assessment["dataStatus"] == "ready"
+    # 已有性能问题或明确优化目标均可评估；目标请求不必先判成故障。
+    if ready and plan_ap and (unmet or (target and target["status"] != "not_evaluable")):
+        cover_bad = any(c["metric"] in ("rsrp", "sinr") for c in unmet)
+        plan_type = "覆盖故障" if cover_bad else "网络拥塞" if unmet else "边缘弱用户"
+        ap_rows = filter_rows(scenario, win_start, win_end, ap_id=plan_ap)
+        if ap_rows:
+            scope = {"scenario": scenario, "start": win_start, "end": win_end}
+            plans = plan_model.build_plans(plan_ap, plan_type, ap_rows, scope, {"tilt": 8, "power": 33})
+            for plan in plans:
+                plan["subject"] = dict(subject)
+                if target:
+                    plan["goal"] = dict(target)
+                plan["simulation"] = plan_model.simulate(
+                    plan, ap_rows, {p["id"]: p["suggestedValue"] for p in plan["parameters"]},
+                    scope, plan_ap, metric_rows=rows, subject=subject)
+                _remember_plan(plan)
+    def fmt(value):
+        return f"{value:.1f}" if value is not None else "缺失"
+    head = (f"截至{win_end}，用户 {uid} 在该时段共 {len(rows)} 条采样，"
+            f"接入过 {'、'.join(aps) or '未知 AP'}。")
+    metrics_txt = (f"RSRP 均值 {fmt(averages['rsrp'])} dBm、SINR {fmt(averages['sinr'])} dB、"
+                   f"吞吐 {fmt(averages['throughput'])} Mbps、时延 {fmt(averages['latency'])} ms、"
+                   f"丢包 {fmt(averages['packet_loss'])}%、PRB {fmt(averages['prb_usage'])}%。")
+    if not ready:
+        verdict = "有效数据不足，无法判断整窗体验是否达标。"
+    elif assessment["windowAssessment"] == "exceeded":
+        verdict = "整窗体验未达标（项目暂定门槛）：" + "；".join(c["label"] for c in checks if c["ok"] is False)
+    else:
+        verdict = "整窗体验达标（仅指项目暂定越阈占比门槛，不代表所有时刻均正常）。"
+    end_labels = {"persistent_anomaly": "截至分析时刻存在连续异常，需要关注。",
+                  "warning": "截至分析时刻有短时越阈，需要继续观察。",
+                  "recovered": "窗口内出现过连续异常，截至分析时刻已恢复。",
+                  "within_policy": "截至分析时刻未见越阈。",
+                  "unknown": "末端数据不足或过旧，截至分析时刻的状态无法判断。"}
+    verdict += " " + end_labels[assessment["endState"]]
+    if target:
+        if target["status"] == "not_evaluable":
+            verdict += " 吞吐基线无效或为零，无法计算相对提升目标。"
+        else:
+            verdict += (f" 提高 {pct:g}% 的目标吞吐为 {target['target']:.1f} Mbps，"
+                        f"基线到目标差 {target['requiredGain']:.1f} Mbps；这是目标差距，不等于体验故障。")
+    reply = f"{head}\n{metrics_txt}\n{verdict}"
+    user_effects = []
+    if plans:
+        first = plans[0]
+        reply += f"\n可评估主服务 AP（{plan_ap}）侧候选方案：{first['name']}；效果为经验系数估计。"
+        for metric in first["simulation"]["metrics"]:
+            before, after = metric["before"], metric["after"]
+            if before is not None and after is not None:
+                user_effects.append({"metric": metric["key"], "userBefore": before, "userAfter": after,
+                                     "delta": round(after-before, 4)})
+        reply += "\n" + first["simulation"]["summary"]
+        evaluated = first["simulation"].get("goalAssessment")
+        if evaluated and evaluated["status"] in ("estimated_met", "estimated_unmet"):
+            reply += (f" 该方案预计{'达到' if evaluated['status'] == 'estimated_met' else '未达到'}提升目标，"
+                      f"预计提升 {evaluated['improvementPct']:.1f}%，距目标差 {evaluated['gap']:.1f} Mbps。")
+    else:
+        reply += "\n暂未生成可执行方案：" + ("有效数据不足，需补齐后再评估。" if not ready else
+                    "该窗口未发现需要处置的性能问题，也未给出可评估的吞吐提升目标。")
+    if target:
+        # 兼容旧消费者，但未评估目标绝不写成恒为 False 的故障检查项。
+        checks = [{"metric": "throughput_goal", "value": averages["throughput"],
+                   "threshold": target["target"], "ok": None, "kind": "goal",
+                   "label": f"距提高 {pct:g}% 的目标；需比较方案结果", "status": target["status"]}] + checks
+    return {"reply": reply, "intent": "user_experience", "chart": None,
+            "status": "ready" if ready else "insufficient_data", "data_status": assessment["dataStatus"],
+            "assessment": assessment, "plans": plans,
+            "plan_absent_reason": None if plans else reply.split("暂未生成可执行方案：")[-1],
+            "detail": {"subject": subject, "checks": checks, "assessment": assessment,
+                       "averages": averages, "target_pct": pct,
+                       "target_throughput": target["target"] if target else None,
+                       "goal": target, "userEffects": user_effects}, "query_ref": ref}
+
+
 TOOLS = {
     "query_kpi": tool_query_kpi,
     "fault_diagnosis": tool_fault_diagnosis,
+    "user_experience": tool_user_experience,
     "get_heatmap": tool_heatmap,
     "get_topology": tool_topology,
     "forecast": tool_forecast,
@@ -2470,6 +2665,8 @@ def _context_line(turns: list[dict]) -> str:
     parts = []
     for t in turns[-3:]:
         seg = f"用户问「{t.get('question', '')}」→ 识别为 {t.get('intent', '')}"
+        if t.get("user_id"):
+            seg += f"，用户 {t['user_id']}"
         if t.get("ap_id"):
             seg += f"，对象 {t['ap_id']}"
         if t.get("window_start"):
@@ -2510,9 +2707,11 @@ def agent_chat(req: ChatRequest):
     if not params.get("user_id"):
         _ue_hit = re.search(r"UE\s*[-－]?\s*0*(\d+)", req.message, re.IGNORECASE)
         if _ue_hit:
-            params["user_id"] = f"UE-{int(_ue_hit.group(1)):02d}"
-    else:
+            params["user_id"] = _normalize_ue(_ue_hit.group(0))
+    if params.get("ap_id"):
         params["ap_id"] = _normalize_ap(params["ap_id"])
+    if params.get("user_id"):
+        params["user_id"] = _normalize_ue(params["user_id"])
     hit = rule.get("hit", False)
 
     # 2. 意图层：**默认大模型优先**，规则作为兜底与参数补充。
@@ -2554,22 +2753,30 @@ def agent_chat(req: ChatRequest):
             _llm_params = {k: v for k, v in (intent_obj.get("params") or {}).items()
                            if v not in (None, "", [])}
             # 采用条件：模型真的识别成功（source=llm）、工具名合法；
-            # 且**不能把明确的规则命中降级成闲聊**（否则"为什么信号差"会退化成聊天）。
-            # 采用条件：模型真的识别成功（source=llm）、工具名合法；
-            # 且**不能把明确的规则命中降级成闲聊**，也不能对含网络关键词的问题回"闲聊"——
-            # 否则"如何将 UE3 的吞吐量提高 10%"会被答成"我建议关注 KPI"。
+            # 且**不能把规则已正确判定的强工具降级成弱工具**：
+            # 审查实测——规则判 fault_diagnosis，模型改判 get_heatmap 也被采纳，
+            # 用户直接失去研判与方案，而且响应里没有任何提示。
+            _weak_tools = ("chat", "get_heatmap", "get_topology", "query_kpi")
+            _rule_strong = hit and intent in ("fault_diagnosis", "forecast")
             _domain_hit = any(k in req.message for k in (
                 "吞吐", "RSRP", "SINR", "rsrp", "sinr", "覆盖", "拥塞", "时延", "丢包",
                 "AP-", "AP ", "UE-", "UE ", "用户", "网络", "优化", "方案", "指标", "频谱"))
+            _task_conflict = (_rule_strong and _llm_intent in _weak_tools and _llm_intent != intent)
+            _chat_conflict = _llm_intent == "chat" and (hit or _domain_hit) and intent != "chat"
             _accept_llm = (_llm_source == "llm" and isinstance(_llm_intent, str)
                            and _llm_intent in TOOLS
-                           and not (_llm_intent == "chat" and (hit or _domain_hit)))
+                           and not _task_conflict and not _chat_conflict)
             if _accept_llm:
                 intent = _llm_intent
                 intent_source = "llm"
-                params = {**params, **_llm_params}
+                # 用户显式指定的对象优先，防止模型静默改换对象。
+                _explicit = {key: params[key] for key in ("ap_id", "user_id") if params.get(key)}
+                params = {**params, **_llm_params, **_explicit}
                 if params.get("ap_id"):
                     params["ap_id"] = _normalize_ap(params["ap_id"])
+                # 模型常把用户写成 ue3 / UE-3，这里统一归一，否则查不到任何采样
+                if params.get("user_id"):
+                    params["user_id"] = _normalize_ue(params["user_id"])
                 raw_conf = intent_obj.get("confidence")
                 try:
                     intent_confidence = float(raw_conf) if raw_conf is not None else None
@@ -2581,7 +2788,9 @@ def agent_chat(req: ChatRequest):
                 if _llm_source != "llm":
                     intent_degrade_reason = str(intent_obj.get("degrade_reason")
                                                 or "模型未给出可用意图，已退回规则")
-                elif _llm_intent == "chat" and (hit or _domain_hit):
+                elif _task_conflict:
+                    intent_degrade_reason = f"模型任务 {_llm_intent} 与明确的 {intent} 请求冲突，保留原任务"
+                elif _chat_conflict:
                     intent_degrade_reason = "模型判为闲聊，但问题含网络关键词，已采用规则结果"
                 else:
                     intent_degrade_reason = f"模型给出的工具不可用（{_llm_intent!r}），已退回规则"
@@ -2604,7 +2813,10 @@ def agent_chat(req: ChatRequest):
         if not params.get("scenario") and last.get("scenario"):
             params["scenario"] = last["scenario"]
             inherited["scenario"] = last["scenario"]
-        if not params.get("ap_id") and last.get("ap_id"):
+        if not params.get("user_id") and not params.get("ap_id") and last.get("user_id"):
+            params["user_id"] = last["user_id"]
+            inherited["user_id"] = last["user_id"]
+        if not params.get("ap_id") and last.get("ap_id") and (not params.get("user_id") or params.get("user_id") == last.get("user_id")):
             params["ap_id"] = last["ap_id"]
             inherited["ap_id"] = last["ap_id"]
         if not req.window_start and last.get("window_start"):
@@ -2614,11 +2826,9 @@ def agent_chat(req: ChatRequest):
             params["time_range"] = last["time_range"]
 
     # 3. 第三层：最终兜底。
-    #    关键词未命中且没有 LLM 可用时，只有"明显不是数据问题"的才走闲聊；
-    #    像"当前各AP的RSRP"这种没有指令词但明显在问数据的，仍按 KPI 查询处理。
-    #    原实现把一切都回退 query_kpi，于是"你好"会得到一段 RSRP 均值汇报（审查报告 B-9）；
-    #    但也不能反过来把数据问题当闲聊，所以用 _looks_like_data_query 分流。
-    if not hit and not ENABLE_LLM and not _looks_like_data_query(req.message):
+    #    条件从"没开 LLM"改成"这次模型没成功"（intent_source != "llm"）：
+    #    否则配了 key 但调用超时时，"你好"会被答成一段 RSRP/SINR 均值汇报（B-9 回归，审查实测）。
+    if not hit and intent_source != "llm" and not _looks_like_data_query(req.message):
         intent = "chat"
     if intent not in TOOLS:
         intent = "chat"                 # 未知意图一律走闲聊，而不是 query_kpi
@@ -2644,9 +2854,16 @@ def agent_chat(req: ChatRequest):
             req.window_start, req.window_end = _default_window(scenario)
     # 3.5 工具链编排（阶段2）：复合问法先试编排，命中则跳过单工具分发
     chain_result = _plan_chain(req, scenario, params)
+    # 3.6 用户维度优先：问题里指定了具体用户（UE-xx）时，走**用户级**分析，
+    #     而不是把该用户的采样聚合成"AP 级故障"（那会变成问用户却答基站）。
+    _user_scoped = bool(params.get("user_id")) and intent in ("query_kpi", "fault_diagnosis")
     if chain_result is not None:
         data = chain_result
         intent = "chain"
+    elif _user_scoped:
+        intent = "user_experience"
+        data = tool_user_experience(scenario, req.window_start, req.window_end,
+                                    params.get("user_id"), req.message, ap_id=params.get("ap_id"))
     else:
         handler = TOOLS[intent]
         if intent == "forecast":
@@ -2659,6 +2876,10 @@ def agent_chat(req: ChatRequest):
             # user_id 一起传下去：否则"UE-03 的吞吐"会被当成整网问题（复查踩到）。
             data = handler(scenario, req.window_start, req.window_end,
                            params.get("ap_id"), params.get("user_id"))
+        elif intent == "user_experience":
+            # 模型直接判成"用户级体验"时也要把 user_id 传进去，否则工具只能说"没指明用户"
+            data = tool_user_experience(scenario, req.window_start, req.window_end,
+                                        params.get("user_id"), req.message, ap_id=params.get("ap_id"))
         elif intent == "chat":
             # 闲聊/能力询问：把原问题传进去，让模型回答（失败回退模板）
             data = handler(scenario, req.window_start, req.window_end, question=req.message)
@@ -2668,7 +2889,7 @@ def agent_chat(req: ChatRequest):
     _remember_turn(req.session_id, {
         "question": req.message, "intent": intent, "scenario": scenario,
         "window_start": req.window_start, "window_end": req.window_end,
-        "ap_id": params.get("ap_id"), "time_range": params.get("time_range"),
+        "ap_id": params.get("ap_id"), "user_id": params.get("user_id"), "time_range": params.get("time_range"),
     })
     # 把"这一轮用了上文什么"显式回给前端，便于展示"AI 记得上文"
     if isinstance(data, dict):
@@ -2676,8 +2897,9 @@ def agent_chat(req: ChatRequest):
         # 为什么放在这里：原先只有 analyze_anomaly 接了 answer_llm，KPI/拓扑/预测等
         # 仍是模板拼装，于是出现"意图是大模型、回答却是模板"的割裂（用户实测反馈）。
         # 状态型回复（无数据/失败/超出覆盖）保持模板，避免模型把"没数据"写成"正常"。
-        _status_only = str(data.get("status") or "") in ("no_data", "failed", "insufficient_data") \
-            or bool(data.get("error")) or not data.get("reply")
+        _status_only = str(data.get("data_status") or data.get("status") or "") in ("no_data", "failed", "insufficient_data") \
+            or bool(data.get("error")) or not data.get("reply") \
+            or _looks_like_no_data_reply(str(data.get("reply") or ""))
         # 研判路径已在 analyze_anomaly 内部生成并带了 answer_check —— 不要重复调用模型。
         # 注意：tool 返回的是 data 内层，未必带 answer_check 字段，所以再按 intent 兜一层，
         # 否则同一问题会打两次模型（实测踩到，且测试断言"每问题只调一次"会失败）。
@@ -2686,17 +2908,22 @@ def agent_chat(req: ChatRequest):
             try:
                 _tool_evidence = {
                     "intent": intent,
+                    "assessment": data.get("assessment"),
+                    "data_status": data.get("data_status") or data.get("status"),
                     "scenario": scenario,
                     # 问题本身也进证据：用户问"提高10%"，回答里出现 10% 是合法的
                     "question": req.message,
                     "window": {"start": req.window_start, "end": req.window_end},
                     "ap": params.get("ap_id"),
                     "user": params.get("user_id"),
-                    "reply_draft": str(data.get("reply"))[:800],   # 模板草稿：只作为事实来源
+                    "reply_draft": str(data.get("reply")),   # 模板草稿：只作为事实来源
                     "detail": data.get("detail") if isinstance(data.get("detail"), dict) else {},
                     "query_ref": data.get("query_ref") if isinstance(data.get("query_ref"), dict) else {},
                     "metrics": data.get("metrics") if isinstance(data.get("metrics"), dict) else {},
-                    "plans": (data.get("plans") or [])[:2] if isinstance(data.get("plans"), list) else [],
+                    # 把 plan_model 的原始结构映射成校验器认识的字段，否则工具路径上
+                    # "参数对/效果对"校验整段空跑（审查实测：把倾角 8→2 也能通过）。
+                    "plans": [_plan_for_verify(p) for p in (data.get("plans") or [])[:2]
+                              if isinstance(p, dict)],
                     "root_cause_confirmed": False,
                 }
                 _tool_answer = answer_llm.generate(req.message, _tool_evidence, llm_agent.call_llm_chat)
@@ -4652,7 +4879,7 @@ def forecast_plans(req: ForecastPlanRequest):
     _round_tag = hashlib.md5(
         f"{req.forecastId}|{alert.get('id')}".encode("utf-8")).hexdigest()
     for p in plans:
-        p["baseId"] = p["id"]                      # 保留模板原始 ID，便于对照/排查
+        p["baseId"] = p.get("templateId", p["id"])                      # 保留模板原始 ID，便于对照/排查
         p["id"] = f'{p["id"]}@{_round_tag}'
         # 内嵌仿真 ID 跟随新方案 ID：否则同一方案会出现两个仿真 ID
         # （初始 SIM-<baseId>、重算 SIM-<baseId>@tag），独立审计 P3。

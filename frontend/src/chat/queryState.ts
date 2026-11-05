@@ -35,8 +35,8 @@ export function queryReducer(state: QueryState, action: QueryAction): QueryState
   if (action.type === "failure") return { ...state, pending: false, error: action.error };
   return {
     ...state, pending: false, error: "", result: action.result,
-    diagnosisResult: action.result.diagnosis ? action.result : state.diagnosisResult,
-    diagnosisId: action.result.diagnosis ? action.id : state.diagnosisId,
-    diagnosisQuestion: action.result.diagnosis ? state.question : state.diagnosisQuestion,
+    diagnosisResult: (action.result.diagnosis || action.result.subject) ? action.result : state.diagnosisResult,
+    diagnosisId: (action.result.diagnosis || action.result.subject) ? action.id : state.diagnosisId,
+    diagnosisQuestion: (action.result.diagnosis || action.result.subject) ? state.question : state.diagnosisQuestion,
   };
 }

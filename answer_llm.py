@@ -8,7 +8,7 @@
 流水线：
     evidence(规则算出的证据) → generate()（模型写整段） → verify()（逐条核对）
       ├─ 通过 → 返回 (text, source="llm", check=ok)，界面标注"大模型生成·已校验"
-      └─ 不通过 → 带违规清单重写 1 次；仍不通过 → 返回 None，上层退回规则文案
+      └─ 不通过 → 带违规清单最多尝试 3 次；仍不通过 → 返回 None，上层退回规则文案
 
 校验项（缺一不可）：
 1. 数字必须来自证据（允许 ±0.5% 或 ±0.1 的取整误差），否则视为编造；
@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import diagnosis_focus
+import answer_guard
 
 REQUIRED_SECTIONS = ("结论", "依据", "方案")
 MAX_CHARS = 1200
@@ -59,8 +60,9 @@ SYSTEM_PROMPT = """你是无线网络运维助手。你会收到一份**已由�
 8. **不要出现内部字段名**：禁止写 plans / detail / query_ref / current / suggested /
    evidence / metrics / rule_score 这类英文内部名，请改用中文表述
    （"候选方案""当前值 / 建议值""指标"）；
-9. 总长度不超过 500 字；
-10. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
+9. 若证据含用户 assessment，必须在【结论】分别保留整窗结论与末端状态；不得将未达标改写为达标，或用整窗占比掩盖当前连续异常。
+10. 总长度不超过 500 字；
+11. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
 """
 
 # 内部字段名：模型不该把它们暴露给用户（"证据内 plans 为空"这种话用户看不懂）
@@ -86,8 +88,9 @@ def _evidence_numbers(evidence: dict) -> set[float]:
 
     def walk(node):
         if isinstance(node, dict):
-            for value in node.values():
-                walk(value)
+            for key, value in node.items():
+                if key != "question":
+                    walk(value)
         elif isinstance(node, (list, tuple)):
             for value in node:
                 walk(value)
@@ -105,15 +108,13 @@ def _evidence_numbers(evidence: dict) -> set[float]:
 
 def _evidence_ids(evidence: dict) -> set[str]:
     text = json.dumps(evidence, ensure_ascii=False)
-    return {m.upper() for m in re.findall(r"(?:AP|UE)[-－\s]?0*\d+", text)}
+    return {answer_guard.canonical_id(m) for m in re.findall(r"(?:AP|UE)[-－\s]?0*\d+", text, flags=re.I)}
 
 
 def _close_enough(value: float, pool: set[float]) -> bool:
     """数字是否可视为"来自证据"：允许取整（±0.5）与百分比换算误差。"""
     for candidate in pool:
         if abs(candidate - value) <= 0.5:
-            return True
-        if candidate and abs(value) <= 100 and abs(abs(value) - abs(candidate)) <= 0.5:
             return True
     return False
 
@@ -140,13 +141,13 @@ def verify(answer: str, evidence: dict) -> dict:
         violations.append("本次专项未确诊，仅使用确定性提示，不接受模型编写故障与方案")
     if focus.get("kind") == "priority" and focus.get("status") == "confirmed":
         conclusion = re.search(r"【结论】([^【]*)", text)
-        subject_ids = set(re.findall(r"AP-\d+", conclusion.group(1) if conclusion else ""))
-        targets = set(focus.get("target_aps") or [])
+        subject_ids = {answer_guard.canonical_id(value) for value in re.findall(r"AP[-－\s]?0*\d+", conclusion.group(1) if conclusion else "", re.I)}
+        targets = {answer_guard.canonical_id(value) for value in focus.get("target_aps") or []}
         if not subject_ids.intersection(targets) or subject_ids - targets:
             violations.append("优先级结论必须指向本次排序目标；同档及背景对象放在依据中说明")
     if focus.get("kind") in ("coverage", "congestion") and focus.get("status") == "confirmed":
-        allowed = set(focus.get("target_aps") or [])
-        stated = {m.upper().replace("－", "-").replace(" ", "") for m in re.findall(r"AP[-－\s]?0*\d+", text)}
+        allowed = {answer_guard.canonical_id(value) for value in focus.get("target_aps") or []}
+        stated = {answer_guard.canonical_id(m) for m in re.findall(r"AP[-－\s]?0*\d+", text, re.I)}
         if stated - allowed or not stated.intersection(allowed):
             violations.append("专项回答的诊断对象必须对应本次 target_aps，不能借用其他 AP 的指标")
     if focus and focus.get("status") == "confirmed" and evidence.get("current_state") == "recovered_in_window":
@@ -162,17 +163,20 @@ def verify(answer: str, evidence: dict) -> dict:
     if not focus.get("plan_eligible", True) and re.search(r"(?:预计|预期|仿真).{0,12}(?:提升|改善|降低|增加).{0,5}\d", text):
         violations.append("无对应方案时不可声称已得到量化仿真效果")
 
+    violations.extend(answer_guard.verify_assessment(text, evidence))
+    violations.extend(answer_guard.verify_measurements(text, evidence))
+
     # 1) 数字必须来自证据
     pool = _evidence_numbers(evidence)
-    unknown = sorted({n for n in _numbers(text) if not _close_enough(n, pool)})
-    # 允许 1/2/3 之类序数与年份以外的极小整数（步骤编号、条目编号）
-    unknown = [n for n in unknown if abs(n) > 5 and n not in (100.0,)]
+    numeric_text = re.sub(r"(?:AP|UE)[-－\s]?0*\d+", "", text, flags=re.I)
+    numeric_text = re.sub(r"(?m)^\s*\d+[.、)]\s*", "", numeric_text)
+    unknown = sorted({n for n in _numbers(numeric_text) if not _close_enough(n, pool)})
     if unknown:
         violations.append(f"出现证据中没有的数字：{unknown[:5]}")
 
     # 2) 对象必须来自证据
     known_ids = _evidence_ids(evidence)
-    mentioned = {m.upper().replace("－", "-").replace(" ", "") for m in re.findall(r"(?:AP|UE)[-－\s]?0*\d+", text)}
+    mentioned = {answer_guard.canonical_id(m) for m in re.findall(r"(?:AP|UE)[-－\s]?0*\d+", text, flags=re.I)}
     unknown_ids = sorted({m for m in mentioned if m not in {k.replace(" ", "") for k in known_ids}})
     if unknown_ids:
         violations.append(f"出现证据中没有的对象：{unknown_ids}")
@@ -181,14 +185,18 @@ def verify(answer: str, evidence: dict) -> dict:
     references = evidence.get("references") or []
     if references:
         labels = [str(r.get("label") or "") for r in references if r.get("label")]
-        sections = {str(r.get("section") or "").rstrip(".") for r in references if r.get("section")}
         if not any(label in text for label in labels):
             violations.append("缺少知识库引用：回答必须写出至少一条『依据：<引用标签>』")
-        # 编造章节：出现 §x.y 但不在 references 的章节里
-        cited = {m.rstrip(".") for m in re.findall(r"§\s*([\d.]+)", text)}
-        fabricated = sorted(s for s in cited if s and s not in sections)
-        if fabricated:
-            violations.append(f"引用了证据中没有的章节：{['§' + s for s in fabricated][:3]}")
+        for citation in re.finditer(r"§\s*\d+(?:\.\d+)*", text):
+            # 每一次引用都要匹配完整的文档名＋章节，不能凭同章节号放行。
+            prefix = text[:citation.end()]
+            def exact_label(label):
+                if not prefix.endswith(label):
+                    return False
+                before = prefix[:-len(label)]
+                return not before or bool(re.search(r"[：:，,。；;（(【\s]$|(?:根据|依据|参考|参照|引用|见)$", before))
+            if not any(exact_label(label) for label in labels):
+                violations.append(f"引用文档或章节不在检索结果中：{text[max(0,citation.start()-18):citation.end()]}")
 
     # 2.6) 不得泄漏提示词占位符：模型必须直接写 label 原文，不能保留 <label> 这类尖括号模板
     if "<label>" in text:
@@ -209,23 +217,15 @@ def verify(answer: str, evidence: dict) -> dict:
         if hit:
             violations.append(f"使用了确定性断言：{hit}")
 
-    # 4) 参数调整必须与证据一致 —— 只拦**硬矛盾**：
-    #    仅当"左侧数值 == 某个参数当前值"、但右侧 != 该参数建议值时才报错。
-    #    早期版本把所有 "A→B" 都当参数对，于是仿真效果（-111.06→-107.46）被误判成违规，
-    #    整段回答被拒、退回规则文案（实测踩到）。
+    # 4) 参数对和效果对均需保持方向及对应关系，不能凭数字分别存在就放行。
     pairs = _evidence_param_pairs(evidence)
-    if pairs:
-        allowed = set(pairs) | {(round(b, 2), round(a, 2)) for a, b in pairs} | _evidence_effect_pairs(evidence)
-        stated = re.findall(r"(-?\d+(?:\.\d+)?)\s*(?:°|dBm|dB|%|个)?\s*(?:→|->|调整为|调整至)\s*(-?\d+(?:\.\d+)?)", text)
-        for left, right in stated:
-            a, b = round(float(left), 2), round(float(right), 2)
-            if (a, b) in allowed:
-                continue
-            # 左侧不是任何参数的当前值 → 不是"参数调整"，交给数字检查去管
-            if not any(abs(a - cur) <= 0.5 for cur, _ in pairs):
-                continue
-            violations.append(f"参数调整与证据不一致：{left}→{right}（证据为 "
-                              + "、".join(f"{cur}→{tgt}" for cur, tgt in pairs) + "）")
+    effect_pairs = _evidence_effect_pairs(evidence)
+    allowed = set(pairs) | effect_pairs
+    stated = re.findall(r"(-?\d+(?:\.\d+)?)\s*(?:°|dBm|dB|%|个|Mbps|ms)?\s*(?:→|->|调整为|调整至)\s*(-?\d+(?:\.\d+)?)", text)
+    for left, right in stated:
+        a, b = float(left), float(right)
+        if not any(abs(a-x) <= .051 and abs(b-y) <= .051 for x,y in allowed):
+            violations.append(f"参数或效果调整与证据不一致：{left}→{right}")
 
     # 5) 方向矛盾（防"改善 −3.6 dB"）：只在**正负号明显矛盾**时报错。
     #    难点：RSRP 的绝对值本身就是负数（"提升至 -107.46 dBm"是正常表述），不能一律当增量。
@@ -313,7 +313,7 @@ def generate(question: str, evidence: dict, call_fn) -> dict:
     for attempt in range(1, ATTEMPTS + 1):
         user = (
             f"用户问题：{question}\n"
-            f"证据（JSON，{ALLOWED_TOOLS_NOTE}）：\n{json.dumps(evidence, ensure_ascii=False)[:6000]}\n"
+            f"证据（JSON，{ALLOWED_TOOLS_NOTE}）：\n{json.dumps(evidence, ensure_ascii=False)}\n"
             + (f"\n上一次回答的问题（必须修正）：{feedback}\n" if feedback else "")
         )
         try:

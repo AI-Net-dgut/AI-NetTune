@@ -2033,6 +2033,91 @@ def test_answer_verify_requires_real_citation():
     assert any("§9.9" in v or "章节" in v for v in result["violations"]), result
 
 
+def test_user_question_routes_to_user_level_analysis():
+    """问具体用户时必须走**用户级**分析（以用户为主语），不能拿 AP 级故障当答案。
+
+    复查：user_id 抽出后仍进 fault_diagnosis，于是"问 UE-03"得到"AP-03 覆盖故障"。
+    """
+    main.ENABLE_LLM = False
+    d = _data(main.agent_chat(main.ChatRequest(
+        message="如何将UE3的吞吐量提高10%", scenario=SCENARIO,
+        window_start="2026-01-02 13:53:48", window_end="2026-01-02 14:53:48",
+        session_id="user-level")))
+    assert d["intent"] == "user_experience", f"应走用户级分析，实得 {d['intent']}"
+    reply = d["reply"]
+    assert "用户 UE-03" in reply, reply[:120]
+    # 必须给出该用户自己的指标与是否达标，而不是"AP-xx 覆盖故障"
+    assert "体验" in reply and ("达标" in reply), reply[:160]
+    assert "覆盖故障" not in reply, "用户级回答不应把 AP 故障当结论"
+    detail = d["detail"]
+    assert detail["subject"]["id"] == "UE-03"
+    assert detail["subject"]["samples"] > 0
+    assert detail["target_pct"] == 10.0 and detail["target_throughput"] > 0
+    assert {c["metric"] for c in detail["checks"]} >= {"sinr", "rsrp", "latency"}
+    # 服务 AP 只作为"接入过哪些"的上下文，不主导结论
+    assert detail["subject"]["servingAps"], "应记录该用户接入过的 AP"
+
+
+def test_no_data_reply_is_never_rewritten_by_model():
+    """没数据/不存在的用户时，绝不把模型改写放上去（审查 P1-3：曾把"没有用户"写成"体验正常"）。"""
+    prev_flag, prev_intent, prev_chat = main.ENABLE_LLM, main.get_intent, main.llm_agent.call_llm_chat
+    main.ENABLE_LLM = True
+    try:
+        main.get_intent = lambda _m: {"intent": "user_experience", "params": {"user_id": "UE-99"},
+                                      "source": "llm", "confidence": 0.9}
+        main.llm_agent.call_llm_chat = lambda *_a, **_k: (
+            "【结论】该用户当前体验正常。【依据】无异常。【方案】无需调整。")
+        d = _data(main.agent_chat(main.ChatRequest(
+            message="UE99 的吞吐多少", scenario=SCENARIO,
+            window_start="2026-01-02 13:00:00", window_end="2026-01-02 14:00:00",
+            session_id="nodata-guard")))
+        assert d.get("answer_llm") is None, "无数据时不得放模型改写"
+        assert "未找到用户 UE-99" in d["reply"]
+    finally:
+        main.ENABLE_LLM, main.get_intent = prev_flag, prev_intent
+        main.llm_agent.call_llm_chat = prev_chat
+
+
+def test_strong_rule_not_downgraded_by_model():
+    """规则已判 fault_diagnosis 时，模型改判 heatmap/topology/chat 必须被拒（审查 P1-5）。"""
+    prev_flag, prev_intent = main.ENABLE_LLM, main.get_intent
+    main.ENABLE_LLM = True
+    try:
+        main.get_intent = lambda _m: {"intent": "get_heatmap", "params": {},
+                                      "source": "llm", "confidence": 0.9}
+        d = _data(main.agent_chat(main.ChatRequest(
+            message="分析 AP-02 弱覆盖的原因，给出处理方案", scenario=SCENARIO,
+            window_start="2026-01-01 10:00:00", window_end="2026-01-01 12:00:00",
+            session_id="downgrade-guard")))
+        assert d["intent"] == "fault_diagnosis", f"不应被降级成 {d['intent']}"
+        debug = d["intent_debug"]
+        assert debug["source"] == "rule"
+        assert debug.get("degrade_reason"), "应记录规则结果优先的原因"
+    finally:
+        main.ENABLE_LLM, main.get_intent = prev_flag, prev_intent
+
+
+def test_user_id_variants_are_normalized():
+    """ue3 / UE-3 / UE-03 必须都能命中同一用户（审查 P2-8）。"""
+    import main as m
+    for variant in ("ue3", "UE-3", "UE-03", "3"):
+        assert m._normalize_ue(variant) == "UE-03", variant
+    d = m.tool_user_experience(SCENARIO, "2026-01-02 13:00:00", "2026-01-02 14:00:00",
+                               "ue3", "UE3 的吞吐多少")
+    assert "用户 UE-03" in d["reply"], d["reply"][:80]
+
+
+def test_user_goal_is_reported_as_gap_not_failure():
+    """「提高 10%」是目标差距，不是体验故障；判定必须用逐条越阈占比（审查 P1-1/P1-2）。"""
+    d = main.tool_user_experience(SCENARIO, "2026-01-02 13:05:24", "2026-01-02 14:05:24",
+                                  "UE-03", "如何将UE3的吞吐量提高10%")
+    reply = d["reply"]
+    assert "目标差距" in reply, reply[:160]
+    assert "不等于体验故障" in reply, reply[:160]
+    goal = [c for c in d["detail"]["checks"] if c.get("kind") == "goal"]
+    assert goal and "距提高" in goal[0]["label"]
+
+
 def test_user_question_is_filtered_to_that_user():
     """问"UE-03 的吞吐"必须只统计该用户，不能返回整网数据（复查：user_id 被分发层丢掉）。"""
     window = ("2026-01-02 13:05:48", "2026-01-02 14:05:48")

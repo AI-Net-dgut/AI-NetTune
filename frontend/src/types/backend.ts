@@ -1,3 +1,4 @@
+import type { UserAssessment } from './plan';
 import type { TreatmentPlan } from "./plan";
 export interface QueryScope { scenario: string; start: string; end: string }
 export const METRIC_META = {
@@ -117,6 +118,7 @@ export interface ChainStep {
   baseTime?: string;
 }
 export interface ChatResult {
+  userAssessment?: UserAssessment;
   reply: string; intent: string; scope: QueryScope; diagnosis: Diagnosis | null;
   plans?: TreatmentPlan[];
   chart: { type: string; option: Record<string, unknown> } | null;
@@ -128,6 +130,8 @@ export interface ChatResult {
   /** 工具回复的 AI 版本（KPI/拓扑/预测等路径）：模型写、校验通过才有值 */
   answerLlm?: string;
   answerCheck?: { ok: boolean; violations: string[]; source: string; attempts?: number };
+  /** 用户级分析的主体（问"UE-03"时）：方案落在其主服务 AP，界面必须交代这层关系 */
+  subject?: { type: "user"; id: string; servingAps: string[]; primaryAp?: string; samples: number; apConstraint?: string };
   /** 复合编排里预测步骤的摘要（目标 AP、时长、风险条数、首条风险标题）——
    *  复查 P1-8：不能只给"已执行两步"，要能看出预测的是哪个 AP、看到了几条风险。 */
   chainForecast?: {

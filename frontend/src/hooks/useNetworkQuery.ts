@@ -36,7 +36,7 @@ export default function useNetworkQuery() {
       record({id:recordId || undefined,parentId,role,kind:"analysis",question:message.trim(),scope:response.scope,analysisTime:response.scope.end,masterTime:options?.currentTime,mode:options?.analysisMode,status:"completed",payload:{response,workspace:options?.workspaceSnapshot}});
       for(const plan of response.plans??[])if(plan.simulation && recordId && !options?.preserveDiagnosis)record({kind:"simulation",parentId:recordId,question:`${plan.name} · 初始预计效果`,scope:response.scope,analysisTime:response.scope.end,status:"completed",payload:{plan,values:Object.fromEntries(plan.parameters.map(p=>[p.id,String(p.suggestedValue??'')])),result:plan.simulation}});
       if (revision.current !== token) return;
-      setArchiveId(options?.preserveDiagnosis && parentId ? parentId : response.diagnosis ? recordId || undefined : undefined);
+      setArchiveId(options?.preserveDiagnosis && parentId ? parentId : (response.diagnosis || response.subject) ? recordId || undefined : undefined);
       dispatch({ type: "success", id: token, result: response });
       setHistory(previous => [{ id: token, question: message.trim(), answer: response.reply,
         failed: false, scope: `${response.scope.scenario} · ${response.scope.start} — ${response.scope.end}`,

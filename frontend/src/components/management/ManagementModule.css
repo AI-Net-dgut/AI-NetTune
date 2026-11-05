@@ -59,6 +59,16 @@
 .ain-management-integrated .ain-manual-tasks { margin-top: 7px; padding: 8px 10px; border-left: 2px solid #d2aa66; background: #fffcf5; color: #7b6747; font-size: 12px; line-height: 1.6; }
 .ain-management-integrated .ain-manual-tasks ul { margin: 4px 0 0; padding-left: 18px; }
 .ain-management-integrated .ain-effect-conclusion { margin-bottom: 6px; color: #397f78; font-size: 12px; line-height: 1.65; }
+/* 全部指标对比表：一次看全，不必在下拉里逐个挑 */
+.ain-management-integrated .ain-effect-table { width: 100%; border-collapse: collapse; margin: 0 0 8px; font-size: 11px; }
+.ain-management-integrated .ain-effect-table caption { caption-side: top; text-align: left; color: #5b7186; padding-bottom: 4px; }
+.ain-management-integrated .ain-effect-table th,
+.ain-management-integrated .ain-effect-table td { padding: 3px 6px; border-bottom: 1px solid #eef3f9; text-align: right; white-space: nowrap; }
+.ain-management-integrated .ain-effect-table thead th { color: #627b94; font-weight: 500; border-bottom: 1px solid #dfe9f4; }
+.ain-management-integrated .ain-effect-table tbody th { text-align: left; color: #4c657e; font-weight: 400; }
+.ain-management-integrated .ain-effect-table td small { color: #8296aa; font-size: 10px; }
+.ain-management-integrated .ain-effect-table td.is-up { color: #2f7d4a; }
+.ain-management-integrated .ain-effect-table td.is-down { color: #b3261e; }
 .ain-management-integrated .ain-effect-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-bottom: 7px; }
 .ain-management-integrated .ain-effect-values > div { min-width: 0; padding: 7px; border-radius: 6px; background: #f2f7fc; }
 .ain-management-integrated .ain-effect-values span, .ain-management-integrated .ain-effect-values small { display: block; color: #74899f; font-size: 10px; line-height: 1.6; }

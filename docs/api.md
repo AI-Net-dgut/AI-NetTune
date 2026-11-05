@@ -406,7 +406,7 @@ GET /api/data/events?scenario=校园
 > 之前被误放在本接口章节里，现已标注归属。
 
 ### 附：接口 3 的降级机制
-1.  关键词规则优先匹配，不依赖LLM即可完成意图识别
+1.  默认调用大模型解析意图；模型不可用时由规则兜底，明确的研判/预测请求受任务冲突保护；NETTUNE_LLM_INTENT_FIRST=0 可切换为规则优先
 2.  未命中关键词、输入模糊时，默认兜底为 `query_kpi`（KPI概况查询）；对与数据无关的问题兜底 `chat`
 3.  LLM不可用时，自动降级为关键词规则+兜底逻辑，核心功能可用
 
@@ -1168,7 +1168,7 @@ POST /api/forecast/analyze
 
 ### 限制（必须知道）
 
-- 参数值在服务端按方案定义**再夹一次范围**，非法值不会算进结论；但前端仍应先校验再提交。
+- 参数值在服务端按方案定义校验有限性、范围、步长和枚举白名单；非法值或未知参数返回 40002，不产生评估结果。
 - 方案缓存为进程内字典（上限 200 条，满后按 FIFO 淘汰 50 条），**服务重启后旧 plan_id 失效**。
 - 天线下倾角 / 发射功率的"当前值"是默认工参（数据表没有工参字段），已在 `assumptions` 里写明。
 - 未评估对邻区的连带影响与切换冲击，`limitations` 里已写明。
@@ -1323,3 +1323,16 @@ POST /api/forecast/analyze
 |坐标越界，或该窗口无采样|40003|
 
 
+
+
+## 用户体验、方案实例与目标评估（2026-11-06 修正）
+
+- `user_experience` 支持用户级体验与吞吐提升目标。指定 AP＋UE 时仅统计两者匹配的采样；无匹配数据返回 `no_data`，不会改查其他 AP。
+- `assessment` 同时返回 `dataStatus`、`windowAssessment`、`endState`、逐项有效采样越阈占比和连续异常区间。整窗比例通过不能覆盖末端异常；缺失、NaN、无穷均不当成 0。
+- 暂定参数：越阈占比 10%，连续异常 5 个相邻分钟，至少 10 个有效样本、有效比例至少 80%，末端新鲜度 90 秒。RSRP < −105 dBm、SINR < 5 dB、时延 > 50 ms；均为本项目经验设定，不代表通用业务 SLA，后续需实网标定。重复分钟不增加持续时长，缺分钟打断连续段。
+- 可用 `NETTUNE_UE_BAD_SHARE_LIMIT`、`NETTUNE_UE_PERSIST_MINUTES`、`NETTUNE_UE_MIN_SAMPLES`、`NETTUNE_UE_MIN_VALID_SHARE`、`NETTUNE_UE_FRESHNESS_SECONDS` 调整以上参数；修改后重启后端。
+- 方案 `id` 为独立实例，`templateId` 仅标识模板；缓存保存深拷贝。重评估固定场景、窗口、执行 AP、用户及配置修订号，不能靠复用模板 ID 读取另一轮方案。
+- `plan.subject` 为分析主体，`objectIds` 为配置执行 AP。用户指标按该用户逐条采样计算，仅改变其连接执行 AP 时的采样；覆盖和趋势仍是 AP 范围。`simulation.subject` 明确这两种范围，前端与报告均保留。
+- 吞吐目标固定基线：`target = baseline × (1 + percent / 100)`。`plan.goal.status=pending`，方案后用 `simulation.goalAssessment` 返回 `estimated_met/estimated_unmet`、预计提升率和距目标差距。零基线为 `not_evaluable`，不计算相对提升率。健康用户也可以进行目标导向的候选方案评估。
+- 模型正文最多尝试 3 次（包含首次），无数据或有效数据不足时不生成改写。用户体验状态、参数/效果方向、带单位 KPI 和完整知识引用均参与检查；校验失败回退工具正文。校验不是语义正确性的绝对保证，引用仍需人工复核支持关系。
+- 方案预估仍使用经验系数；配置应用仅模拟 RSRP 与 PRB，吞吐等预估不代表已经在应用后数据中实现。

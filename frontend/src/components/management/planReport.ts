@@ -1,3 +1,6 @@
+import { endStateLabels, goalLabels, windowAssessmentLabels } from '../../services/userExperience';
+import type { UserAssessment } from '../../types/plan';
+import type { ChatResult } from '../../types/backend';
 import { METRIC_META } from '../../types/backend';
 import type { Diagnosis, QueryScope } from '../../types/backend';
 import type { TreatmentPlan } from '../../types/plan';
@@ -12,6 +15,8 @@ export interface PlanExportInput {
   plan: TreatmentPlan;
   parameterValues: Record<string, string>;
   diagnosis: Diagnosis | null;
+  userSubject?: ChatResult["subject"];
+  userAssessment?: UserAssessment;
   historicalBaseline: BaselineSnapshot | null;
   exportedAt: string;
 }
@@ -90,13 +95,14 @@ function configurationSection(snapshot: PlanExportSnapshot, configuration: Confi
 }
 
 export function renderPlanReport(snapshot: PlanExportSnapshot, configuration: ConfigurationSnapshot): string {
-  const { plan, diagnosis, simulation, scope } = snapshot;
+  const { plan, diagnosis, simulation, scope, userSubject, userAssessment } = snapshot;
   const statusLabels: Record<Diagnosis['currentState'], string> = {
     fault_active: '截至分析时刻仍有故障', recovered_in_window: '窗口内发生过异常，截至分析时刻已恢复',
     performance_warning: '性能提示，未确诊故障', normal: '当前范围未发现明显异常',
   };
   const overview = table(['项目', '内容'], [
-    ['场景 / 目标对象', `${scope.scenario} / ${plan.objectIds.join('、') || '未指定'}`],
+    ['场景 / 分析对象', `${scope.scenario} / ${userSubject?.id || plan.subject?.id || plan.objectIds.join('、') || '未指定'}`],
+    ['配置执行对象', plan.objectIds.join('、') || '未指定'],
     ['分析时间（北京时间）', `${scope.start} — ${scope.end}`],
     ['对应问题', snapshot.question || '未记录原始提问'],
     ['报告生成时间（北京时间）', time(snapshot.exportedAt)],
@@ -106,6 +112,15 @@ export function renderPlanReport(snapshot: PlanExportSnapshot, configuration: Co
     ? `<div class="notice">${escapeHtml(diagnosis.state === 'empty' ? '当前范围没有可分析数据' : statusLabels[diagnosis.currentState] || '状态未提供')}</div>`
       + diagnosisParagraphs(diagnosis).filter(item => item.title !== '判断依据').map(item => `<h3>${escapeHtml(item.title)}</h3>${paragraph(item.text)}`).join('')
     : paragraph('未取得与本次范围一致的研判快照，请回到页面核查后重新导出。');
+  if (userAssessment) {
+    findings = paragraph(windowAssessmentLabels[userAssessment.windowAssessment])
+      + paragraph(endStateLabels[userAssessment.endState]) + paragraph(userAssessment.policy.source)
+      + table(['指标判据', '有效样本 / 总样本', '越阈占比', '整窗判断'], userAssessment.checks.map(c => [
+        c.label, `${c.validSamples} / ${c.totalSamples}`, c.share == null ? '无法计算' : `${number(c.share*100)} %`,
+        c.ok == null ? '有效数据不足' : c.ok ? '未超过暂定门槛' : '超过暂定门槛']))
+      + (userAssessment.anomalySpans.length ? table(['指标', '开始', '结束', '连续分钟'], userAssessment.anomalySpans.map(a => [
+        a.metric, a.start, a.end, String(a.minutes)])) : '');
+  }
   if (diagnosis?.anomalySpans.length) findings += `<h3>异常区间</h3>` + table(
     ['对象', '异常类型', '开始（北京时间）', '结束（北京时间）', '时长（分钟）'],
     diagnosis.anomalySpans.map(span => [span.apId, span.type, span.start, span.end, number(span.minutes)]));
@@ -150,6 +165,16 @@ export function renderPlanReport(snapshot: PlanExportSnapshot, configuration: Co
             : `${delta > 0 ? '+' : ''}${number(delta)} ${unit === '%' ? '个百分点' : m.key === 'rsrpDbm' ? 'dB' : unit}`];
       })) + `<h3>评估方法</h3>${paragraph(simulation.method)}<h3>建模假设</h3>${list(simulation.assumptions)}<h3>评估限制</h3>${list(simulation.limitations)}`
     : `<div class="notice">待重新评估：未取得与当前参数和分析范围匹配的有效仿真结果。请在页面重新运行仿真后再导出。</div>`;
+  if (simulation?.subject?.type === 'user') effects += paragraph(
+    `指标对象为 ${simulation.subject.id}；覆盖与趋势图为执行 AP ${simulation.subject.primaryAp} 范围。仅改变用户连接该 AP 时的采样。`);
+  const target = simulation?.goalAssessment ?? plan.goal;
+  if (target) effects += `<h3>吞吐提升目标</h3>` + table(['项目', '内容'], [
+    ['评估状态', simulation?.goalAssessment ? goalLabels[target.status] : '待重新评估'],
+    ['固定基线', `${number(target.baseline)} Mbps`], ['提升目标', `${number(target.percent)} %`],
+    ['目标吞吐', `${number(target.target)} Mbps`],
+    ['方案后预计吞吐', simulation?.goalAssessment ? `${number(target.predicted)} Mbps` : '待重新评估'],
+    ['距目标差距', simulation?.goalAssessment ? `${number(target.gap)} Mbps` : '待重新评估'],
+  ]);
   effects += paragraph('方案预估采用经验模型；配置生效后的数据转换目前仅调整 RSRP 与 PRB，占用率变化不等于其他业务指标已经改善。频谱预警与预测仍基于原始频谱，本轮未模拟配置对频谱的影响。指标改善也不等于故障已消除。');
   const actions = `<h3>适用条件</h3>${list(plan.conditions)}<h3>代价与风险</h3>${list(plan.tradeoffs)}<h3>人工核查与交接</h3>${list(plan.tasks)}${paragraph('执行前核查适用条件，执行后在同一统计口径下复核指标与剩余风险。实际网络调整仍需现场验证。')}`;
   return `<!doctype html>

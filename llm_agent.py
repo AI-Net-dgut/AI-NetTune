@@ -22,7 +22,7 @@ BLACKLIST_PATTERNS = [
 ]
 
 # 与 main.TOOLS 的键保持一致（模型只允许返回这些动作名，其它一律按不可解析降级）
-TOOL_NAMES = {"query_kpi", "fault_diagnosis", "get_heatmap", "get_topology", "forecast", "chat"}
+TOOL_NAMES = {"query_kpi", "fault_diagnosis", "get_heatmap", "get_topology", "forecast", "chat", "user_experience"}
 
 # 因果问句 + 网络故障词 → 走故障研判，不能被黑名单打成"概念解释"。
 # 依据：核查清单第 3 条实测——"为什么 AP-03 信号差"落到 query_kpi，
@@ -56,9 +56,10 @@ ANOMALY_PATTERNS = [
 
 # ===== 结构化 JSON Prompt（cell-free build_unified_prompt 借鉴：强制固定 JSON 输出，一次调用完成分类+抽参）=====
 SYSTEM_PROMPT = """你是无线网络监测平台的意图解析器。用户输入一句关于网络监测的自然语言，请判断意图并提取参数，只输出一个 JSON，不要输出任何其他文字、注释或解释：
-{"action": "query_kpi | fault_diagnosis | get_heatmap | get_topology | forecast | chat", "scenario": "校园|商场|体育馆", "params": {...}, "confidence": 0-1}
+{"action": "query_kpi | fault_diagnosis | get_heatmap | get_topology | forecast | user_experience | chat", "scenario": "校园|商场|体育馆", "params": {...}, "confidence": 0-1}
 - query_kpi：查KPI数据。params 含 metric(rsrp/sinr/throughput)、time_range(如"最近1小时"、"12:34到12:50")
 - fault_diagnosis：故障研判。用户询问网络体验/质量/好坏/是否正常/分析原因/拥塞/信号差等问题时，优先选本意图
+- user_experience：具体用户的体验或吞吐优化。params 必须提取 user_id，若指定 AP 则同时提取 ap_id
 - get_heatmap：热力图。params 含 metric(默认rsrp)
 - get_topology：网络拓扑
 - forecast：未来预测/预警。用户问"未来/预测/接下来/会怎样/会不会出问题"时选本意图
@@ -66,7 +67,8 @@ SYSTEM_PROMPT = """你是无线网络监测平台的意图解析器。用户输�
 规则：
 1. scenario 必须从用户输入提取，没提到就用空字符串""
 2. 用户提到具体时间或时间段（如"12:34到12:50"、"最近1小时"、"昨天14点"、"01-02 09:30到11:30"）时，必须提取到 params.time_range；用户没说时间就不写，不要编造
-3. 输出必须是合法 JSON，不要带 Markdown 代码块标记"""
+3. 用户明确提到 AP 或 UE 编号时必须提取 params.ap_id / params.user_id，不得更换对象
+4. 输出必须是合法 JSON，不要带 Markdown 代码块标记"""
 
 
 def build_unified_prompt(message: str) -> str:

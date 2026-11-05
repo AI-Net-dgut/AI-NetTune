@@ -41,11 +41,11 @@ export default function DiagnosisAnswer({ result, onEvidence, showScope = true }
     <DiagnosisEvidence diagnosis={diagnosis} summarizedEvidenceCount={answerText || diagnosis.answerFocus ? 0 : 4} />
     {/* 诊断：为什么没有 AI 文本（不猜，直接显示后端返回的校验状态）。
         answerCheck 缺失 = 后端进程还是旧代码（没有 answer_llm/answer_check 字段）。 */}
-    {!answerText && <details className="ain-ai-details">
-      <summary>AI 文本状态（排查用）</summary>
+    {<details className="ain-ai-details">
+      <summary>回答生成与校验状态</summary>
       {diagnosis.answerCheck ? <>
         <p>是否通过校验：{diagnosis.answerCheck.ok ? "通过" : "未通过"}；来源：{diagnosis.answerCheck.source}
-          {diagnosis.answerCheck.attempts ? `；重写次数：${diagnosis.answerCheck.attempts}` : ""}</p>
+          {diagnosis.answerCheck.attempts ? `；生成尝试次数（含首次）：${diagnosis.answerCheck.attempts}` : ""}</p>
         {diagnosis.answerCheck.violations.length > 0 && <ul>
           {diagnosis.answerCheck.violations.map((line, i) => <li key={i}>{line}</li>)}
         </ul>}

@@ -1,3 +1,4 @@
+import { goalLabels } from '../../services/userExperience';
 import { useState } from 'react';
 import type { EChartsOption } from 'echarts';
 import type { SimulationResult } from '../../types/plan';
@@ -24,15 +25,40 @@ export default function PlanEffects({ result, hideSummary = false }: { result: S
     series: [{ type: 'bar', barMaxWidth: 38, data: [ { value: m?.before ?? null, itemStyle: { color: '#8da4be' } }, { value: m?.after ?? null, itemStyle: { color: '#238f90' } } ] }] };
   const c = result.coverage, projection = c ? createProjection(c.area) : null;
   return <>
+    {result.subject?.type === 'user' && <p className="ain-management-muted" role="note">
+      指标对象：{result.subject.id}；配置执行 AP：{result.subject.primaryAp}。
+      覆盖图与趋势图展示该 AP 范围，不能视为该用户的移动轨迹或个人趋势。
+    </p>}
+    {result.goalAssessment && <p className="ain-effect-conclusion">
+      提升目标：{goalLabels[result.goalAssessment.status]}；基线 {result.goalAssessment.baseline ?? '缺失'} Mbps，
+      目标 {result.goalAssessment.target ?? '无法计算'} Mbps，预计 {result.goalAssessment.predicted ?? '待评估'} Mbps，
+      距目标差 {result.goalAssessment.gap ?? '待评估'} Mbps。
+    </p>}
     {/* 有 AI 回答时隐藏模板总结句（AI 已写【预计效果】），但保留数值条与图；
         模板原文仍可在折叠区查看，信息不丢。 */}
     {result.summary && !hideSummary && <p className="ain-effect-conclusion">{result.summary}</p>}
     {result.summary && hideSummary && <details className="ain-ai-details">
       <summary>查看模板版效果说明</summary><p>{result.summary}</p>
     </details>}
-    <div className="ain-effect-values">{result.metrics.slice(0, 3).map((item, i) => <div key={`${item.objectId}-${item.key}-${i}`}>
-      <span>{item.objectId} · {METRIC_META[item.key].label}</span><strong>{displayMetric(item.before ?? undefined)} <small>→</small> {displayMetric(item.after ?? undefined)}</strong>
-      <small>{METRIC_META[item.key].unit} · 差值 {item.before !== null && item.after !== null ? displayMetric(item.after - item.before) : '—'}</small></div>)}</div>
+    {/* 全部指标一次列清：不要让人在下拉里逐个挑（用户反馈：还得自己挨个看）。 */}
+    <table className="ain-effect-table">
+      <caption>{result.metrics[0]?.objectId ? `${result.metrics[0].objectId} · 全部指标对比` : "全部指标对比"}</caption>
+      <thead><tr><th>指标</th><th>保持原配置</th><th>采用方案</th><th>变化</th></tr></thead>
+      <tbody>
+        {result.metrics.map((item, i) => {
+          const meta = METRIC_META[item.key];
+          const delta = item.before !== null && item.after !== null ? item.after - item.before : null;
+          return <tr key={`${item.objectId}-${item.key}-${i}`}>
+            <th scope="row">{meta.label}</th>
+            <td>{displayMetric(item.before ?? undefined)} <small>{meta.unit}</small></td>
+            <td>{displayMetric(item.after ?? undefined)} <small>{meta.unit}</small></td>
+            <td className={delta === null ? "" : delta > 0 ? "is-up" : delta < 0 ? "is-down" : ""}>
+              {delta === null ? "—" : `${delta > 0 ? "+" : ""}${displayMetric(delta)}`}
+            </td>
+          </tr>;
+        })}
+      </tbody>
+    </table>
     <div className="ain-ai-chart-actions ain-effect-tabs">
       <button type="button" className="ain-button" aria-pressed={view === 'metrics'} onClick={() => setView('metrics')}>指标对比</button>
       {t?.points.length ? <button type="button" className="ain-button" aria-pressed={view === 'trend'} onClick={() => setView('trend')}>趋势对比</button> : null}

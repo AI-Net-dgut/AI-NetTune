@@ -1,3 +1,4 @@
+import { parseGoal, parseSubject } from './userExperience';
 import { METRIC_META } from '../types/backend';
 import type { MetricKey, QueryScope } from '../types/backend';
 import type { ParameterValue, PlanParameter, SimulationResult, TreatmentPlan } from '../types/plan';
@@ -30,7 +31,7 @@ function simulation(v: unknown, expected: QueryScope): SimulationResult | null {
   const areaNumbers = [number(a.xMin), number(a.xMax), number(a.yMin), number(a.yMax)];
   const coverageValid = areaNumbers.every(v => v !== null) && Number(a.xMax) > Number(a.xMin) && Number(a.yMax) > Number(a.yMin)
     && number(cell.x) !== null && Number(cell.x) > 0 && number(cell.y) !== null && Number(cell.y) > 0;
-  return { id: string(s.id), status: s.status as SimulationResult['status'], scope: ownScope, method: string(s.method), summary: string(s.summary),
+  return { id: string(s.id), status: s.status as SimulationResult['status'], subject: parseSubject(s.subject), goalAssessment: parseGoal(s.goalAssessment), scope: ownScope, method: string(s.method), summary: string(s.summary),
     assumptions: strings(s.assumptions), limitations: strings(s.limitations), parameterValues: params,
     metrics: list(s.metrics).flatMap(v => { const m = object(v); return metric(m.key) ? [{ key: m.key, objectId: string(m.objectId), before: number(m.before), after: number(m.after) }] : []; }),
     trend: metric(t.metric) ? { metric: t.metric, objectId: string(t.objectId), points: list(t.points).flatMap(v => {
@@ -49,7 +50,7 @@ export function parsePlans(v: unknown, expected: QueryScope): TreatmentPlan[] {
     const parameters = list(p.parameters).map(parameter).filter((p): p is PlanParameter => p !== null);
     if (parameters.length !== list(p.parameters).length || new Set(parameters.map(p => p.id)).size !== parameters.length) return [];
     ids.add(id);
-    return [{ id, name: string(p.name), description: string(p.description), scope: ownScope, objectIds: strings(p.objectIds), goals: list(p.goals).filter(metric),
+    return [{ id, subject: parseSubject(p.subject), goal: parseGoal(p.goal), name: string(p.name), description: string(p.description), scope: ownScope, objectIds: strings(p.objectIds), goals: list(p.goals).filter(metric),
       conditions: strings(p.conditions), tradeoffs: strings(p.tradeoffs), tasks: strings(p.tasks), parameters, simulation: simulation(p.simulation, ownScope) }];
   });
 }

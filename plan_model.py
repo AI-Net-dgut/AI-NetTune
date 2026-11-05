@@ -16,6 +16,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import simulation_engine
+import user_experience as ue
+import uuid
 
 # ---- 经验系数（全部可调，改动请同步 docs/api.md 的"方案仿真口径"）----
 TILT_DB_PER_DEGREE = 1.2      # 下倾角每减小 1°，边缘 RSRP 约 +1.2 dB
@@ -143,9 +145,8 @@ def _mean(rows, key, adjust=None):
         raw = r.get(key)
         if raw in (None, ""):
             continue
-        try:
-            v = float(raw)
-        except (TypeError, ValueError):
+        v = ue.finite(raw)
+        if v is None:
             continue
         if adjust is not None:
             v = adjust(v)
@@ -160,9 +161,8 @@ def _weak_ratio(rows, d_rsrp):
         raw = r.get("rsrp")
         if raw in (None, ""):
             continue
-        try:
-            v = float(raw)
-        except (TypeError, ValueError):
+        v = ue.finite(raw)
+        if v is None:
             continue
         total += 1
         if v + d_rsrp < WEAK_RSRP_DBM:
@@ -220,6 +220,8 @@ def _trend(rows, d_rsrp, ap_id):
             v = float(raw)
         except (TypeError, ValueError):
             continue
+        if ue.finite(v) is None:
+            continue
         key = dt - timedelta(minutes=dt.minute % 10, seconds=dt.second)
         buckets.setdefault(key, []).append(v)
     if len(buckets) < 2:
@@ -244,6 +246,8 @@ def _coverage(rows, d_rsrp, ap_id):
             x, y, v = float(r["ue_x"]), float(r["ue_y"]), float(r["rsrp"])
         except (KeyError, TypeError, ValueError):
             continue
+        if any(ue.finite(value) is None for value in (x, y, v)):
+            continue
         ix = int((x - SCENE_AREA["xMin"]) // GRID)
         iy = int((y - SCENE_AREA["yMin"]) // GRID)
         cells.setdefault((ix, iy), []).append(v)
@@ -261,35 +265,40 @@ def _coverage(rows, d_rsrp, ap_id):
     return {"area": dict(SCENE_AREA), "cellSize": {"x": GRID, "y": GRID}, "points": points[:400]}
 
 
-def simulate(plan, rows, param_values, scope, ap_id):
+def simulate(plan, rows, param_values, scope, ap_id, metric_rows=None, subject=None):
     """用给定参数值重算仿真结果；结构等同于 plans[].simulation。"""
     d_rsrp, d_prb = _deltas_from_values(param_values, plan)
 
-    before = {
-        "rsrpDbm": _mean(rows, "rsrp"),
-        "sinrDb": _mean(rows, "sinr"),
-        "throughputMbps": _mean(rows, "throughput"),
-        "latencyMs": _mean(rows, "latency"),
-        "packetLossPct": _mean(rows, "packet_loss"),
-        "resourceUtilizationPct": _mean(rows, "prb_usage"),
-    }
-    after = {
-        "rsrpDbm": _mean(rows, "rsrp", lambda v: min(-40.0, v + d_rsrp)),
-        "sinrDb": _mean(rows, "sinr", lambda v: min(40.0, v + d_rsrp * SINR_PER_RSRP)),
-        "throughputMbps": _mean(rows, "throughput",
-                                lambda v: max(0.0, v * (1.0 + d_rsrp * THROUGHPUT_PER_DB
-                                                        - d_prb * THROUGHPUT_PER_PRB))),
-        "latencyMs": _mean(rows, "latency", lambda v: max(1.0, v * (1.0 + d_prb * LATENCY_PER_PRB))),
-        "packetLossPct": _mean(rows, "packet_loss", lambda v: max(0.0, v * (1.0 + d_prb * LOSS_PER_PRB))),
-        "resourceUtilizationPct": _mean(rows, "prb_usage",
-                                        lambda v: min(100.0, max(0.0, v + d_prb))),
-    }
-    metrics = [{"key": k, "objectId": ap_id, "before": before[k], "after": after[k]}
-               for k in ("rsrpDbm", "sinrDb", "throughputMbps",
-                         "latencyMs", "packetLossPct", "resourceUtilizationPct")]
+    # 用户指标按该用户逐样本计算；只改变其连接执行 AP 时的采样。
+    # 空间图与趋势保留 AP 采样，不用 AP 均值增量平移用户均值。
+    metric_rows = rows if metric_rows is None else metric_rows
+    keys = {"rsrpDbm": "rsrp", "sinrDb": "sinr", "throughputMbps": "throughput",
+            "latencyMs": "latency", "packetLossPct": "packet_loss",
+            "resourceUtilizationPct": "prb_usage"}
+    adjusted = []
+    for row in metric_rows:
+        item = dict(row)
+        if row.get("ap_id") == ap_id:
+            transforms = {
+                "rsrp": lambda v: min(-40., v + d_rsrp),
+                "sinr": lambda v: min(40., v + d_rsrp * SINR_PER_RSRP),
+                "throughput": lambda v: max(0., v * (1 + d_rsrp * THROUGHPUT_PER_DB - d_prb * THROUGHPUT_PER_PRB)),
+                "latency": lambda v: max(1., v * (1 + d_prb * LATENCY_PER_PRB)),
+                "packet_loss": lambda v: min(100., max(0., v * (1 + d_prb * LOSS_PER_PRB))),
+                "prb_usage": lambda v: min(100., max(0., v + d_prb)),
+            }
+            for field, transform in transforms.items():
+                value = ue.finite(row.get(field))
+                item[field] = transform(value) if value is not None else None
+        adjusted.append(item)
+    before = {key: _mean(metric_rows, field) for key, field in keys.items()}
+    after = {key: _mean(adjusted, field) for key, field in keys.items()}
+    subject = dict(subject or {"type": "ap", "id": ap_id})
+    metrics = [{"key": key, "objectId": subject["id"], "before": before[key], "after": after[key]}
+               for key in keys]
 
-    weak_before = _weak_ratio(rows, 0.0)
-    weak_after = _weak_ratio(rows, d_rsrp)
+    weak_before = _weak_ratio(metric_rows, 0.0)
+    weak_after = _weak_ratio(adjusted, 0.0)
     # 只把**确实发生变化**的指标写进结论，避免"RSRP −99.43 → −99.43（+0.0）"这种噪声
     parts = []
     dr = None
@@ -310,7 +319,7 @@ def simulate(plan, rows, param_values, scope, ap_id):
         ratio = after["latencyMs"] / before["latencyMs"] - 1.0
         if abs(ratio) >= 0.01:
             parts.append(f"时延 {before['latencyMs']} → {after['latencyMs']} ms（{ratio * 100:+.0f}%）")
-    summary = f"{plan['name']}： " + ("；".join(parts) if parts else "各指标基本不变") + "。"
+    summary = (f"（{subject['id']} 维度）" if subject["type"] == "user" else "") + f"{plan['name']}： " + ("；".join(parts) if parts else "各指标基本不变") + "。"
 
     # RSRP 无变化时（如拥塞类方案：分流/载波扩容只影响 PRB），
     # trend/coverage 的 before 与 after 完全相同，属于冗余数据，直接不返回。
@@ -322,6 +331,11 @@ def simulate(plan, rows, param_values, scope, ap_id):
         "status": "completed",
         "scope": dict(scope),
         "method": SIM_METHOD,
+        "subject": {**subject, "primaryAp": ap_id, "coverageScope": "ap", "trendScope": "ap",
+                    "note": "指标为分析对象维度；覆盖图与趋势图为执行 AP 范围"},
+        "goalAssessment": ue.goal((plan.get("goal") or {}).get("baseline"),
+                                  (plan.get("goal") or {}).get("percent"), after["throughputMbps"])
+                          if plan.get("goal") else None,
         "summary": summary,
         "assumptions": list(SIM_ASSUMPTIONS),
         "limitations": list(SIM_LIMITATIONS),
@@ -341,9 +355,11 @@ def build_plans(ap_id, anomaly_type, rows, scope, base):
     templates = _templates(ap_id, anomaly_type, base)
     plans = []
     for i, tpl in enumerate(templates, 1):
-        plan_id = f"PLAN-{ap_id}-{tpl['slug']}-{i}"
+        template_id = f"PLAN-{ap_id}-{tpl['slug']}-{i}"
+        plan_id = f"{template_id}-{uuid.uuid4().hex}"
         plan = {
             "id": plan_id,
+            "templateId": template_id,
             "name": tpl["name"],
             "description": tpl["description"].format(
                 tilt=base["tilt"], tilt_new=base["tilt"] - 3,

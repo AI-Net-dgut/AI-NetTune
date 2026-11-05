@@ -1,3 +1,4 @@
+import { parseAssessment } from './userExperience';
 import { parsePlans, parseSimulation } from "./planContract";
 import type { SimulationResult, TreatmentPlan } from "../types/plan";
 import type {
@@ -526,6 +527,7 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
     worstAp: str(data.worst_ap) || undefined,
     horizonMinutes: data.horizon_minutes == null ? undefined : numeric(data.horizon_minutes),
     plans: parsePlans(data.plans, scope),
+    userAssessment: parseAssessment(data.assessment),
     // 复合编排也要解析诊断（复查 P1-8）：原来只在 intent=fault_diagnosis 时解析 detail，
     // 于是"哪个 AP 最差，未来 3 小时会怎样"只显示了步骤摘要，证据与方案全丢。
     diagnosis: data.detail && (intent === "fault_diagnosis" || data.kind === "chain")
@@ -545,6 +547,20 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
         apId: str(fc.apId ?? fc.ap_id) || undefined,
       };
     })() : undefined,
+    // 用户级分析：主体是"某个用户"，其主服务 AP 只作为方案落点（界面要写清这层关系）
+    subject: (() => {
+      const detail = data.detail ? obj(data.detail) : null;
+      const sub = detail?.subject ? obj(detail.subject) : null;
+      if (!sub || str(sub.type) !== "user") return undefined;
+      return {
+        type: "user" as const,
+        id: str(sub.id),
+        servingAps: strings(sub.servingAps),
+        primaryAp: str(sub.primaryAp) || undefined,
+        apConstraint: str(sub.apConstraint) || undefined,
+        samples: numeric(sub.samples),
+      };
+    })(),
     // 所有工具回复的 AI 版本（KPI/拓扑/预测等）：模型写、校验通过才有值
     answerLlm: str(data.answer_llm) || undefined,
     answerCheck: data.answer_check ? (() => {

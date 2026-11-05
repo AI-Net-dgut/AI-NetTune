@@ -1,3 +1,4 @@
+import { endStateLabels, windowAssessmentLabels } from '../services/userExperience';
 import type { ReactNode } from "react";
 import { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from 'react-dom';
@@ -254,7 +255,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           {!forecastMode && query.question && /\bUE[-－\s]?0*\d+\b/i.test(query.question) && (
             <p className="ain-ai-note" role="note">
               本次提问涉及具体用户：平台的处理方案按 <strong>AP / 区域</strong> 生成；
-              该用户的连接与体验请用「连接分配」或「用户横向对比」查看，单用户级参数优化不在本模块范围。
+              指标按指定用户评估，配置调整落在其服务 AP；预计效果采用经验系数，可能影响其他用户。
             </p>)}
           {!forecastMode && query.pending && <p className="ain-ai-pending" role="status">正在查询固定分析时刻的数据…{analysis ? "下方保留此辅助查询关联的研判。" : "本次结果尚未返回，上一轮研判和方案已清空。"}</p>}
           {!forecastMode && query.error && <div className="ain-query-error" role="alert"><p>{query.error}</p>
@@ -262,6 +263,19 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           {mismatch && <p className="ain-ai-warning">本次返回范围与已加载数据不同，请核对范围后使用结果。</p>}
           {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，方案暂不可采用，辅助图使用已加载数据。</p>}
           {!query.pending && !query.error && result && !result.diagnosis && <div className="ain-ai-tool-reply">
+            {/* 用户级分析：先说清"分析对象是谁、方案落在哪"，否则方案里出现 AP-01 会像答非所问 */}
+            {result.userAssessment && <div className="ain-ai-result-scope" role="note">
+              <p>{windowAssessmentLabels[result.userAssessment.windowAssessment]}；{endStateLabels[result.userAssessment.endState]}。</p>
+              <p>{result.userAssessment.policy.source}</p>
+            </div>}
+            {result.subject && (
+              <p className="ain-ai-result-scope">
+                分析对象：<strong>用户 {result.subject.id}</strong>（{result.subject.samples} 条采样；
+                接入过 {result.subject.servingAps.join("、") || "未知 AP"}；
+                主服务 AP：<strong>{result.subject.primaryAp ?? "未判定"}</strong>）
+                {result.plans?.length ? "；下方方案以该 AP 为落点" : ""}
+              </p>
+            )}
             {/* 工具回复的 AI 版本（KPI/拓扑/预测等）：通过校验才显示，否则显示模板文案。
                 之前只有"故障研判"有 AI 标记，KPI 类回复全是模板，看起来像没用大模型。 */}
             {result.answerLlm && result.answerCheck?.ok
@@ -324,6 +338,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   const planContent = (<>
 {!forecastMode && (data && (analysis || (!query.pending && !query.error && result)) ? <ManagementModule key={`${data.generatedAt}-${query.diagnosisId}`} ref={managementRef} data={data}
         diagnosis={null} chatDiagnosis={diagnosis} focusedApId={focusedApId} disabled={busy} plans={analysisMismatch ? [] : analysis?.plans ?? result?.plans}
+        userAssessment={analysisMismatch ? undefined : (analysis?.userAssessment ?? result?.userAssessment)}
+        subject={analysisMismatch ? undefined : (analysis?.subject ?? result?.subject)}
         sourceQuestion={diagnosisQuestion || query.question} pending={query.pending} archiveParentId={query.archiveId} />
         : <section className="ain-ai-management-empty" aria-label="处理建议与效果"><h3>处理建议与效果</h3><p>{query.pending ? "正在研判本次问题，方案将在结果返回后展示。" : query.error ? "本次研判未完成，请返回问题研判页重试。" : "本次回答未提供处理方案，可继续提问需要处理的异常及目标。"}</p></section>)}
   </>);

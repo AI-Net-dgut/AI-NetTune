@@ -1,3 +1,4 @@
+import type { UserAssessment } from '../../types/plan';
 import { record } from "../../history/store";
 import { useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { Ref } from 'react';
@@ -16,10 +17,13 @@ import SimConfigBar from './SimConfigBar';
 import PlanEffects from './PlanEffects';
 import './ManagementModule.css';
 
-export default function ManagementModule({ data, diagnosis, chatDiagnosis, focusedApId, disabled = false, plans: providedPlans = [], ref, sourceQuestion = '', pending = false, archiveParentId }: {
+export default function ManagementModule({ data, diagnosis, chatDiagnosis, focusedApId, disabled = false, plans: providedPlans = [], ref, sourceQuestion = '', pending = false, archiveParentId, subject, userAssessment }: {
   ref?: Ref<ManagementHandle>; data: DashboardData; diagnosis: Diagnosis | null; chatDiagnosis: Diagnosis | null;
   focusedApId: string | null; disabled?: boolean; plans?: TreatmentPlan[];
   sourceQuestion?: string; pending?: boolean; archiveParentId?: string;
+  /** 用户级分析主体：方案落在其主服务 AP，界面必须写明这层关系 */
+  userAssessment?: UserAssessment;
+  subject?: { type: "user"; id: string; servingAps: string[]; primaryAp?: string; samples: number; apConstraint?: string };
 }) {
   const panelRef = useRef<HTMLElement>(null);
   const active = chatDiagnosis || diagnosis;
@@ -110,7 +114,7 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     try {
       // 在任何异步操作之前冻结，期间切换方案/修改参数也不会串入报告。
       const snapshot = capturePlanExport({ scope: data.scope, question: sourceQuestion, plan: effectivePlan,
-        parameterValues: values, diagnosis: active, historicalBaseline: baseline, exportedAt: new Date().toISOString() });
+        parameterValues: values, diagnosis: active, userSubject: subject, userAssessment, historicalBaseline: baseline, exportedAt: new Date().toISOString() });
       let configuration: ConfigurationSnapshot = { status: null, checkedAt: new Date().toISOString() };
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 3000);
@@ -184,6 +188,15 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
       disabled={disabled || mismatch || pending}
     />
     <section className="ain-plan-suggestions" aria-labelledby="ain-plan-heading">
+      {/* 用户级分析：先交代"对象是谁、方案落在哪"，否则方案卡里的 AP-01 会像答非所问 */}
+      {subject && (
+        <p className="ain-management-muted">
+          分析对象：<strong>用户 {subject.id}</strong>（{subject.samples} 条采样；接入过
+          {subject.servingAps.join("、") || "未知 AP"}；主服务 AP：
+          <strong>{subject.primaryAp ?? "未判定"}</strong>）
+          {plans.length ? "；以下方案以该 AP 为落点" : ""}
+        </p>
+      )}
       <div className="ain-ai-subheading"><h4 id="ain-plan-heading">处理建议</h4><span>{plans.length ? `${plans.length} 个方案` : '等待研判'}</span></div>
       {plans.length ? <div className="ain-plan-list">{plans.map(plan => <button type="button" key={plan.id} className={`ain-suggestion-card${selected?.id === plan.id ? ' is-selected' : ''}`}
         disabled={disabled || mismatch} aria-pressed={selected?.id === plan.id} onClick={() => choose(plan)}>
