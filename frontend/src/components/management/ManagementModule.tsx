@@ -9,7 +9,9 @@ import { sameQueryScope } from '../../chat/diagnosisModel';
 import { buildBaseline } from './managementDraft';
 import { METRIC_META } from '../../types/backend';
 import { displayMetric } from '../../services/metrics';
-import { simulatePlan } from '../../services/backend';
+import { fetchSimConfig, simulatePlan } from '../../services/backend';
+import { capturePlanExport, downloadPlanFile, planExportFilename, renderPlanReport } from './planReport';
+import type { ConfigurationSnapshot } from './planReport';
 import SimConfigBar from './SimConfigBar';
 import PlanEffects from './PlanEffects';
 import './ManagementModule.css';
@@ -41,6 +43,8 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
   // "改参数后重算"的结果：按方案 id 存放，避免不同方案的仿真串台
   const [rerun, setRerun] = useState<{ planId: string; result: SimulationResult } | null>(null);
   const [simPending, setSimPending] = useState(false);
+  const [exportPending, setExportPending] = useState(false);
+  const exportingRef = useRef(false);
   const errors = selected ? selected.parameters.map(p => validateParameter(p, values[p.id] ?? '')) : [];
   const baselineAp = selected?.objectIds.length === 1 ? selected.objectIds[0] : focusedApId;
   const baseline = !mismatch && baselineAp ? buildBaseline(data, baselineAp) : null;
@@ -98,20 +102,28 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
     if(selected)archivePlan('parameters',selected);
     setEditorOpen(false); setError(''); setNotice('参数已保留在当前方案中；变更后的预计效果需重新评估。');
   }
-  function exportPlan() {
-    if (!selected || disabled || mismatch) return;
+  async function exportPlan(format: 'html' | 'json' = 'html') {
+    if (!effectivePlan || disabled || mismatch || exportingRef.current) return;
     const first = errors.find(Boolean); if (first) { setError(first); setEditorOpen(true); return; }
-    let url = '';
+    exportingRef.current = true;
+    setExportPending(true); setError(''); setNotice('正在整理方案报告…');
     try {
-      const payload = { version: 1, kind: 'simulation_plan_draft', scope: data.scope, plan: selected,
-        parameterValues: values, simulation: currentEffect, historicalBaseline: baseline, exportedAt: new Date().toISOString() };
-      // 旧仿真不随修改后的方案导出，以免混淆参数与结果版本。
-      payload.plan = { ...selected, simulation: currentEffect };
-      url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }));
-      const a = document.createElement('a'); a.href = url; a.download = 'AI-NetTune-simulation-plan.json'; document.body.appendChild(a); a.click(); a.remove();
-      setNotice('方案下载已发起。'); setError('');
-    } catch { setError('方案导出失败，请检查浏览器下载设置。'); }
-    finally { if (url) window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      // 在任何异步操作之前冻结，期间切换方案/修改参数也不会串入报告。
+      const snapshot = capturePlanExport({ scope: data.scope, question: sourceQuestion, plan: effectivePlan,
+        parameterValues: values, diagnosis: active, historicalBaseline: baseline, exportedAt: new Date().toISOString() });
+      let configuration: ConfigurationSnapshot = { status: null, checkedAt: new Date().toISOString() };
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 3000);
+      try {
+        configuration = { status: await fetchSimConfig(controller.signal), checkedAt: new Date().toISOString() };
+      } catch { /* 只读状态查询失败不阻止导出；报告明确写“未核实”。 */ }
+      finally { window.clearTimeout(timeout); }
+      const content = format === 'html' ? renderPlanReport(snapshot, configuration)
+        : JSON.stringify({ ...snapshot, configuration }, null, 2);
+      downloadPlanFile(content, planExportFilename(snapshot, format), format === 'html' ? 'text/html' : 'application/json');
+      setNotice(format === 'html' ? '方案报告下载已发起。用浏览器打开可阅读或打印为 PDF。' : 'JSON 数据下载已发起。');
+    } catch { setNotice(''); setError('方案导出失败，请检查浏览器下载设置后重试。'); }
+    finally { exportingRef.current = false; setExportPending(false); }
   }
 
   if (active?.answerFocus?.planEligible === false) return <section ref={panelRef} className="ain-management-integrated" id="ain-management-panel" aria-labelledby="ain-management-title">
@@ -211,8 +223,10 @@ export default function ManagementModule({ data, diagnosis, chatDiagnosis, focus
           <ul>{[...new Set(active.candidates.flatMap(c => c.checks))].map(item => <li key={item}>{item}</li>)}</ul></details>}
         {(selected.conditions.length > 0 || selected.tradeoffs.length > 0) && <details className="ain-ai-details"><summary>适用条件与代价</summary>
           <p>条件：{selected.conditions.join('；') || '未提供'}</p><p>代价／限制：{selected.tradeoffs.join('；') || '未提供'}</p></details>}
-        <div className="ain-plan-actions"><button type="button" className="ain-button" disabled={disabled || mismatch} onClick={exportPlan}>导出方案</button>
-          <span className="ain-management-muted">新研判或刷新前可导出保留</span></div>
+        <div className="ain-plan-actions" aria-busy={exportPending}>
+          <button type="button" className="ain-button ain-primary" disabled={disabled || mismatch || exportPending} onClick={() => void exportPlan()}>{exportPending ? '正在整理…' : '导出方案报告'}</button>
+          <button type="button" className="ain-button" disabled={disabled || mismatch || exportPending} onClick={() => void exportPlan('json')}>导出 JSON 数据</button>
+          <span className="ain-management-muted">报告可离线阅读、打印为 PDF</span></div>
       </> : <p className="ain-management-empty">选择方案后，自动展示配置或人工检查项。</p>}
       {error && <p className="ain-management-warning" role="alert">{error}</p>}{notice && <p className="ain-management-notice" role="status">{notice}</p>}
     </section>
