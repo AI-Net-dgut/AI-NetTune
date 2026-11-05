@@ -13,7 +13,7 @@ export const REPLAY_CONFIG: ReplayConfig = {
   scenario: "校园",
   start: "2026-01-01 00:00:00",
   end: "2026-01-07 23:59:00",
-  playbackStart: "2026-01-02 14:10:00",
+  playbackStart: "2026-01-02 14:05:00",
   initialSpeed: 4,
   realSecondsPerMinute: 10,
   historyMinutes: 60,
