@@ -116,31 +116,22 @@
 
 ## 技术架构
 
-**分层与依赖方向**（单向向下，上层不直接读 CSV；GitHub 原生渲染，无需插件）：
+**分层与依赖方向**（单向向下，上层不直接读 CSV）：
 
-```mermaid
-flowchart TD
-    FE["浏览器<br/>React 19 · TypeScript · ECharts"]
-    API["FastAPI 路由层<br/>17 个业务接口 · 统一错误码 · 限流 · 超时"]
-    TOOLS["工具体层<br/>query_kpi · fault_diagnosis · get_heatmap<br/>get_topology · forecast · chat"]
-    LLM["★ LLM 层（本平台核心）<br/>① 意图识别：规则优先，模型兜底<br/>② 回答生成：基于已算好的证据<br/>③ harness 校验：数字 / 对象 / 断言 / 结构<br/>④ 不通过 → 重写 ≤3 次 → 退回规则文案"]
-    MODEL["模型层<br/>阈值判据（40/50 频段 · 连续 3 分钟）<br/>plan_model · forecast_model（Prophet）· spatial_model（Kriging）"]
-    DATA["数据层<br/>network_data_30d.csv · spectrum_7d.csv · fault_events.csv<br/>启动读入内存 + 时间戳二分索引；原始数据只读"]
+![AI-NetTune 分层架构](docs/brand/architecture.svg)
 
-    FE -->|"fetch /api/*"| API
-    API --> TOOLS
-    TOOLS -->|"证据包"| LLM
-    LLM -->|"整段解释 / 意图"| TOOLS
-    TOOLS --> MODEL
-    MODEL --> DATA
+**各层职责速查**：
 
-    classDef llm fill:#e8f2ff,stroke:#1685ff,stroke-width:2px,color:#0b2b4a
-    classDef plain fill:#f7fafc,stroke:#c7d7e8,color:#1f3448
-    class LLM llm
-    class FE,API,TOOLS,MODEL,DATA plain
-```
+| 层 | 具体内容 |
+|---|---|
+| 浏览器 | React 19 + TypeScript + ECharts（KPI 趋势 / 热力 / 拓扑 / 序列态势）|
+| FastAPI 路由层 | 17 个业务接口 + 统一错误码 / 限流 / 超时 |
+| 工具体层 | `query_kpi`、`fault_diagnosis`、`get_heatmap`、`get_topology`、`forecast`、`chat` |
+| **★ LLM 层** | ① 意图识别（规则优先、模型兜底）② 回答生成（基于已算好的证据）③ harness 校验（数字/对象/断言/结构）④ 不通过 → 重写 ≤3 次 → 退回规则文案 |
+| 模型层 | 阈值判据（40/50 频段 · 连续 3 分钟）、`plan_model`、`forecast_model`（Prophet，失败降级移动平均）、`spatial_model`（Kriging，失败降级网格均值）|
+| 数据层 | `network_data_30d.csv`、`spectrum_7d.csv`、`fault_events.csv`；启动读入内存 + 时间戳二分索引，原始数据只读，仿真偏移在读取时叠加 |
 
-> 上图用 Mermaid 绘制，GitHub 会直接渲染成方框图；若你的编辑器不显示 Mermaid，下面"LLM 层"一节的文字链路是同一份内容。
+> 上图为矢量图（`docs/brand/architecture.svg`），可无损缩放，也可直接放进 Word/PPT；下方表格是同一份内容的文字版。
 
 ### LLM 层（本平台核心，可降级、可核查）
 
