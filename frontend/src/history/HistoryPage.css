@@ -31,6 +31,8 @@
 .history-section { border-top: 1px solid #e8eef5; margin-top: 14px; padding-top: 12px; }
 .history-section h3 { margin: 0 0 10px; font-size: 15px; }
 .history-answer { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; }
+.history-example .history-question-heading > span { display: inline-block; padding: 3px 8px; border-radius: 4px; background: #edf5ff; }
+.history-example > .ain-button { display: inline-flex; margin-top: 14px; }
 .history-plan { padding: 12px 14px; margin-top: 10px; border: 1px solid #e0e9f3; border-radius: 7px; }
 .history-plan h4 { margin: 0 0 10px; font-size: 14px; color: #315779; }
 .history-plan-source { display: inline-block; margin-left: 10px; padding: 1px 7px; border-radius: 9px; background: #eef4fb; color: #4c6f95; font-size: 11px; font-weight: 400; vertical-align: middle; }
