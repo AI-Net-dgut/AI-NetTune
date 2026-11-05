@@ -317,14 +317,17 @@ export default function WorkbenchPage({ config = REPLAY_CONFIG }: { config?: Rep
   // 入口必须展示**独立检查**的结果（复查 P1-1）：打开弹窗前也要能更新；
   // 检查失败时显示"检查失败"，绝不能显示成"0 项/无风险"。
   const forecastSummary = forecast.summary;
+  // 固定时刻下摘要按冻结基准只检查一次；把"截至时刻"写进标签，避免用户以为它跟随主时钟。
+  const frozenSuffix = (clock.locked || clock.viewMode === "analysis") && forecastSummary.status === "ready" && forecastSummary.baseTime
+    ? ` · 截至 ${forecastSummary.baseTime.slice(11, 16)}` : "";
+  // 已有上一次结果时的后台重算不切换文案（否则 4× 播放每 15 秒闪一次"检查中…"）
   const forecastEntryLabel = forecastSummary.status === "error" ? "风险检查失败"
     : forecastSummary.status === "loading" ? "检查中…"
       : forecastSummary.status === "ready"
-        ? `${forecastSummary.alertCount} 项${forecastSummary.alertCount > 0 ? "需关注" : "（未检出风险）"}`
+        ? `${forecastSummary.alertCount} 项${forecastSummary.alertCount > 0 ? "需关注" : "（未检出风险）"}${frozenSuffix}`
         : forecastNoticeResult?.status === "ready"
           ? `${forecastNoticeResult.source === "demo" ? "示例·" : "最近查看·"}${forecastNoticeResult.alerts.length}项`
-          : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测";
-  const forecastEntryCount = forecastSummary.status === "ready" ? forecastSummary.alertCount
+          : FORECAST_CONFIG.mode === "demo" ? "示例预览" : "查看预测";  const forecastEntryCount = forecastSummary.status === "ready" ? forecastSummary.alertCount
     : forecastSummary.status === "error" ? 0
       : (forecastNoticeResult?.status === "ready" ? forecastNoticeResult.alerts.length : 0);
   const forecastEntryTime = forecastSummary.baseTime || forecastNoticeResult?.baseTime;

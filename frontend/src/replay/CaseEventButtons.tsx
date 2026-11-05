@@ -64,8 +64,13 @@ export default function CaseEventButtons({ state, act, scope, disabled = false, 
       const typeLabel = TYPE_LABEL[event.faultType] ?? event.faultType;
       // 按钮上带**完整日期**（MM-DD HH:mm）：6 个案例跨 7 天，只显示时分会分不清
       // （10-30 清单第 2 点要求按状态显示状态与完整日期）。
-      const label = `${event.apId} ${typeLabel}案例 ${event.start.slice(5, 16)}开始`
-        + (phase === "running" ? "（事件进行中）" : "");
+      // 复查（用户反馈："事件进行中"却看不到什么时候才真的异常）：
+      // 追加"真实首次越阈"时刻——注入开始 ≠ 越阈，两者常差十几分钟。
+      const crossingText = event.crossingAt
+        ? ` · ${event.crossingAt.slice(11, 16)} 起越阈${event.crossingBands ? `（${event.crossingBands} 频段）` : ""}`
+        : "";
+      const label = `${event.apId} ${typeLabel}案例 ${event.start.slice(5, 16)} 注入${crossingText}`
+        + (phase === "running" ? "（进行中）" : "");
       const phaseText = phase === "pending"
         ? "未开始（主时钟尚未到事件开始时刻）"
         : phase === "running"

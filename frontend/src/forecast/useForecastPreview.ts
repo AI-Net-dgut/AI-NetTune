@@ -31,6 +31,11 @@ export interface ForecastSummary {
   baseTime: string;
   /** 结果是按哪个主时钟时刻算的，用于展示"基准时间"与判断过期 */
   checkedAt: number;
+  /**
+   * 后台重算中（已有上一次结果）。复查（用户实测）：不要因为重算就把标签切回"检查中…"，
+   * 否则 4× 播放时每 15 秒闪一次；保留上一次结论，静默更新即可。
+   */
+  refreshing?: boolean;
   error: string;
 }
 
@@ -47,6 +52,8 @@ export default function useForecastPreview({ clock, config, readClock }: {
   // 入口摘要独立于弹窗：自己的请求序号与中止器，避免与弹窗请求互相打断
   const [summary, setSummary] = useState<ForecastSummary>({ status: 'idle', alertCount: 0, baseTime: '', checkedAt: 0, error: '' });
   const summarySerial = useRef(0), summaryAbort = useRef<AbortController | null>(null), summarySlot = useRef(-1);
+  // 进行中标记：播放很快时避免"下一个分钟立刻中断上一个请求"导致永远 loading
+  const summaryInFlight = useRef(false);
   const close = useCallback(() => {
     serial.current++; controller.current?.abort(); controller.current = null; sessionRef.current = null;
     setState(previous => ({ ...previous, session: null, result: null, pending: false, error: '' }));
@@ -131,10 +138,20 @@ export default function useForecastPreview({ clock, config, readClock }: {
    */
   const summaryKey = replayContextKey(clock);
   useEffect(() => {
-    const canRun = clock.ready && !clock.locked && clock.viewMode === 'live' && clock.playing && follow && !visible;
+    // 复查（用户实测反馈）：入口摘要原先只在"跟随播放"时运行，一旦固定时刻/进入分析，
+    // 摘要就停在上一次的值，界面却仍显示"N 项（未检出风险）"——与弹窗按冻结基准算出的结果矛盾。
+    // 现在：固定时刻也检查一次（时间不前进 → 同一 slot 只发一次请求），保证入口与弹窗同基准。
+    const liveRun = !clock.locked && clock.viewMode === 'live' && clock.playing && follow && !visible;
+    const frozenRun = (clock.locked || clock.viewMode === 'analysis') && !visible;
+    const canRun = clock.ready && (liveRun || frozenRun);
     if (!canRun) { summarySlot.current = -1; return; }
     const currentSlot = Math.floor(clock.currentMs / summaryStepMs);
     if (currentSlot === summarySlot.current) return;
+    // 复查（用户实测：入口长期停在"检查中…"）：原来每到新的一模拟分钟就 abort 上一轮，
+    // 被中断的那轮直接 return，状态就永远停在 loading。播放 4×（15 秒/分钟）时请求还没回来
+    // 就被下一轮打断，于是"时间都到了还什么都没显示"。
+    // 现在：**不打断进行中的检查**，完成后再取最新一轮；并且无论成功/失败/被中断，状态都要收敛。
+    if (summaryInFlight.current) return;
     summarySlot.current = currentSlot;
     const scope = viewScope(config, clock);
     const minutes = horizonRef.current;
@@ -143,18 +160,26 @@ export default function useForecastPreview({ clock, config, readClock }: {
         scenario: config.scenario, baseTime: scope.end, history: { start: scope.start, end: scope.end }, horizonMinutes: minutes,
       }),
     };
-    summaryAbort.current?.abort();
     const abort = new AbortController(); summaryAbort.current = abort;
     const id = ++summarySerial.current;
-    setSummary(previous => ({ ...previous, status: 'loading' }));
+    summaryInFlight.current = true;
+    // 已有结果时不退回 loading（否则标签会周期性闪烁），只标记"后台刷新中"
+    setSummary(previous => (previous.status === 'ready'
+      ? { ...previous, refreshing: true }
+      : { status: 'loading', alertCount: 0, baseTime: '', checkedAt: clock.currentMs, error: '' }));
+    const settle = (next: ForecastSummary) => {
+      if (summarySerial.current !== id) return;
+      summaryInFlight.current = false;
+      setSummary({ ...next, refreshing: false });
+    };
     void loadForecast(request, abort.signal).then(result => {
-      if (summarySerial.current !== id || abort.signal.aborted) return;
-      setSummary({ status: 'ready', alertCount: result.alerts.length, baseTime: result.baseTime,
+      if (abort.signal.aborted) return;
+      settle({ status: 'ready', alertCount: result.alerts.length, baseTime: result.baseTime,
         checkedAt: clock.currentMs, error: '' });
     }).catch((reason: unknown) => {
-      if (summarySerial.current !== id || abort.signal.aborted) return;
+      if (abort.signal.aborted) { summaryInFlight.current = false; return; }
       const conflict = reason instanceof Error && /结束时间|基准|一致的/i.test(reason.message);
-      setSummary({ status: 'error', alertCount: 0, baseTime: '', checkedAt: clock.currentMs,
+      settle({ status: 'error', alertCount: 0, baseTime: '', checkedAt: clock.currentMs,
         error: conflict ? '预测范围与请求不一致（可能无数据或基准时刻已变）'
           : (reason instanceof Error ? reason.message : '预测检查失败') });
     });

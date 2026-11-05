@@ -122,6 +122,10 @@ export interface FaultEvent {
   rampMinutes: number;
   strength: number;
   labeledFromExpect: string;
+  /** 真实首次越阈时刻（yyyy-MM-dd HH:mm）；注入开始 ≠ 真的越阈，注入通常早十几分钟 */
+  crossingAt: string;
+  crossingBands: number | null;
+  crossingMetric: string;
 }
 
 /**
@@ -148,6 +152,10 @@ export async function fetchFaultEvents(scenario?: string, signal?: AbortSignal):
       rampMinutes: numeric(e.ramp_minutes),
       strength: numeric(e.strength),
       labeledFromExpect: str(e.labeled_from_expect),
+      // 真实首次越阈（≥40/50 且连续 3 分钟）；注入时刻通常比它早十几分钟
+      crossingAt: e.crossingAt ? str(e.crossingAt) : "",
+      crossingBands: e.crossingBands == null ? null : numeric(e.crossingBands),
+      crossingMetric: e.crossingMetric ? str(e.crossingMetric) : "",
     };
   });
 }

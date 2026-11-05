@@ -2621,6 +2621,63 @@ def agent_chat(req: ChatRequest):
     return {"code": 0, "message": "success", "data": data}
 
 
+_EVENT_CROSSING_CACHE: dict[str, dict] = {}
+
+
+def _event_crossing(event_id: str, ap: str, start: str, end: str) -> dict:
+    """事件的**真实首次越阈时刻**（≥40/50 频段且连续 3 分钟）。
+
+    动机：事件清单里的 start_time 是"故障注入开始"，而电磁功率是渐变的，
+    真正达到判据往往晚十几分钟。不把两者区分开，界面就会显示"事件进行中"
+    却一条预警都没有（用户实测困惑）。这里只读已发生的频谱数据，不用预测。
+    """
+    if not event_id or not ap or not start:
+        return {"crossingAt": None, "crossingBands": None, "crossingMetric": None}
+    cached = _EVENT_CROSSING_CACHE.get(event_id)
+    if cached is not None:
+        return cached
+    by_ap = (_SPEC or {}).get("by_ap") or {}
+    frame = by_ap.get(ap)
+    if frame is None:
+        result = {"crossingAt": None, "crossingBands": None, "crossingMetric": None}
+        _EVENT_CROSSING_CACHE[event_id] = result
+        return result
+    import pandas as _pd
+    bands = (_SPEC or {}).get("bands") or []
+    required = _min_crossing_bands(len(bands) or 50)
+    lo = _pd.Timestamp(start) - _pd.Timedelta(minutes=30)
+    hi = (_pd.Timestamp(end) if end else _pd.Timestamp(start)) + _pd.Timedelta(minutes=30)
+    sub = frame[(frame["timestamp"] >= lo) & (frame["timestamp"] <= hi)]
+    result = {"crossingAt": None, "crossingBands": None, "crossingMetric": None}
+    if not sub.empty:
+        for metric, column, threshold, direction in (
+            ("power", "power_dbm", ALERT_WEAK_POWER_DBM, "below"),
+            ("occupancy", "occupancy_pct", ALERT_CONGESTION_OCC_PCT, "above"),
+        ):
+            flags = (sub[column] < threshold) if direction == "below" else (sub[column] > threshold)
+            counts = flags.groupby(sub["timestamp"]).sum().sort_index()
+            hit = counts[counts >= required]
+            if hit.empty:
+                continue
+            # 连续 N 分钟才算（与判据一致）
+            stamps = list(counts.index)
+            for stamp in stamps:
+                pos = stamps.index(stamp)
+                run = stamps[pos:pos + ALERT_MIN_CROSSING_MINUTES]
+                if len(run) < ALERT_MIN_CROSSING_MINUTES:
+                    break
+                if all(counts.loc[t] >= required for t in run) and \
+                        all((run[i + 1] - run[i]).total_seconds() == 60 for i in range(len(run) - 1)):
+                    result = {"crossingAt": stamp.strftime("%Y-%m-%d %H:%M"),
+                              "crossingBands": int(counts.loc[stamp]),
+                              "crossingMetric": metric}
+                    break
+            if result["crossingAt"]:
+                break
+    _EVENT_CROSSING_CACHE[event_id] = result
+    return result
+
+
 @app.get("/api/data/events", summary="接口7：故障事件清单（来自 data/fault_events.csv）")
 def data_events(scenario: str | None = Query(None, description="按场景过滤，不传返回全部")):
     """返回数据生成器同步输出的故障事件清单。
@@ -2652,6 +2709,17 @@ def data_events(scenario: str | None = Query(None, description="按场景过滤�
                 item[key] = float(item[key])
             except (TypeError, ValueError):
                 item[key] = None
+        # 复查（用户反馈："事件进行中"却不报警，看不出到底什么时候真的越阈）：
+        # 每个事件附上**真实首次越阈时刻**，让按钮能写"14:00 注入 · 14:14 起越阈"，
+        # 避免把"注入开始"误读成"已经开始异常"。
+        try:
+            item.update(_event_crossing(item.get("event_id", ""), item.get("ap_id", ""),
+                                        item.get("start_time", ""), item.get("end_time", "")))
+        except Exception as exc:  # noqa: BLE001 - 事件清单不能因为算越阈失败而 500
+            print(f"[Main] 事件越阈时刻计算失败（{item.get('event_id')}）：{exc}")
+            item.setdefault("crossingAt", None)
+            item.setdefault("crossingBands", None)
+            item.setdefault("crossingMetric", None)
     return success_response({"events": events, "count": len(events)})
 
 
