@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    base: "/AI-NetTune/",
     server: {
       host: true,
       proxy: {
