@@ -1986,3 +1986,45 @@ def test_compare_verdicts_requires_adjacent_minutes():
     # 只有两帧 → 不足 3 分钟，不能命中
     two = frame(["2026-01-01 10:00:00", "2026-01-01 10:01:00"])
     assert module.spectrum_hit(two, "AP-02", "2026-01-01 10:00:00", "2026-01-01 10:01:00") is False
+
+
+def test_evidence_retrieval_returns_citable_sections():
+    """知识库检索（RAG）：问到判据/阈值时必须能检索到"故障定义 §2.2"，且引用可读。"""
+    import evidence_retrieval as er
+
+    hits = er.retrieve("40/50 频段阈值怎么定的", top_k=3)
+    assert hits, "阈值类问题应检索到段落"
+    labels = [er.citation_label(h) for h in hits]
+    assert labels[0] == "故障定义 §2.2", labels
+    assert all(h["text"] for h in hits), "段落正文不能为空"
+
+    # 弱覆盖类问题同样要命中判据段落（固定置顶，避免词频波动导致引用缺失）
+    weak = er.retrieve("分析 AP-02 弱覆盖的原因", top_k=3)
+    assert er.citation_label(weak[0]) == "故障定义 §2.2"
+    # 同一问题重复检索结果一致（可复现，便于评审翻原文核对）
+    assert [er.citation_label(s) for s in er.retrieve("分析 AP-02 弱覆盖的原因", top_k=3)] == \
+        [er.citation_label(s) for s in weak]
+
+
+def test_answer_verify_requires_real_citation():
+    """引用的章节必须真实存在：缺引用、编造章节都要被拦下。"""
+    import answer_llm as al
+
+    refs = [{"label": "故障定义 §2.2", "section": "2.2", "text": "≥40/50 频段且连续 3 分钟"}]
+    evidence = {"ap": "AP-02", "plans": [], "root_cause_confirmed": False,
+                "cause": "RSRP -111.06 dBm", "references": refs}
+
+    ok_text = ("【结论】AP-02 弱覆盖。【依据】RSRP -111.06 dBm 越阈；依据：故障定义 §2.2 的 40/50 频段判据。"
+               "【方案】候选原因包括倾角不足，尚需现场核实。")
+    assert al.verify(ok_text, evidence)["ok"] is True, al.verify(ok_text, evidence)
+
+    missing = ("【结论】AP-02 弱覆盖。【依据】RSRP -111.06 dBm。【方案】候选原因包括倾角不足。")
+    result = al.verify(missing, evidence)
+    assert result["ok"] is False
+    assert any("缺少知识库引用" in v for v in result["violations"]), result
+
+    fake = ("【结论】AP-02 弱覆盖，依据：故障定义 §9.9。【依据】RSRP -111.06 dBm。"
+            "【方案】候选原因包括倾角不足。")
+    result = al.verify(fake, evidence)
+    assert result["ok"] is False
+    assert any("§9.9" in v or "章节" in v for v in result["violations"]), result

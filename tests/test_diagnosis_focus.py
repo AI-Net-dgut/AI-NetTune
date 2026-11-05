@@ -99,7 +99,10 @@ def test_diagnosis_focus_model_receives_focused_facts_and_question():
         if not user.startswith('用户问题：'):return ''
         bundle=json.loads(user.split('）：\n',1)[1].split('\n上一次回答',1)[0])
         calls.append((system,user,bundle))
-        return '【结论】AP-02 被判定存在拥塞。【依据】PRB 96%。【方案】先核查负载，按对应方案仿真。'
+        # 复查（RAG）：证据里带 references 时，回答必须标注出处，否则校验器会拒收
+        refs = bundle.get('references') or []
+        cite = f"依据：{refs[0]['label']}。" if refs else ''
+        return '【结论】AP-02 被判定存在拥塞。【依据】PRB 96%。' + cite + '【方案】先核查负载，按对应方案仿真。'
     with isolated(model=model):
         d=ask('congestion')
     assert d['answer_check']['ok'],d['answer_check']

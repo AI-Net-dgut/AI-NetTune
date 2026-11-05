@@ -52,8 +52,11 @@ SYSTEM_PROMPT = """你是无线网络运维助手。你会收到一份**已由�
 5. 【依据】务必**简短**：一句话说明"哪几项指标越阈、方向如何"，最多引用 1~2 个关键数字，
    其余数字不要再罗列——界面下方有"证据与仿真明细"面板逐项列出；
 6. 只能引用证据里出现的方案（按名字），不得提出证据之外的新方案；
-7. 总长度不超过 500 字；
-8. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
+7. 若证据里有 `references`（来自项目知识库的原文段落），必须**至少引用一条**，
+   写法固定为"依据：<label>"（label 直接用 references 里的 label 字段，例如"依据：故障定义 §2.2"）；
+   **不得引用 references 之外的文档或章节号**（编造章节视为不合格）；
+8. 总长度不超过 500 字；
+9. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
 """
 
 
@@ -164,6 +167,19 @@ def verify(answer: str, evidence: dict) -> dict:
     unknown_ids = sorted({m for m in mentioned if m not in {k.replace(" ", "") for k in known_ids}})
     if unknown_ids:
         violations.append(f"出现证据中没有的对象：{unknown_ids}")
+
+    # 2.5) 引用必须真实（RAG）：证据里给了 references，回答就要标出处，且不能编造章节
+    references = evidence.get("references") or []
+    if references:
+        labels = [str(r.get("label") or "") for r in references if r.get("label")]
+        sections = {str(r.get("section") or "").rstrip(".") for r in references if r.get("section")}
+        if not any(label in text for label in labels):
+            violations.append("缺少知识库引用：回答必须写出至少一条『依据：<label>』")
+        # 编造章节：出现 §x.y 但不在 references 的章节里
+        cited = {m.rstrip(".") for m in re.findall(r"§\s*([\d.]+)", text)}
+        fabricated = sorted(s for s in cited if s and s not in sections)
+        if fabricated:
+            violations.append(f"引用了证据中没有的章节：{['§' + s for s in fabricated][:3]}")
 
     # 3) 无根因证据时禁止确定性断言
     #    注意必须**跳过否定句**：模型常写"不能直接视为已确认根因"这类正确表述，

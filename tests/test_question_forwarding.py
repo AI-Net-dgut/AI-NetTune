@@ -33,11 +33,14 @@ def _offline_answer_model():
             return ""  # 其他方案/预测润色继续走原有模板，不发外部请求。
         question = user.split("\n证据（JSON", 1)[0].removeprefix("用户问题：")
         bundle = json.loads(user.split("）：\n", 1)[1].split("\n上一次回答", 1)[0])
+        # 复查（RAG）：证据带 references 时回答必须标注出处，否则校验器拒收
+        refs = bundle.get('references') or []
+        cite = f"\n依据：{refs[0]['label']}。" if refs else ""
         if bundle.get('answer_focus'):
             sections=bundle['answer_focus']['sections']
-            return '\n'.join(f'【{title}】{sections[index]["text"]}' for title,index in [('结论',0),('依据',1),('方案',3)])
+            return '\n'.join(f'【{title}】{sections[index]["text"]}' for title,index in [('结论',0),('依据',1),('方案',3)]) + cite
         # 旧入口保持通用结构；本测试只核对传参与缓存。
-        return "【结论】本次网络状态需要结合证据核查。【依据】以给出的真实指标为准。【方案】先核查候选原因。"
+        return "【结论】本次网络状态需要结合证据核查。【依据】以给出的真实指标为准。【方案】先核查候选原因。" + cite
 
     with patch.object(main, "ENABLE_LLM", True), \
          patch.object(main, "_ANOMALY_CACHE_ON", True), \

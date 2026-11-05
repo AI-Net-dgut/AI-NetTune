@@ -24,7 +24,8 @@ import llm_agent
 import forecast_answer
 from risk_state import crossing_state
 import diagnosis_focus  # 按原问题筛选已有诊断证据与对应方案
-import answer_llm      # 由模型写整段回答 + harness 校验（answer_llm.py）
+import answer_llm               # 由模型写整段回答 + harness 校验（answer_llm.py）
+import evidence_retrieval       # 知识库检索（RAG）：为回答提供可引用的原文出处
 from llm_agent import get_intent, rule_intent, extract_time_range, call_llm_chat
 import forecast_model as _fm
 from forecast_model import build_series, DEFAULT_METRICS
@@ -1428,6 +1429,18 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     # 注意：此处只能用**已计算好的变量**（m / req / plans / is_anomaly / anomaly_type）。
     _answer_llm_text = None
     _answer_llm_check = {"ok": False, "violations": ["未启用"], "source": "rule", "attempts": 0}
+    # 知识检索（RAG）命中的原文出处：即使模型未启用也返回，便于界面展示"依据来自哪一节"
+    _answer_references: list[dict] = []
+    _ans_question = (getattr(req, "message", None) or
+                     f"请解读 {req.scenario} 在 {req.window_start} 至 {req.window_end} 的研判结论")
+    try:
+        _answer_references = [
+            {**item, "label": evidence_retrieval.citation_label(item)}
+            for item in evidence_retrieval.retrieve(_ans_question, top_k=3)
+        ]
+    except Exception as _exc:  # noqa: BLE001 - 检索失败不能阻断研判
+        print(f"[Main] 知识检索失败，跳过引用：{_exc}")
+        _answer_references = []
     if ENABLE_LLM:
         try:
             # 方案对象既可能是 dict 也可能是模型对象（plan_model 的 dataclass），
@@ -1488,9 +1501,8 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
                            "effects": _eff(p)}
                           for p in (plans or [])][:2],
             }
-            # 聊天问题原样传入；未提供 message 的旧 REST/报告入口继续用通用解读。
-            _ans_question = (req.message or
-                             f"请解读 {req.scenario} 在 {req.window_start} 至 {req.window_end} 的研判结论")
+            # 检索结果（上面已算好）随证据交给模型，并要求回答标出出处。
+            _evidence_bundle["references"] = list(_answer_references)
             _answer_result = answer_llm.generate(_ans_question, _evidence_bundle, llm_agent.call_llm_chat)
             _answer_llm_text = _answer_result.get("text")
             _answer_llm_check = {**_answer_result.get("check", {}),
@@ -1558,6 +1570,7 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
             "answer_focus": _focus,
             "answer_llm": _answer_llm_text,
             "answer_check": _answer_llm_check,
+            "answer_references": _answer_references,
         },
     }
 
