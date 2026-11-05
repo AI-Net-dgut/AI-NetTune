@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import type { ChatResult, DashboardData, Diagnosis, MetricKey, SpatialMapData } from "../types/backend";
 import { METRIC_META } from "../types/backend";
@@ -77,6 +77,15 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
   spatialPending: boolean; spatialError: string; onSpatialRetry: () => void; busy: boolean;
   onTool: (type: "heatmap" | "topology") => void; selection?: EvidenceSelection | null;
 }) {
+  const evidenceRef = useRef<HTMLElement>(null);
+  const selectionId = selection?.id;
+  useEffect(() => {
+    // 上方入口会通过 key 重建此面板。切换后把图表带入当前滚动区域，
+    // 也移动键盘焦点；普通加载或手动切换标签时不抢占滚动位置。
+    if (selectionId == null) return;
+    evidenceRef.current?.focus({ preventScroll: true });
+    evidenceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectionId]);
   const targetAps = diagnosis?.answerFocus?.targetAps.length ? diagnosis.answerFocus.targetAps
     : diagnosis?.answerFocus?.observedAps ?? diagnosis?.affectedAps;
   const firstAp = targetAps?.find(id => data.nodes.some(node => node.type === "ap" && node.id === id));
@@ -87,7 +96,7 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
   const toolView: EvidenceView | null = toolResult?.chart?.type === "heatmap" ? "coverage" : toolResult?.chart?.type === "graph" ? "connections" : toolResult?.chart?.type === "line" ? "trend" : null;
   const [view, setView] = useState<EvidenceView>(selection?.view ?? (diagnosis?.answerFocus?.kind === "connections" ? "connections" : toolView) ?? "trend");
   // 原始趋势没有逐点对象标识，默认用已加载采样完成对象/指标联动。
-  const [useTool, setUseTool] = useState(Boolean(toolView && toolView !== "trend" && !toolResult?.diagnosis));
+  const [useTool, setUseTool] = useState(Boolean(!selection && toolView && toolView !== "trend" && !toolResult?.diagnosis));
   const [compareKind, setCompareKind] = useState<"ap" | "ue">("ue");
   const raw = useMemo(() => observationTrend(data.metrics, target, metric), [data.metrics, target, metric]);
   const points = useMemo(() => binObservationTrend(raw, 240), [raw]);
@@ -132,7 +141,7 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
   const usingTool = Boolean(toolView === view && useTool && toolResult?.chart);
   const originalMetric = toolResult?.chart?.type === "line" ? toolLineMetadata(toolResult.chart.option).label
     : toolResult?.chart?.type === "heatmap" ? "RSRP / dBm" : "窗口连接关系";
-  return <section className="ain-ai-evidence" aria-label="辅助判断图表">
+  return <section ref={evidenceRef} tabIndex={-1} style={{ scrollMarginTop: 16 }} className="ain-ai-evidence" aria-label="辅助判断图表">
     <div className="ain-ai-subheading"><h4>研判证据图</h4><div className="ain-ai-chart-actions">
       {([['trend', '指标趋势'], ['coverage', '覆盖热力图'], ['connections', '连接关系'], ['comparison', '对象对比']] as const).map(([key, label]) =>
         <button key={key} className="ain-button" type="button" aria-pressed={view === key} onClick={() => setView(key)}>{label}</button>)}
