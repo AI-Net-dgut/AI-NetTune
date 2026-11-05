@@ -53,7 +53,8 @@ SYSTEM_PROMPT = """你是无线网络运维助手。你会收到一份**已由�
    其余数字不要再罗列——界面下方有"证据与仿真明细"面板逐项列出；
 6. 只能引用证据里出现的方案（按名字），不得提出证据之外的新方案；
 7. 若证据里有 `references`（来自项目知识库的原文段落），必须**至少引用一条**，
-   写法固定为"依据：<label>"（label 直接用 references 里的 label 字段，例如"依据：故障定义 §2.2"）；
+   写法为"依据："后直接接 references 中某条的 label 字段原文（例如"依据：故障定义 §2.2"）；
+   不要输出 `<label>`、`<...>` 这类占位符或尖括号模板；
    **不得引用 references 之外的文档或章节号**（编造章节视为不合格）；
 8. 总长度不超过 500 字；
 9. 只输出回答正文，不要输出 JSON、代码块或解释你的过程。
@@ -174,12 +175,16 @@ def verify(answer: str, evidence: dict) -> dict:
         labels = [str(r.get("label") or "") for r in references if r.get("label")]
         sections = {str(r.get("section") or "").rstrip(".") for r in references if r.get("section")}
         if not any(label in text for label in labels):
-            violations.append("缺少知识库引用：回答必须写出至少一条『依据：<label>』")
+            violations.append("缺少知识库引用：回答必须写出至少一条『依据：<引用标签>』")
         # 编造章节：出现 §x.y 但不在 references 的章节里
         cited = {m.rstrip(".") for m in re.findall(r"§\s*([\d.]+)", text)}
         fabricated = sorted(s for s in cited if s and s not in sections)
         if fabricated:
             violations.append(f"引用了证据中没有的章节：{['§' + s for s in fabricated][:3]}")
+
+    # 2.6) 不得泄漏提示词占位符：模型必须直接写 label 原文，不能保留 <label> 这类尖括号模板
+    if "<label>" in text:
+        violations.append("回答泄漏了提示词占位符 <label>：请直接写出引用标签原文，不要保留 <...>")
 
     # 3) 无根因证据时禁止确定性断言
     #    注意必须**跳过否定句**：模型常写"不能直接视为已确认根因"这类正确表述，
