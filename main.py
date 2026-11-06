@@ -1449,10 +1449,16 @@ def _analyze_anomaly_uncached(req: AnomalyRequest):
     _answer_references: list[dict] = []
     _ans_question = (getattr(req, "message", None) or
                      f"请解读 {req.scenario} 在 {req.window_start} 至 {req.window_end} 的研判结论")
+    # 检索词追加异常类型/原因：通用解读问题本身不含"弱覆盖/阈值"等触发词，会导致主判据
+    # "故障定义 §2.2"召回不到、模型却去引用它。把原因拼进去以触发固定置顶规则（PIN_RULES）。
+    _retrieve_query = _ans_question
+    if isinstance(m, dict):
+        _retrieve_query = " ".join(
+            [_ans_question, str(anomaly_type or ""), str(m.get("cause") or "")])
     try:
         _answer_references = [
             {**item, "label": evidence_retrieval.citation_label(item)}
-            for item in evidence_retrieval.retrieve(_ans_question, top_k=3)
+            for item in evidence_retrieval.retrieve(_retrieve_query, top_k=3)
         ]
     except Exception as _exc:  # noqa: BLE001 - 检索失败不能阻断研判
         print(f"[Main] 知识检索失败，跳过引用：{_exc}")

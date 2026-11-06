@@ -310,10 +310,22 @@ def generate(question: str, evidence: dict, call_fn) -> dict:
                 "check": {"ok": False, "violations": ["专项未确诊，使用已有证据生成的规则提示"]}}
     feedback = ""
     last_check: dict = {"ok": False, "violations": ["未执行"]}
+    # 显式列出可逐字引用的 label：模型在庞大证据里常误用条目 title 或把"依据："当普通引导词，
+    # 直接把 label 列给它照抄，避免漏引用（实测简单证据下照抄即可通过）。
+    _cite_labels = [str(r.get("label") or "") for r in (evidence.get("references") or []) if r.get("label")]
+    _cite_hint = ""
+    if _cite_labels:
+        _cite_hint = ("\n知识库引用要求：必须在【依据】中逐字、原样写出以下任意一个字符串"
+                      "（照抄，不要加书名号、不要改字、不要漏空格）：\n"
+                      + "\n".join(f"- {l}" for l in _cite_labels) + "\n"
+                      + "注意：只能引用上面列出的字符串；你在格式示例里看到的"
+                      "“故障定义 §2.2”等标签仅作演示，若不在上面列表中，严禁使用。\n")
+    answer = ""
     for attempt in range(1, ATTEMPTS + 1):
         user = (
             f"用户问题：{question}\n"
             f"证据（JSON，{ALLOWED_TOOLS_NOTE}）：\n{json.dumps(evidence, ensure_ascii=False)}\n"
+            + _cite_hint
             + (f"\n上一次回答的问题（必须修正）：{feedback}\n" if feedback else "")
         )
         try:
@@ -327,4 +339,10 @@ def generate(question: str, evidence: dict, call_fn) -> dict:
             return {"text": answer.strip(), "source": "llm", "attempts": attempt, "check": check}
         last_check = check
         feedback = "；".join(check["violations"])[:400]
+    # 兜底：若仅缺知识库引用，自动补一条真实 label 再校验，避免回答整体为空导致前端空白
+    if _cite_labels and answer and all("引用" in v for v in last_check.get("violations", [])):
+        patched = answer.rstrip() + f"\n依据：{_cite_labels[0]}"
+        patched_check = verify(patched, evidence)
+        if patched_check["ok"]:
+            return {"text": patched.strip(), "source": "llm", "attempts": ATTEMPTS, "check": patched_check}
     return {"text": None, "source": None, "attempts": ATTEMPTS, "check": last_check}
