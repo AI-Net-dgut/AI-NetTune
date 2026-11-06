@@ -1,4 +1,5 @@
 import type { EChartsOption } from 'echarts';
+import { displayMetric } from '../services/metrics';
 import type { GoalAssessment, UserAssessment } from '../types/plan';
 export type UserTrendMetric = 'rsrp' | 'sinr' | 'throughput' | 'latency';
 export interface UserTrendPoint {
@@ -38,6 +39,8 @@ export function userTrendOption(data: UserTrendData, metric: UserTrendMetric, as
     tooltip: { trigger: 'axis', renderMode: 'richText' },
     xAxis: { type: 'time', axisLabel: { formatter: (value: number) => clock.format(value) } },
     yAxis: { type: 'value', name: userTrendMetrics[metric].unit, scale: true,
+      // 只格式化坐标文字，避免上限留白计算产生浮点尾数；原始采样值保持不变。
+      axisLabel: { formatter: (value: number) => displayMetric(value), hideOverlap: true },
       min: Number.isFinite(low) ? low - padding : undefined, max: Number.isFinite(high) ? high + padding : undefined },
     series: [{ type: 'line', name: '用户实际采样', showSymbol: data.points.length < 3, connectNulls: false,
       data: points, itemStyle: { color: '#238f90' }, markLine: { symbol: 'none', data: lines } }],
