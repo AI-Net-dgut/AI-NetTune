@@ -40,6 +40,8 @@ export default function SimConfigBar({ scenario, apIds, params, baseline, effect
   const [confirming, setConfirming] = useState(false);
 
   const reload = useCallback(async () => {
+    // 每次重载先清掉上一次的错误：避免隧道瞬时抖动产生的红字在后续成功后仍残留
+    setError("");
     let activeNow: SimConfigStatus["active"] = null;
     try {
       const status = await fetchSimConfig();
