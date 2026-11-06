@@ -119,6 +119,7 @@ export interface ChainStep {
 }
 export interface ChatResult {
   userAssessment?: UserAssessment;
+  userTrend?: import("../chat/userTrend").UserTrendData;
   reply: string; intent: string; scope: QueryScope; diagnosis: Diagnosis | null;
   plans?: TreatmentPlan[];
   chart: { type: string; option: Record<string, unknown> } | null;

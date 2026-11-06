@@ -1,0 +1,9 @@
+PASS DOM AP研判四个证据页签、趋势/覆盖/连接/对比 SVG
+PASS DOM 候选原因按钮定位对应证据图
+PASS DOM UE03真实采样、四指标切换、固定目标线
+PASS DOM 用户分析保留原来的四个证据页签；参考范围说明和依据到图导航
+PASS DOM 用户方案重新评估按钮到解析、报告实际生成HTML
+PASS DOM 容量方案指标图和无空间图说明
+PASS DOM AP/UE不匹配时无数据提示，不显示旧图
+PASS DOM 缺背景数据保留用户观测图；范围不一致显示提示并拦住旧图
+COMPLETE production parser + React render + ECharts SVG + re-evaluate + HTML export

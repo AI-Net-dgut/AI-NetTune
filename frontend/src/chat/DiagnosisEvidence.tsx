@@ -1,8 +1,10 @@
 import type { Candidate, Diagnosis } from "../types/backend";
 import { apCandidateGroups, evidenceText } from "../components/analysis/diagnosisPresentation";
 import { displayMetric } from "../services/metrics";
+import type { EvidenceSelection } from "./DiagnosisCharts";
+import { causeEvidenceSelection } from "./causeEvidence";
 
-function CandidateProof({ candidate, object }: { candidate: Candidate; object: string }) {
+function CandidateProof({ candidate, object, onEvidence }: { candidate: Candidate; object: string; onEvidence?: (selection: Omit<EvidenceSelection, 'id'>) => void }) {
   return <details>
     <summary>{object} · {candidate.cause || "候选原因待补充"}</summary>
     <dl className="ain-compact-proof">
@@ -11,11 +13,12 @@ function CandidateProof({ candidate, object }: { candidate: Candidate; object: s
       ] as const).filter(([, lines]) => lines.length > 0).map(([label, lines]) =>
         <div key={label}><dt>{label}</dt><dd><ul>{lines.map((line, i) => <li key={i}>{line}</li>)}</ul></dd></div>)}
     </dl>
+    {onEvidence && <button type="button" className="ain-ai-text-button" onClick={() => onEvidence(causeEvidenceSelection(candidate, /^AP-\d+$/.test(object) ? object : undefined))}>查看该原因的数据证据图</button>}
   </details>;
 }
 
 // 只补充正文未展开的依据，不再重复结论、评分、指标卡与判断链路。
-export default function DiagnosisEvidence({ diagnosis, summarizedEvidenceCount = 4 }: { diagnosis: Diagnosis; summarizedEvidenceCount?: number }) {
+export default function DiagnosisEvidence({ diagnosis, summarizedEvidenceCount = 4, onEvidence }: { diagnosis: Diagnosis; summarizedEvidenceCount?: number; onEvidence?: (selection: Omit<EvidenceSelection, 'id'>) => void }) {
   const groups = apCandidateGroups(diagnosis).filter(group => group.candidates.length > 0);
   const mainObject = diagnosis.affectedAps.join("、") || "整体网络";
   const remainingEvidence = diagnosis.evidence.slice(summarizedEvidenceCount);
@@ -24,8 +27,8 @@ export default function DiagnosisEvidence({ diagnosis, summarizedEvidenceCount =
   return <details className="ain-ai-details">
     <summary>补充证据与候选原因</summary>
     <div className="ain-compact-evidence">
-      {diagnosis.candidates.map((candidate, i) => <CandidateProof key={`main-${i}`} candidate={candidate} object={mainObject} />)}
-      {groups.map((group, i) => group.candidates.map((candidate, j) => <CandidateProof key={`${group.id}-${i}-${j}`} candidate={candidate} object={group.id} />))}
+      {diagnosis.candidates.map((candidate, i) => <CandidateProof key={`main-${i}`} candidate={candidate} object={mainObject} onEvidence={onEvidence} />)}
+      {groups.map((group, i) => group.candidates.map((candidate, j) => <CandidateProof key={`${group.id}-${i}-${j}`} candidate={candidate} object={group.id} onEvidence={onEvidence} />))}
       {remainingEvidence.length > 0 && <details><summary>{summarizedEvidenceCount ? "其他指标证据" : "指标明细"}</summary><ul>
         {remainingEvidence.map((item, i) => <li key={i}>{evidenceText(item)}{item.status && ` · 状态：${item.status}`}</li>)}
       </ul></details>}

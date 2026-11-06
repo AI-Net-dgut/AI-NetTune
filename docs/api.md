@@ -1336,3 +1336,31 @@ POST /api/forecast/analyze
 - 吞吐目标固定基线：`target = baseline × (1 + percent / 100)`。`plan.goal.status=pending`，方案后用 `simulation.goalAssessment` 返回 `estimated_met/estimated_unmet`、预计提升率和距目标差距。零基线为 `not_evaluable`，不计算相对提升率。健康用户也可以进行目标导向的候选方案评估。
 - 模型正文最多尝试 3 次（包含首次），无数据或有效数据不足时不生成改写。用户体验状态、参数/效果方向、带单位 KPI 和完整知识引用均参与检查；校验失败回退工具正文。校验不是语义正确性的绝对保证，引用仍需人工复核支持关系。
 - 方案预估仍使用经验系数；配置应用仅模拟 RSRP 与 PRB，吞吐等预估不代表已经在应用后数据中实现。
+
+
+### 对象约束与用户趋势契约（2026-11-06）
+
+- 对象仅由本轮显式 AP/UE 编号或服务端上一轮的明确对象指代继承。模型额外填入的对象被剔除，原因记录于 `intent_debug.degrade_reason`。有效意图仍可保留 `source=llm`，对象修正不伪装成模型故障。
+- 显式换对象时不继承旧 AP/UE；“全网/整网”追问不继承对象。一次包含多个 AP 或多个 UE 返回 40002，要求缩小到单个对象。
+- 缺少有来源的 `user_id` 时不执行 `user_experience`；按原文恢复任务。明确的 KPI、拓扑、热力图和预测请求不会因为包含 AP 编号就强制改为故障研判。
+- `detail.subject`：用户主体，包含 `id`、`servingAps`、`primaryAp`、`samples`、`apConstraint`。
+- `detail.series`：逐样本数组，字段 `time`（带时区 ISO 8601，北京时间）、`apId`、`rsrp`、`sinr`、`throughput`、`latency`。数值可为 null；源缺失值不转换为 0。数组按时间排序，只使用当前过滤后的采样。
+- `detail.goal.target`：基于本次基线的固定吞吐目标。趋势图上的参考线用于比较方案均值，不能将每次观测低于目标都算作故障。
+- `assessment.checks[].threshold` 为本次有效判据，图表不额外写死一套阈值。
+- `answer_llm` 为校验后的大模型正文；`answer_check` 记录校验状态。观测序列不发送给正文模型，避免仅为绘图扩大语言模型上下文。
+- 用户指标趋势属于 UE；`simulation.trend` 与 `simulation.coverage` 仍属于执行 AP 的参考场，保持独立范围说明。没有空间场时显示原因，不制造空白页签。
+- 新提问清除旧趋势；辅助查询可保留关联趋势；迟到响应不能恢复旧图。分析记录继续保存完整前端结果及趋势。
+
+
+### v8：模型等待预算与部署检查
+
+- /api/agent/chat、/api/analyze/anomaly 的嵌套工具共享本轮模型等待预算，默认 30 秒。每次请求的连接和读取超时按剩余预算收敛；一次网络/HTTP 错误后不重复调用模型，工具结果与图表照常返回。预算不是对 DNS、数据计算和网络的严格硬时限保证。
+- NETTUNE_LLM_BUDGET_SECONDS：1～60 秒，默认 30；NETTUNE_LLM_READ_SECONDS：1～20 秒，默认 10；无效设置使用默认值。它们不是模型温度或采样参数，不改变判据。
+- GET /api/health 新增 release=charts-v8-20261106、features.object_grounding/user_trends/llm_request_budget；数据/能力原字段保持。
+- 分析请求前端等待 90 秒，普通请求 45 秒；用户取消仍返回 AbortError，不与超时混淆。
+
+
+### V8.1：原因分析的证据图区
+
+前端不再仅依赖 diagnosis 或 chart 决定是否显示证据图区；有有效用户分析主体时也显示指标趋势、覆盖、连接、对象对比入口。用户趋势继续读取 detail.series；背景图不冒充个人覆盖场。候选原因按钮只导航既有数据视图，不重新生成因果结论。AP＋UE 的对照样本继续按 AP 过滤；无数据、错范围不渲染旧证据。
+/api/health.release 更新为 evidence-v81-20261106，features.cause_evidence_charts=true；分析接口字段兼容 V8。

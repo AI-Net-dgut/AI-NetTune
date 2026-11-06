@@ -145,7 +145,7 @@ def main() -> int:
             ("前端类型检查 tsc", [node, str(frontend / "node_modules" / "typescript" / "bin" / "tsc"), "-p", "tsconfig.app.json", "--noEmit"], frontend, 1800),
             ("前端 lint eslint", [node, str(frontend / "node_modules" / "eslint" / "bin" / "eslint.js"), "."], frontend, 1200),
         ]
-        for script in ("check-plan-report.cjs", "check-user-scope.cjs"):
+        for script in ("check-plan-report.cjs", "check-user-scope.cjs", "check-user-trend.cjs", "check-request-timeout.cjs", "check-cause-evidence.cjs"):
             steps.append((f"前端行为检查 {script}", [node, str(frontend / "scripts" / script)], frontend, 600))
     if args.smoke:
         steps.append(("HTTP 冒烟 smoke_endpoints", [PY, "scripts/smoke_endpoints.py", "--base", args.base], ROOT, 900))

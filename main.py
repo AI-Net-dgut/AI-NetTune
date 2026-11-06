@@ -324,6 +324,8 @@ def data_status():
     }
     return {
         "ok": bool(net["rows"]) and bool(spec["rows"]),
+        "release": "evidence-v81-20261106",
+        "features": {"object_grounding": True, "user_trends": True, "llm_request_budget": True, "cause_evidence_charts": True},
         "data_dir": str(DATA_DIR),
         "network": net,
         "spectrum": spec,
@@ -979,6 +981,7 @@ def _invalidate_sim_caches() -> None:
 
 
 @app.post("/api/analyze/anomaly")
+@llm_agent.with_request_budget
 def analyze_anomaly(req: AnomalyRequest):
     if not _ANOMALY_CACHE_ON:
         return _analyze_anomaly_uncached(req)
@@ -2622,6 +2625,7 @@ def tool_user_experience(scenario: str, win_start: str | None = None, win_end: s
             "assessment": assessment, "plans": plans,
             "plan_absent_reason": None if plans else reply.split("暂未生成可执行方案：")[-1],
             "detail": {"subject": subject, "checks": checks, "assessment": assessment,
+                       "series": ue.chart_series(rows),
                        "averages": averages, "target_pct": pct,
                        "target_throughput": target["target"] if target else None,
                        "goal": target, "userEffects": user_effects}, "query_ref": ref}
@@ -2697,6 +2701,7 @@ def _normalize_ap(value) -> str | None:
 
 
 @app.post("/api/agent/chat")
+@llm_agent.with_request_budget
 def agent_chat(req: ChatRequest):
     # 1. 第一层：统一关键词规则（llm_agent.rule_intent，独立主路径，完全不依赖LLM）
     rule = rule_intent(req.message)
@@ -2805,6 +2810,24 @@ def agent_chat(req: ChatRequest):
             intent_source = "rule" if hit else "fallback"
             intent_degrade_reason = "模型调用异常，已退回规则识别"
 
+    # 对象槽位只接受本轮明确编号；指代继承在下一步根据真实会话单独完成。
+    # 模型能识别任务，但不能凭空增加用户，把 AP 研判抢成用户分析。
+    explicit_objects = {}
+    for key, prefix, normalize in (("ap_id", "AP", _normalize_ap), ("user_id", "UE", _normalize_ue)):
+        matches = re.findall(rf"(?<![A-Za-z0-9]){prefix}\s*[-－]?\s*0*\d+(?![A-Za-z0-9])", req.message, re.IGNORECASE)
+        values = list(dict.fromkeys(normalize(value) for value in matches))
+        if len(values) > 1:
+            return error_response(ERROR_CODE["PARAM_INVALID"],
+                                  "本次分析包含多个同类对象，请每次指定一个 AP 或一个 UE；未执行分析。")
+        if len(values) == 1:
+            explicit_objects[key] = values[0]
+        proposed = normalize(params.get(key))
+        if proposed and proposed != explicit_objects.get(key):
+            reason = f"忽略未由本轮明确指定的 {key}={proposed}"
+            intent_degrade_reason = "；".join(filter(None, (intent_degrade_reason, reason)))
+        params.pop(key, None)
+    params.update(explicit_objects)
+
     # 2.4 "出个方案/怎么处置"这类请求没有独立工具：方案本身是研判的产物
     #     （analyze_anomaly 会带上 plans），所以先落到 fault_diagnosis，
     #     再靠下面的指代继承拿到 AP 与时间窗。否则会被判成闲聊。
@@ -2814,15 +2837,16 @@ def agent_chat(req: ChatRequest):
 
     # 2.5 指代继承：话里出现"它/那个/再/继续"等指代词且本轮未给槽位时，沿用上一轮
     inherited: dict = {}
-    if turns and any(word in req.message for word in _REFER_PATTERNS):
+    if turns and any(word in req.message for word in _REFER_PATTERNS) and not any(
+            word in req.message for word in ("全网", "整网", "所有AP", "所有 AP", "所有用户")):
         last = turns[-1]
         if not params.get("scenario") and last.get("scenario"):
             params["scenario"] = last["scenario"]
             inherited["scenario"] = last["scenario"]
-        if not params.get("user_id") and not params.get("ap_id") and last.get("user_id"):
+        if not explicit_objects and last.get("user_id"):
             params["user_id"] = last["user_id"]
             inherited["user_id"] = last["user_id"]
-        if not params.get("ap_id") and last.get("ap_id") and (not params.get("user_id") or params.get("user_id") == last.get("user_id")):
+        if not explicit_objects and last.get("ap_id"):
             params["ap_id"] = last["ap_id"]
             inherited["ap_id"] = last["ap_id"]
         if not req.window_start and last.get("window_start"):
@@ -2830,6 +2854,13 @@ def agent_chat(req: ChatRequest):
             inherited["window"] = f"{last['window_start']}~{last.get('window_end')}"
         if not params.get("time_range") and last.get("time_range"):
             params["time_range"] = last["time_range"]
+
+    # 没有经验证的用户对象时不执行用户工具；按原任务恢复 AP/整网路径。
+    if intent == "user_experience" and not params.get("user_id"):
+        intent = rule.get("intent", "query_kpi")
+        intent_source = "rule" if hit else "fallback"
+        reason = "用户分析缺少明确或可继承的 UE 对象，已恢复原问题任务"
+        intent_degrade_reason = "；".join(filter(None, (intent_degrade_reason, reason)))
 
     # 3. 第三层：最终兜底。
     #    条件从"没开 LLM"改成"这次模型没成功"（intent_source != "llm"）：
@@ -2923,7 +2954,8 @@ def agent_chat(req: ChatRequest):
                     "ap": params.get("ap_id"),
                     "user": params.get("user_id"),
                     "reply_draft": str(data.get("reply")),   # 模板草稿：只作为事实来源
-                    "detail": data.get("detail") if isinstance(data.get("detail"), dict) else {},
+                    "detail": {k: v for k, v in data.get("detail", {}).items() if k != "series"}
+                              if isinstance(data.get("detail"), dict) else {},
                     "query_ref": data.get("query_ref") if isinstance(data.get("query_ref"), dict) else {},
                     "metrics": data.get("metrics") if isinstance(data.get("metrics"), dict) else {},
                     # 把 plan_model 的原始结构映射成校验器认识的字段，否则工具路径上

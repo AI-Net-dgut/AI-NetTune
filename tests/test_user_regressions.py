@@ -211,7 +211,7 @@ def test_user_parameter_direction_numeric_units_and_citation_are_bound():
         assert not verify(body)['ok'], body
 
 
-def test_user_supported_visualization_keeps_model_params_and_source():
+def test_user_supported_visualization_keeps_task_but_rejects_ungrounded_object():
     with patch.object(m, 'ENABLE_LLM', True), patch.object(m, 'get_intent', return_value={
             'intent':'get_topology', 'source':'llm', 'params':{'ap_id':'ap-2'}, 'confidence':.9}), \
          patch.dict(m.TOOLS, {'get_topology': lambda *_a,**_k: {'reply':'已查询拓扑', 'intent':'get_topology'}}), \
@@ -219,7 +219,8 @@ def test_user_supported_visualization_keeps_model_params_and_source():
         result = m.agent_chat(m.ChatRequest(message='查看这个基站的连接情况',scenario='校园',
                               window_start=START, window_end=END,session_id='ue-visual'))['data']
     assert result['intent_debug']['source'] == 'llm'
-    assert result['intent_debug']['parsed']['ap_id'] == 'AP-02'
+    assert result['intent_debug']['parsed'].get('ap_id') is None
+    assert '未由本轮明确指定' in result['intent_debug']['degrade_reason']
 
 
 def test_user_intent_is_allowed_by_real_model_parser():

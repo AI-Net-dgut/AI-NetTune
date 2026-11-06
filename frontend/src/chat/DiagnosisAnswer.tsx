@@ -38,7 +38,7 @@ export default function DiagnosisAnswer({ result, onEvidence, showScope = true }
         <strong>{performanceHintText(hint)}</strong><p>{hint.cause || "未提供具体原因"}</p><p>建议：{hint.suggestion || "持续观察相关指标"}</p>
       </li>)}</ul>
     </details>}
-    <DiagnosisEvidence diagnosis={diagnosis} summarizedEvidenceCount={answerText || diagnosis.answerFocus ? 0 : 4} />
+    <DiagnosisEvidence diagnosis={diagnosis} onEvidence={onEvidence} summarizedEvidenceCount={answerText || diagnosis.answerFocus ? 0 : 4} />
     {/* 诊断：为什么没有 AI 文本（不猜，直接显示后端返回的校验状态）。
         answerCheck 缺失 = 后端进程还是旧代码（没有 answer_llm/answer_check 字段）。 */}
     {<details className="ain-ai-details">

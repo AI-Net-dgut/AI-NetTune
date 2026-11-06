@@ -1,0 +1,17 @@
+工作目录：AI-NetTune
+后端解释器：/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python
+
+  [PASS] 后端测试 tests/run_tests.py  (14.2s)
+  [PASS] 口径一致率 compare_verdicts  (16.4s)
+  [PASS] 数据对账 audit_data  (2.5s)
+  [PASS] 死代码扫描 find_dead_code  (0.1s)
+  [PASS] 前端类型检查 tsc  (4.9s)
+  [PASS] 前端 lint eslint  (8.9s)
+  [PASS] 前端行为检查 check-plan-report.cjs  (0.4s)
+  [PASS] 前端行为检查 check-user-scope.cjs  (0.4s)
+  [PASS] 前端行为检查 check-user-trend.cjs  (0.4s)
+  [PASS] 前端行为检查 check-request-timeout.cjs  (0.3s)
+  [PASS] 前端行为检查 check-cause-evidence.cjs  (0.2s)
+
+------------------------------------------------------------------------------
+通过 11 / 失败 0 / 跳过 0

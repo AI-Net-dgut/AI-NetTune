@@ -32,3 +32,17 @@ export function parseAssessment(v: unknown): UserAssessment | undefined {
 export const windowAssessmentLabels = { within_policy: '整窗越阈占比未超过暂定门槛', exceeded: '整窗体验未达暂定门槛', insufficient_data: '有效数据不足，无法判断整窗体验' };
 export const endStateLabels = { persistent_anomaly: '截至分析时刻存在连续异常', warning: '末端短时越阈，需继续观察', recovered: '窗口内出现连续异常，末端已恢复', within_policy: '截至分析时刻未见越阈', unknown: '末端数据不足或过旧，状态未知' };
 export const goalLabels = { pending: '待方案评估', not_evaluable: '基线无效或为零，无法评估相对提升', estimated_met: '预计达到目标', estimated_unmet: '预计未达到目标' };
+
+/** 仅接受后端提供的带时区观测序列，保持 null，拒绝非有限值和越 AP 数据。 */
+export function parseUserTrend(v: unknown): import('../chat/userTrend').UserTrendData | undefined {
+  const detail = object(v), subject = object(detail.subject);
+  if (subject.type !== 'user' || !text(subject.id) || !Array.isArray(detail.series)) return undefined;
+  const constraint = text(subject.apConstraint);
+  const points = detail.series.map(value => {
+    const p = object(value);
+    return { time: text(p.time), apId: text(p.apId), rsrp: num(p.rsrp), sinr: num(p.sinr),
+      throughput: num(p.throughput), latency: num(p.latency) };
+  }).filter(p => /(?:Z|[+-]\d{2}:\d{2})$/.test(p.time) && Number.isFinite(Date.parse(p.time))
+    && (!constraint || p.apId === constraint)).sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+  return { points, goal: parseGoal(detail.goal) };
+}

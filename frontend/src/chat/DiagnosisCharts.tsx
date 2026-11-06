@@ -12,6 +12,8 @@ import ToolResultPanel from "../components/analysis/ToolResultPanel";
 import { diagnosisMetric, sameQueryScope } from "./diagnosisModel";
 import { scopeLabel } from "../services/backend";
 import { toolLineMetadata } from "../components/analysis/toolChartMetadata";
+import UserTrendChart from "./UserTrendChart";
+import { evidenceComparisonRows, userMetricForEvidence } from "./causeEvidence";
 
 const clock = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -72,12 +74,14 @@ function EvidenceMap({ data, spatial, target, onSelect, connections }: {
   </SpatialChart>;
 }
 
-export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, spatialPending, spatialError, onSpatialRetry, busy, onTool, selection = null }: {
+export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, spatialPending, spatialError, onSpatialRetry, busy, onTool, selection = null, userResult = null }: {
   data: DashboardData; diagnosis: Diagnosis | null; toolResult: ChatResult | null; spatial: SpatialMapData | null;
+  userResult?: ChatResult | null;
   spatialPending: boolean; spatialError: string; onSpatialRetry: () => void; busy: boolean;
   onTool: (type: "heatmap" | "topology") => void; selection?: EvidenceSelection | null;
 }) {
   const evidenceRef = useRef<HTMLElement>(null);
+  const userSubject = userResult?.subject;
   const selectionId = selection?.id;
   useEffect(() => {
     // 上方入口会通过 key 重建此面板。切换后把图表带入当前滚动区域，
@@ -91,12 +95,12 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
   const firstAp = targetAps?.find(id => data.nodes.some(node => node.type === "ap" && node.id === id));
   const selectedNode = data.nodes.find(n => n.id === selection?.objectId);
   const [target, setTarget] = useState<ObservationTarget>(selectedNode ? { kind: selectedNode.type, id: selectedNode.id }
-    : firstAp ? { kind: "ap", id: firstAp } : { kind: "all" });
+    : userSubject ? { kind: "ue", id: userSubject.id } : firstAp ? { kind: "ap", id: firstAp } : { kind: "all" });
   const [metric, setMetric] = useState<MetricKey>(selection?.metric ?? (diagnosis ? diagnosisMetric(diagnosis) : "throughputMbps"));
   const toolView: EvidenceView | null = toolResult?.chart?.type === "heatmap" ? "coverage" : toolResult?.chart?.type === "graph" ? "connections" : toolResult?.chart?.type === "line" ? "trend" : null;
   const [view, setView] = useState<EvidenceView>(selection?.view ?? (diagnosis?.answerFocus?.kind === "connections" ? "connections" : toolView) ?? "trend");
   // 原始趋势没有逐点对象标识，默认用已加载采样完成对象/指标联动。
-  const [useTool, setUseTool] = useState(Boolean(!selection && toolView && toolView !== "trend" && !toolResult?.diagnosis));
+  const [useTool, setUseTool] = useState(Boolean(!selection && toolView && toolView !== "trend" && !toolResult?.diagnosis && !userSubject));
   const [compareKind, setCompareKind] = useState<"ap" | "ue">("ue");
   const raw = useMemo(() => observationTrend(data.metrics, target, metric), [data.metrics, target, metric]);
   const points = useMemo(() => binObservationTrend(raw, 240), [raw]);
@@ -124,7 +128,7 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
       ...(hasThreshold ? [{ type: "line" as const, name: "后端阈值", showSymbol: false, silent: true,
         lineStyle: { color: "#d69540", type: "dashed" as const, width: 1.4 }, data: points.map(point => [point.time, threshold]) }] : [])],
   };
-  const uniqueRecords = useMemo(() => uniqueObservationRecords(data.metrics), [data.metrics]);
+  const uniqueRecords = useMemo(() => uniqueObservationRecords(evidenceComparisonRows(data.metrics, userSubject)), [data.metrics, userSubject]);
   const comparisons = data.nodes.filter(node => node.type === compareKind).map(node => ({ id: node.id,
     value: observationMeans(uniqueRecords.filter(row => compareKind === "ap" ? row.apId === node.id : row.ueId === node.id))[metric] }));
   const lowFirst = ["rsrpDbm", "sinrDb", "throughputMbps"].includes(metric);
@@ -146,12 +150,17 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
       {([['trend', '指标趋势'], ['coverage', '覆盖热力图'], ['connections', '连接关系'], ['comparison', '对象对比']] as const).map(([key, label]) =>
         <button key={key} className="ain-button" type="button" aria-pressed={view === key} onClick={() => setView(key)}>{label}</button>)}
     </div></div>
+    <p className="ain-ai-note">下面的数据图用于核查上方判断依据和候选原因；观察到的变化与分布不等于已确认根因。</p>
+    {userSubject && <p className="ain-ai-result-scope" role="note">
+      分析对象：{userSubject.id}{userSubject.apConstraint ? `，仅分析连接 ${userSubject.apConstraint} 的采样` : ''}。
+      指标趋势来自该用户；覆盖图是同窗场景参考，连接图为最新采样服务关系，对比图为同窗对象参照。
+    </p>}
     <p className="ain-evidence-purpose">{view === "trend" ? "核查异常出现的时刻与变化趋势。" : view === "coverage" ? "定位弱信号集中区域，辅助核查覆盖原因。" : view === "connections" ? "核查用户与 AP 的服务关系；判断拥塞还需结合负载指标。" : "比较同一分析窗口中的用户或 AP，选中对象高亮。"}</p>
     <div className="ain-ai-chart-controls">
-      {!usingTool && <label>对象<select value={target.kind === "all" ? "all" : `${target.kind}:${target.id}`}
+      {!usingTool && !(userSubject && view === "trend") && <label>对象<select value={target.kind === "all" ? "all" : `${target.kind}:${target.id}`}
         onChange={event => { const value = event.target.value; setTarget(value === "all" ? { kind: "all" } : { kind: value.startsWith("ap:") ? "ap" : "ue", id: value.slice(3) }); }}>
         <option value="all">全网</option>{data.nodes.map(node => <option key={node.id} value={`${node.type}:${node.id}`}>{node.id}</option>)}</select></label>}
-      {!usingTool && (view === "trend" || view === "comparison") && <label>指标<select value={metric} onChange={event => setMetric(event.target.value as MetricKey)}>
+      {!usingTool && !(userSubject && view === "trend") && (view === "trend" || view === "comparison") && <label>指标<select value={metric} onChange={event => setMetric(event.target.value as MetricKey)}>
         {(Object.keys(METRIC_META) as MetricKey[]).map(key => <option key={key} value={key}>{METRIC_META[key].label} / {METRIC_META[key].unit}</option>)}</select></label>}
       {view === "comparison" && <label>比较<select value={compareKind} onChange={event => setCompareKind(event.target.value as "ap" | "ue")}>
         <option value="ue">用户</option><option value="ap">AP</option></select></label>}
@@ -161,8 +170,12 @@ export default function DiagnosisCharts({ data, diagnosis, toolResult, spatial, 
       {view === "connections" && <button type="button" className="ain-ai-text-button" disabled={busy} onClick={() => onTool("topology")}>查询范围连接</button>}
     </div>
     {usingTool && <p className="ain-ai-note">原始图：{originalMetric}；不按所选对象或指标重新查询。切回“已加载采样”可联动选择。</p>}
-    {!usingTool && <p className="ain-ai-note">采样范围：{scopeLabel(data.scope)}{view === "trend" || view === "comparison" ? ` · ${targetLabel(target)} · ${meta.label} / ${meta.unit}` : " · 全范围背景，选中节点仅高亮"}</p>}
-    {usingTool && toolResult?.chart ? <ToolResultPanel result={toolResult} compact />
+    {!usingTool && <p className="ain-ai-note">采样范围：{scopeLabel(data.scope)}{userSubject && view === "trend" ? ` · ${userSubject.id} · 用户观测` : view === "trend" || view === "comparison" ? ` · ${targetLabel(target)} · ${meta.label} / ${meta.unit}` : " · 全范围背景，选中节点仅高亮"}</p>}
+    {userSubject && view === "coverage" && <p className="ain-ai-note" role="note">这是场景覆盖参考图，不是用户个人覆盖场；不能仅凭此图确认天线、遮挡等原因。</p>}
+    {userSubject?.apConstraint && view === "comparison" && <p className="ain-ai-note">对照样本仅包含 {userSubject.apConstraint} 下的同窗记录；其他对象若无采样则保留缺失。</p>}
+    {userSubject && userResult && view === "trend" && !usingTool
+      ? <UserTrendChart result={userResult} initialMetric={userMetricForEvidence(selection?.metric)} />
+      : usingTool && toolResult?.chart ? <ToolResultPanel result={toolResult} compact />
       : view === "coverage" || view === "connections" ? <><EvidenceMap data={data} spatial={map} target={target} onSelect={setTarget} connections={view === "connections"} />
         {view === "coverage" && spatialPending && <p className="ain-ai-note" role="status">空间结果加载中，暂显示采样网格。</p>}
         {view === "coverage" && spatialError && <p className="ain-ai-note">空间结果暂不可用，显示采样网格。<button type="button" className="ain-ai-text-button" onClick={onSpatialRetry}>重试</button></p>}</>

@@ -1,7 +1,7 @@
 """用户级体验判定与吞吐目标计算；全部门槛均为项目暂定经验参数。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import math
 import os
 
@@ -130,3 +130,19 @@ def goal(baseline, pct, predicted=None):
             "predicted": predicted, "gap": None if predicted is None else round(max(0., target-predicted), 4),
             "requiredGain": round(target-baseline, 4),
             "improvementPct": None if predicted is None else round((predicted/baseline-1)*100, 4)}
+
+
+def chart_series(rows):
+    """逐样本保留服务 AP 与缺失值；不插值、不用均值替代时序。时间按项目北京时间返回。"""
+    result = []
+    for row in rows:
+        try:
+            stamp = datetime.fromisoformat(row["timestamp"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone(timedelta(hours=8)))
+        result.append({"time": stamp.isoformat(), "apId": row.get("ap_id"),
+                       **{field: finite(row.get(field)) for field in
+                          ("rsrp", "sinr", "throughput", "latency")}})
+    return sorted(result, key=lambda item: datetime.fromisoformat(item["time"]))

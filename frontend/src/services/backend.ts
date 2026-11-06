@@ -1,4 +1,4 @@
-import { parseAssessment } from './userExperience';
+import { parseAssessment, parseUserTrend } from './userExperience';
 import { parsePlans, parseSimulation } from "./planContract";
 import type { SimulationResult, TreatmentPlan } from "../types/plan";
 import type {
@@ -203,7 +203,8 @@ async function request(path: string, signal?: AbortSignal, body?: unknown, fetch
   const abort = () => controller.abort();
   if (signal?.aborted) abort();
   signal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(abort, 45_000);
+  // 分析含模型意图、工具计算和校验，给后端预算降级留出返回余量。
+  const timer = setTimeout(abort, path === "/agent/chat" ? 90_000 : 45_000);
   try {
     const res = await fetcher(`${API_BASE}/api${path}`, {
       method: body ? "POST" : "GET", signal: controller.signal,
@@ -528,6 +529,7 @@ export async function chatNetwork(message: string, scenario: string, window?: Qu
     horizonMinutes: data.horizon_minutes == null ? undefined : numeric(data.horizon_minutes),
     plans: parsePlans(data.plans, scope),
     userAssessment: parseAssessment(data.assessment),
+    userTrend: parseUserTrend(data.detail),
     // 复合编排也要解析诊断（复查 P1-8）：原来只在 intent=fault_diagnosis 时解析 detail，
     // 于是"哪个 AP 最差，未来 3 小时会怎样"只显示了步骤摘要，证据与方案全丢。
     diagnosis: data.detail && (intent === "fault_diagnosis" || data.kind === "chain")

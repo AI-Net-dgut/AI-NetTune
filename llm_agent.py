@@ -5,6 +5,7 @@ import json
 import os
 import re
 import requests
+from llm_budget import network_timeouts, transport_failed, with_request_budget
 
 # ===== 大模型配置（⚠️ 安全：key 一律走环境变量，禁止写入代码/提交仓库）=====
 # 永久设置一次（新开终端即生效）：setx LLM_API_KEY "sk-你的真实key"
@@ -76,49 +77,35 @@ def build_unified_prompt(message: str) -> str:
     return f"用户输入：{message}\n请按系统要求输出固定 JSON。"
 
 
-def call_llm(message: str) -> str:
-    """调用大模型，返回原始文本。超时/网络错误会抛异常，由上层降级。"""
-    # 没有密钥就直接失败，不要发出一次注定失败的请求：
-    # 否则网络不通时每次提问都要白等 30 秒超时才降级到规则意图。
+def _post_chat(messages, temperature):
+    """统一使用本轮剩余预算；失败交给既有规则/工具降级链路。"""
     if not LLM_API_KEY:
         raise RuntimeError("LLM_API_KEY 未配置")
-    resp = requests.post(
-        LLM_URL,
-        json={
-            "model": LLM_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": message},
-            ],
-            "temperature": 0,
-        },
-        headers={"Authorization": f"Bearer {LLM_API_KEY}"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    timeout = network_timeouts()
+    try:
+        resp = requests.post(LLM_URL,
+            json={"model": LLM_MODEL, "messages": messages, "temperature": temperature},
+            headers={"Authorization": f"Bearer {LLM_API_KEY}"}, timeout=timeout)
+        try:
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        finally:
+            resp.close()
+    except requests.RequestException:
+        transport_failed()
+        raise
+
+
+def call_llm(message: str) -> str:
+    """意图解析超时后由规则识别接管，不阻断图表数据。"""
+    return _post_chat([{"role": "system", "content": SYSTEM_PROMPT},
+                       {"role": "user", "content": message}], 0)
 
 
 def call_llm_chat(system_prompt: str, user_message: str, temperature: float = 0.2) -> str:
-    """通用对话式 LLM 调用：自定义 system prompt，返回润色后的文本。
-    未配置 key / 超时 / 网络错误 / 非 2xx 一律抛异常，由上层降级到模板文案。"""
-    if not LLM_API_KEY:
-        raise RuntimeError("LLM_API_KEY 未配置")
-    resp = requests.post(
-        LLM_URL,
-        json={
-            "model": LLM_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": temperature,
-        },
-        headers={"Authorization": f"Bearer {LLM_API_KEY}"},
-        timeout=45,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    """正文与说明共享同一次分析的预算，失败回退已有工具文案。"""
+    return _post_chat([{"role": "system", "content": system_prompt},
+                       {"role": "user", "content": user_message}], temperature).strip()
 
 
 def parse_unified_response(text: str) -> dict | None:

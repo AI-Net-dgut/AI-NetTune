@@ -14,6 +14,8 @@ import ForecastComparePanel from "../components/charts/ForecastComparePanel";
 import type { ManagementHandle } from "../components/management/preparePlan";
 import DiagnosisReply, { ReplyText } from "./DiagnosisAnswer";
 import DiagnosisCharts from "./DiagnosisCharts";
+import UserTrendChart from "./UserTrendChart";
+import { userMetricForEvidence } from "./causeEvidence";
 import type { EvidenceSelection } from "./DiagnosisCharts";
 import { sameQueryScope } from "./diagnosisModel";
 import { hasHistoryTimeHint } from "../replay/historyQuestion";
@@ -87,9 +89,11 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
   const result = forecastMode ? null : query.result;
   const analysis = forecastMode ? null : query.diagnosisResult;
   const diagnosis = analysis?.diagnosis || null;
+  const userResult = analysis?.subject ? analysis : result?.subject ? result : null;
   const scope = data?.scope || scopeWindow;
   const mismatch = Boolean(result && scope && !sameQueryScope(result.scope, scope));
   const analysisMismatch = Boolean(diagnosis && scope && !sameQueryScope(diagnosis.scope, scope));
+  const userMismatch = Boolean(userResult && scope && !sameQueryScope(userResult.scope, scope));
   const currentEvidenceSelection = evidenceSelection?.diagnosisId === query.diagnosisId && evidenceSelection?.requestId === query.requestId ? evidenceSelection : null;
   const dataStatus = dataLoading ? "数据加载中" : dataError ? "数据加载失败" : !data ? "当前范围暂无数据" : replay && !data.metrics.length ? "当前时刻暂无采样" : "";
   const status = forecastMode ? forecastPending ? "预测研判中…" : "预测风险研判" : dataStatus || (query.pending ? "正在分析" : currentEmpty ? "当前窗口暂无采样" : followingLive ? "实时跟随" : query.error ? "请求失败" : result ? "已返回" : historical ? "历史回顾，可提问" : replay ? "已固定，可提问" : "等待提问");
@@ -250,8 +254,7 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
         <div className="ain-ai-answer" aria-live="polite" aria-busy={query.pending}>
           {forecastReview}
           {!workspace && !forecastMode && query.question && <p className="ain-ai-user-question"><strong>本次提问</strong>{query.question}</p>}
-          {/* UE 级提问的兜底说明：平台方案是 AP/区域级的，单用户优化未建模。
-              提前说清边界，避免"我问的是 UE1，为什么结论是整网"的误解。 */}
+          {/* 用户指标与 AP 配置落点分别说明，防止混淆分析范围。 */}
           {!forecastMode && query.question && /\bUE[-－\s]?0*\d+\b/i.test(query.question) && (
             <p className="ain-ai-note" role="note">
               本次提问涉及具体用户：平台的处理方案按 <strong>AP / 区域</strong> 生成；
@@ -261,7 +264,8 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
           {!forecastMode && query.error && <div className="ain-query-error" role="alert"><p>{query.error}</p>
             <button type="button" className="ain-button" disabled={busy} onClick={() => send(query.question, query.contextRequest, true)}>重试本次问题</button></div>}
           {mismatch && <p className="ain-ai-warning">本次返回范围与已加载数据不同，请核对范围后使用结果。</p>}
-          {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，方案暂不可采用，辅助图使用已加载数据。</p>}
+          {analysisMismatch && <p className="ain-ai-warning">研判范围与已加载数据不同，原研判的证据图与方案暂不可采用；请切回对应范围或重新分析。</p>}
+          {userMismatch && <p className="ain-ai-warning">用户分析范围与当前数据不同，已暂停显示证据图；请切回对应范围或重新分析。</p>}
           {!query.pending && !query.error && result && !result.diagnosis && <div className="ain-ai-tool-reply">
             {/* 用户级分析：先说清"分析对象是谁、方案落在哪"，否则方案里出现 AP-01 会像答非所问 */}
             {result.userAssessment && <div className="ain-ai-result-scope" role="note">
@@ -276,6 +280,11 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
                 {result.plans?.length ? "；下方方案以该 AP 为落点" : ""}
               </p>
             )}
+            {result.subject && <div className="ain-answer-evidence-links" aria-label="判断依据的数据图入口">
+              <button type="button" className="ain-ai-text-button" onClick={() => setEvidenceSelection(previous => ({ id: (previous?.id ?? 0) + 1, view: 'trend', objectId: result.subject!.id, metric: 'rsrpDbm', diagnosisId: query.diagnosisId, requestId: query.requestId }))}>查看信号证据图</button>
+              <button type="button" className="ain-ai-text-button" onClick={() => setEvidenceSelection(previous => ({ id: (previous?.id ?? 0) + 1, view: 'trend', objectId: result.subject!.id, metric: 'throughputMbps', diagnosisId: query.diagnosisId, requestId: query.requestId }))}>查看体验证据图</button>
+              <button type="button" className="ain-ai-text-button" onClick={() => setEvidenceSelection(previous => ({ id: (previous?.id ?? 0) + 1, view: 'connections', objectId: result.subject!.id, diagnosisId: query.diagnosisId, requestId: query.requestId }))}>查看连接证据图</button>
+            </div>}
             {/* 工具回复的 AI 版本（KPI/拓扑/预测等）：通过校验才显示，否则显示模板文案。
                 之前只有"故障研判"有 AI 标记，KPI 类回复全是模板，看起来像没用大模型。 */}
             {result.answerLlm && result.answerCheck?.ok
@@ -314,12 +323,16 @@ export default function QueryPanel({ query, scenario, window: scopeWindow, disab
               </ol>
             )}
             {!workspace && <p className="ain-ai-result-scope">返回范围：{scopeLabel(result.scope)}</p>}</div>}
-          {analysis && <>{(!workspace || result !== analysis) && <div className="ain-ai-analysis-caption">{result === analysis ? "本次研判" : "关联研判（保留）"}{result !== analysis && diagnosisQuestion && ` · ${diagnosisQuestion}`}</div>}
+          {analysis && (analysis.diagnosis || result !== analysis) && <>{(!workspace || result !== analysis) && <div className="ain-ai-analysis-caption">{result === analysis ? "本次研判" : "关联研判（保留）"}{result !== analysis && diagnosisQuestion && ` · ${diagnosisQuestion}`}</div>}
             <DiagnosisReply result={analysis} showScope={!workspace} onEvidence={selection => setEvidenceSelection(previous => ({ ...selection, id: (previous?.id ?? 0) + 1, diagnosisId: query.diagnosisId, requestId: query.requestId }))} /></>}
           {!forecastReview && !analysis && !result && !query.pending && !query.error && <p className="ain-ai-empty">{dataStatus ? `${dataStatus}，加载有效数据后开始研判。` : "先选择一个问题示例，或直接描述异常。回答与证据会展示在问题研判页。"}</p>}
         </div>
-        {data && (diagnosis || result?.chart) && <DiagnosisCharts key={`${query.diagnosisId}-${result?.chart ? query.requestId : "evidence"}-${currentEvidenceSelection?.id ?? 0}`}
-          data={data} diagnosis={analysisMismatch ? null : diagnosis} toolResult={mismatch ? null : result}
+        {!data && userResult && !userMismatch && <section className="ain-ai-evidence" aria-label="辅助判断图表">
+          <h4>研判证据图</h4><p className="ain-ai-note">背景网络数据尚未加载，先展示本次用户采样；覆盖与连接参考图需等待背景数据。</p>
+          <UserTrendChart key={`${query.diagnosisId}-${userResult.subject?.id}-${currentEvidenceSelection?.id ?? 0}`} result={userResult} initialMetric={userMetricForEvidence(currentEvidenceSelection?.metric)} />
+        </section>}
+        {data && ((diagnosis && !analysisMismatch) || (userResult && !userMismatch) || (result?.chart && !mismatch)) && <DiagnosisCharts key={`${query.diagnosisId}-${result?.chart ? query.requestId : "evidence"}-${currentEvidenceSelection?.id ?? 0}`}
+          data={data} diagnosis={analysisMismatch ? null : diagnosis} toolResult={mismatch ? null : result} userResult={userMismatch ? null : userResult}
           spatial={spatial} spatialPending={spatialPending} spatialError={spatialError} onSpatialRetry={onSpatialRetry}
           busy={busy} onTool={tool} selection={currentEvidenceSelection} />}
         {!workspace && diagnosis?.state === "anomaly" && diagnosis.suggestion.trim() && <button type="button" className="ain-ai-adopt-link"

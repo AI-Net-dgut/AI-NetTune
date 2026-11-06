@@ -325,11 +325,11 @@ def generate(question: str, evidence: dict, call_fn) -> dict:
         user = (
             f"用户问题：{question}\n"
             f"证据（JSON，{ALLOWED_TOOLS_NOTE}）：\n{json.dumps(evidence, ensure_ascii=False)}\n"
-            + _cite_hint
             + (f"\n上一次回答的问题（必须修正）：{feedback}\n" if feedback else "")
         )
         try:
-            answer = call_fn(SYSTEM_PROMPT + (diagnosis_focus.prompt(evidence["answer_focus"])
+            # 引用说明进入系统提示，用户消息的证据 JSON 保持独立，便于工具核查与重试。
+            answer = call_fn(SYSTEM_PROMPT + _cite_hint + (diagnosis_focus.prompt(evidence["answer_focus"])
                                              if evidence.get("answer_focus") else ""), user, 0.2)
         except Exception as exc:  # noqa: BLE001 - 失败即退回规则
             return {"text": None, "source": None, "attempts": attempt,

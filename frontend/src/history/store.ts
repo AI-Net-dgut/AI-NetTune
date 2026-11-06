@@ -202,12 +202,12 @@ async function persistWithinCapacity(item: HistoryRecord): Promise<boolean> {
     });
 }
 // 仅保存用户问答、处理方案和仿真效果。旧类型仍可读取，自动图表不再新增记录。
-function compactPayload(kind: RecordKind, value: unknown): unknown {
+export function compactPayload(kind: RecordKind, value: unknown): unknown {
     const object = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
     const effect = (v: unknown) => {
         const r = object(v);
         return Array.isArray(r.metrics) ? { id: r.id, status: r.status, scope: r.scope, summary: r.summary, metrics: r.metrics,
-            parameterValues: r.parameterValues,
+            parameterValues: r.parameterValues, subject: r.subject, goalAssessment: r.goalAssessment,
             // 方法/假设/限制要留档，否则记录里看不出结论怎么来的（独立审计 P3）
             method: r.method, assumptions: r.assumptions, limitations: r.limitations } : undefined;
     };
@@ -216,12 +216,15 @@ function compactPayload(kind: RecordKind, value: unknown): unknown {
         return { id: r.id, name: r.name, description: r.description, scope: r.scope, objectIds: r.objectIds, parameters: r.parameters,
             tasks: r.tasks, conditions: r.conditions, tradeoffs: r.tradeoffs, simulation: effect(r.simulation),
             // 预测来源方案要留住依据，否则记录里对不上 forecastId/basisWindow（独立审计 P3）
-            origin: r.origin, basis: r.basis, baseId: r.baseId };
+            origin: r.origin, basis: r.basis, baseId: r.baseId, subject: r.subject, goal: r.goal };
     };
     const p = object(value);
     if (kind === 'analysis') {
         const r = object(p.response);
         return { error: p.error, reply: p.reply, response: p.response ? {
+            scope: r.scope, subject: r.subject, userAssessment: r.userAssessment, userTrend: r.userTrend,
+            answerLlm: r.answerLlm, answerCheck: r.answerCheck, intentSource: r.intentSource,
+            intentDegradeReason: r.intentDegradeReason,
             reply: r.reply, intent: r.intent, hasChart: r.hasChart ?? Boolean(r.chart), diagnosis: r.diagnosis, plans: Array.isArray(r.plans) ? r.plans.map(plan) : [],
         } : undefined };
     }

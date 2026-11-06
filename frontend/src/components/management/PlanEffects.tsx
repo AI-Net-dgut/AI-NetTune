@@ -9,9 +9,12 @@ import { displayMetric } from '../../services/metrics';
 const colors = ['#67768a', '#2e69d2', '#36b7f3', '#27d7d2', '#58edc6'];
 const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 export default function PlanEffects({ result, hideSummary = false }: { result: SimulationResult; hideSummary?: boolean }) {
-  const [view, setView] = useState<'metrics' | 'trend' | 'coverage'>(result.coverage?.points.length ? 'coverage' : 'metrics');
+  const [preferredView, setView] = useState<'metrics' | 'trend' | 'coverage'>(result.coverage?.points.length ? 'coverage' : 'metrics');
+  // 切换方案后，不能停在新方案不存在的图表页签。
+  const view = preferredView === 'coverage' && !result.coverage?.points.length
+    || preferredView === 'trend' && !result.trend?.points.length ? 'metrics' : preferredView;
   const [metricIndex, setMetricIndex] = useState(0);
-  const m = result.metrics[metricIndex], meta = m ? METRIC_META[m.key] : null;
+  const m = result.metrics[Math.min(metricIndex, result.metrics.length - 1)], meta = m ? METRIC_META[m.key] : null;
   const t = result.trend, tm = t ? METRIC_META[t.metric] : null;
   const option: EChartsOption = view === 'trend' && t && tm ? {
     animation: false, backgroundColor: '#fff', grid: { left: 8, right: 12, top: 24, bottom: 8, outerBoundsMode: 'same', outerBoundsContain: 'all' },
@@ -59,6 +62,10 @@ export default function PlanEffects({ result, hideSummary = false }: { result: S
         })}
       </tbody>
     </table>
+    {!c?.points.length && <p className="ain-management-muted" role="note">
+      本方案未返回空间覆盖对比数据，仅展示已返回的指标{t?.points.length ? '和趋势' : ''}对比。
+      容量类方案（负载均衡、扩容）不生成空间覆盖图，数值为经验系数预估。
+    </p>}
     <div className="ain-ai-chart-actions ain-effect-tabs">
       <button type="button" className="ain-button" aria-pressed={view === 'metrics'} onClick={() => setView('metrics')}>指标对比</button>
       {t?.points.length ? <button type="button" className="ain-button" aria-pressed={view === 'trend'} onClick={() => setView('trend')}>趋势对比</button> : null}
