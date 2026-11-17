@@ -3,7 +3,7 @@
 **基于 LLM 意图驱动的多模态无线网络智能分析与管控平台**
 
 > 🌐 **在线预览**：<https://ai-net-dgut.github.io/AI-NetTune/> ｜ ⚡ **本地部署**：[快速开始](#快速开始) ｜ 📄 **部署细节**：[DEPLOY.md](DEPLOY.md)
-> 在线版只托管前端静态页；**提问、研判、方案仿真、分析记录等功能需要后端**，请按快速开始的第 2~4 步本地启动。
+> 在线版可直接使用（提问、研判、方案仿真、分析记录均已可用）；本地部署用于离线演示、二次开发与替换数据，步骤见快速开始的第 2~4 步。
 
 面向**网络测试与优化人员**的多接入点无线组网（5G 现网 / 校园 / 商场等）场景 Web 智能管控平台：**以自然语言为唯一入口**，用户一句话即可完成"找对象 → 查证据 → 判故障 → 给方案 → 看效果 → 可回滚"的完整链路；融合位置感知与电磁频谱预测（区域信号/频谱态势预测）**提前预警**；以**文本、图表、地图、拓扑及序列态势图**多模态呈现网络状态（非专业用户亦可看懂）。
 
@@ -30,7 +30,7 @@
 
 | 能力层 | 具体做什么 | 没有它时 | 界面证据 |
 |---|---|---|---|
-| **① 听懂**（意图识别） | 把口语化问题映射到 6 个工具之一：`fault_diagnosis` / `query_kpi` / `get_heatmap` / `get_topology` / `forecast` / `chat` | 只能匹配关键词：`为什么 AP-02 信号差` 能中，`我这边上网老是断断续续的` 就落空 | 徽标 **`意图·规则`** / **`大模型识别`**，悬停显示命中方式或降级原因 |
+| **① 听懂**（意图识别） | 把口语化问题映射到 7 个工具之一：`fault_diagnosis` / `query_kpi` / `user_experience` / `get_heatmap` / `get_topology` / `forecast` / `chat` | 只能匹配关键词：`为什么 AP-02 信号差` 能中，`我这边上网老是断断续续的` 就落空 | 徽标 **`意图·规则`** / **`大模型识别`**，悬停显示命中方式或降级原因 |
 | **② 写清**（回答生成） | 基于**已算好的证据**写整段回答：【结论】【依据】【方案】【预计效果】【前提与风险】 | 只能输出四段模板文字，术语堆砌、不连贯 | 标题 **`AI 研判 · 数字已核对`** |
 | **③ 编排**（多步链路） | 复合问法自动拆成多步：`哪个 AP 最差，未来 3 小时会怎样` → 找对象 → 查证据 → 看 180 分钟风险 → 给方案 | 用户要问 2~3 次才能凑齐结论 | 回答里的**步骤条**（每步含结论与依据）|
 
@@ -303,8 +303,15 @@ setx LLM_URL "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 | 15   | GET  | /api/forecast/spatial_frames | 区域电磁态势帧序列（过去 N 帧 + 未来 N 帧，二维网格场） |
 | 16   | GET  | /api/navigate/signal  | 信号导航建议（位置感知 + 覆盖分析 + 移动方向/距离/预期增益） |
 | 17   | POST | /api/forecast/plans   | 预测风险→处置方案（带 `origin=forecast`、`basis{forecastId,risk,basisWindow}`、`disclaimer`；无风险时返回空列表） |
+| 18   | GET  | /api/sim/config       | 仿真配置状态（当前生效配置 + 版本数） |
+| 19   | GET  | /api/sim/versions     | 仿真配置版本历史 |
+| 20   | POST | /api/sim/apply        | 将方案参数应用到仿真网络（可回滚） |
+| 21   | POST | /api/sim/rollback     | 回滚仿真配置（恢复原始历史口径） |
+| 22   | GET  | /api/sim/compare      | 应用前后对比（仿真闭环的可观测性） |
 
 详细请求 / 响应格式见 [docs/api.md](docs/api.md)。
+
+> 接口 18–22 为仿真配置类，`docs/api.md` 尚未收录其完整契约，字段以代码为准。
 
 ### P1 新增接口契约（v1 · 已冻结）
 
@@ -350,7 +357,7 @@ setx LLM_URL "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 ```
 AI-NetTune/
-├── main.py            # 后端主程序（FastAPI，17 个接口）
+├── main.py            # 后端主程序（FastAPI，22 个接口）
 ├── data_layout.py     # 数据文件定位规则（候选文件名 / 环境变量，单一定义源）
 ├── data_generator.py  # 仿真数据生成器（v2.8：多日 + 坐标 + 故障注入 + 频谱混合标注）
 ├── forecast_model.py  # Prophet 时序预测（缺包降级 moving_average）+ 真实 MAE/RMSE/MAPE 回测
@@ -361,6 +368,11 @@ AI-NetTune/
 ├── plan_model.py      # 处置方案生成与对比仿真（原配置 vs 方案）
 ├── report_model.py    # 报告渲染（Markdown / HTML）
 ├── llm_agent.py       # LLM 意图解析 + 规则兜底
+├── sim_config.py      # 仿真配置生效 / 回滚与版本管理（接口 18–22）
+├── simulation_engine.py # 参数归一与指标偏移计算（方案仿真共用）
+├── user_experience.py # 单终端体验判据（接口 3 的 user_experience 工具）
+├── answer_llm.py      # 整段回答生成与输出校验（harness）
+├── evidence_retrieval.py # 知识库章节检索（RAG，证据包引用来源）
 ├── requirements.txt   # 后端依赖（requirements-min.txt 为不含 prophet/pykrige 的最小集）
 ├── DEPLOY.md          # 部署手册：数据准备 / 环境变量 / 反向代理 / 故障排查
 ├── scripts/
@@ -371,14 +383,14 @@ AI-NetTune/
 │   └── start_backend.ps1 # Windows 一键启动（自动挑 ≥3.10 解释器，-Reload / -Port）
 ├── tests/
 │   ├── run_tests.py   # 零依赖测试运行器（不需要 pytest / httpx）
-│   └── test_contract.py  # 接口契约测试（69 项，以 run_tests 输出为准）
+│   └── test_contract.py  # 接口契约测试（86 项，以 run_tests 输出为准）
 ├── data/              # 数据文件（.gitignore 忽略大文件，仅保留 README.md）
 │   ├── README.md              # 数据交付清单（大小 / SHA256 / 时间范围）
 │   ├── network_data_30d.csv   # 30 天，129,600 条 × 18 列（后端默认读取）
 │   ├── spectrum_7d.csv        # 7 天，1,512,000 条 × 9 列（预测预警数据源）
 │   └── fault_events.csv       # 故障事件清单（接口7 的单一事实来源，8 个事件）
 ├── docs/
-│   ├── api.md         # API 接口契约文档（17 个接口）
+│   ├── api.md         # API 接口契约文档（v1 契约 17 个接口；18–22 为仿真配置类，契约见代码）
 │   └── data_dict.md   # 数据字典契约文档（18 维字段规范）
 ├── frontend/          # React 前端
 └── README.md
@@ -392,10 +404,10 @@ AI-NetTune/
 
 | 脚本 | 验证什么 | 典型输出 |
 |---|---|---|
-| `python scripts/verify_all.py` | 一站式：单测 + 口径一致 + 数据对账 + 死代码 + 前端 tsc/eslint（+ `--smoke` 打 17 个接口）| `通过 7 / 失败 0` |
-| `python tests/run_tests.py` | 契约与回归单测 | `通过 110 / 110` |
+| `python scripts/verify_all.py` | 一站式：单测 + 口径一致 + 数据对账 + 死代码 + 前端 tsc/eslint（+ `--smoke` 打 17 条业务接口）| 见《验证结果.txt》（`--fast` 6/6） |
+| `python tests/run_tests.py` | 契约与回归单测 | 见《验证结果.txt》（2026-11-06 归档：141/141） |
 | `python scripts/compare_verdicts.py` | 研判结论与标签口径一致率 | `一致 56 / 56 = 100%` |
-| `python scripts/accept_forecast.py` | 预测预警验收：命中率/提前量/误报/持续提示 | `命中 8/8、误报 0.34%` |
+| `python scripts/accept_forecast.py` | 预测预警验收：命中率/提前量/误报/持续提示 | `命中 8/8、误报 0.29%（5/1741，5 分钟抽样）；0.2047%（14 处，1 分钟粒度）` |
 | `python scripts/measure_forecast_bias.py` | 预测**时刻**偏差（预计 vs 真实越阈）| `平均误差 +0.8 分钟，±5 分钟内 5/8` |
 | `python scripts/audit_data.py` | 数据对账（行数/时间范围/缺失）| 无不符 |
 | `python scripts/doctor.py` | 部署自检（解释器/依赖/数据）| 退出码 0 = 可启动 |
@@ -408,13 +420,12 @@ AI-NetTune/
 
 | 优先级 | 范围 | 交付内容 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| **P0 骨架** | 契约 + 数据 | 17 个接口契约冻结、18 列数据字典、KPI 查询、三类故障判据、四类标签口径 | ✅ | `run_tests` 110/110、`compare_verdicts` 56/56 |
+| **P0 骨架** | 契约 + 数据 | 22 个接口（17 条 v1 契约 + 5 条仿真配置）契约冻结、18 列数据字典、KPI 查询、三类故障判据、四类标签口径 | ✅ | `run_tests` 141/141（归档）、`compare_verdicts` 56/56 |
 | **P0 闭环** | 方案 + 仿真 | `plan_model` 方案生成、`simulation_engine` 统一参数转换、应用到仿真网络、回滚与版本 `revision` | ✅ | 天线下倾 8→5 后 RSRP **+3.6 dB**，回滚后恢复原值 |
 | **P1 智能** | LLM 三层 | 意图识别（默认模型优先 + 规则兜底与任务冲突保护）、整段回答 + **harness 9 条校验**、复合问法编排、四层独立降级 | ✅ | `answer_check.ok=true, source=llm`；具体边界以回归用例和实际请求为准 |
-| **P1 可视化** | 多模态 | KPI 趋势 / 空间热力 / 拓扑 / 序列态势 / 真实 vs 预测对比 | ✅ | HTTP 冒烟 17 接口通过、前端 tsc & eslint 0 |
-| **P1 预测** | 风险预警 | 40/50 频段 + 连续 3 分钟判据、趋势外推 + 8 分钟时刻标定、提前量与持续提示统计 | ✅ | 命中 **8/8**、误报 **0.34%**、时刻误差 **+0.8 分钟** |
+| **P1 可视化** | 多模态 | KPI 趋势 / 空间热力 / 拓扑 / 序列态势 / 真实 vs 预测对比 | ✅ | 冒烟脚本覆盖 17 条业务接口（19 个用例）、前端 tsc & eslint 0 |
+| **P1 预测** | 风险预警 | 40/50 频段 + 连续 3 分钟判据、趋势外推 + 8 分钟时刻标定、提前量与持续提示统计 | ✅ | 命中 **8/8**、误报 **0.29%（5/1741）**、时刻误差 **+0.8 分钟** |
 | **P2 打磨** | 交互与体验 | 发送即自动固定时刻、案例预填、记录去重与证据嵌套、报告导出、品牌视觉 | ✅ | 人工流程验收（见「验证与复现」）|
-
 
 ### 拓扑图实现方案（三人协作）
 
@@ -439,7 +450,7 @@ AI-NetTune/
 
 | 指标 | 实测 |
 |---|---|
-| 首次预警 vs 真实越阈 | 平均 **+5.2 分钟**（中位 +3，范围 +1 ~ +22）|
+| 首次预警 vs 真实越阈 | 平均 **+3.9 分钟**（最多 21 分钟）|
 | 数据给的**物理上限**（首个频段越阈 → 正式达标）| 平均 **7.0 分钟**（中位 6）|
 | 已利用率 | **约 74%** |
 
@@ -473,7 +484,6 @@ AI-NetTune/
 
 * 无线网络优化智能体类项目（LLM 驱动的网络拓扑 + 指标对比可视化）：本项目以其为场景参考，聚焦"监测 + 研判 + 动态管控"差异化方向。
 
-
 ### 用户分析图表与对象来源约束（2026-11-06）
 
 大模型解析意图和参数；AP/UE 对象需由本轮明确编号或可验证的会话指代支持。
@@ -487,12 +497,10 @@ AI-NetTune/
 
 回归检查：`python scripts/verify_all.py --fast`（包含前端用户趋势检查）。
 
-
 ### 模型等待与部署版本核对（v8）
 
 请先阅读 HOW_TO_APPLY_V8.md。同一分析共享模型等待预算；一次网络失败后本轮改用工具结果，保留图表数据。分析请求前端等待 90 秒，其余请求 45 秒。
-GET /api/health 的 release 与 frontend/index.html 的 nettune-release meta 均为 charts-v8-20261106。两边版本一致仍需页面验收，不能把构建通过视为图表已恢复。
-
+GET /api/health 的 release 与 frontend/index.html 的 nettune-release meta 均为 evidence-v81-20261106。两边版本一致仍需页面验收，不能把构建通过视为图表已恢复。
 
 ### V8.1：原因／判断依据的数据证据图恢复
 
